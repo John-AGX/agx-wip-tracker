@@ -31,11 +31,17 @@ const NOTIFY_EVENTS = [
   { key: 'ticket_problem',       group: 'Work orders', label: 'Problems flagged by crews',  desc: 'Right away, when a crew flags a problem on a work order you run, sent the link for, are assigned to or are watching: no access, extra damage, material short, a safety issue or something else.', channels: { email: true, push: true } },
   { key: 'ticket_crew_activity', group: 'Work orders', label: 'Crew activity',              desc: 'What crews do on the crew link: opening it the first time, starting work, finishing or reopening buildings, photos, notes and suggestions. At most one notice per work order every 30 minutes.', channels: { email: true, push: true } },
   // THE DESC IS THE WHOLE TRIGGER LIST, and people turn the digest off from
-  // this row — so it has to name every section the digest can hold. 1.33 added
-  // the first one: a building assigned to you now reaches you here instead of
-  // on a task list. test/work-order-notify-text.test.js holds every key in
-  // DIGEST_SECTIONS against this sentence so the next one cannot slip in.
-  { key: 'work_order_digest',    group: 'Work orders', label: 'Work orders morning digest', desc: 'One message on weekday mornings, only when a work order needs you: a building on it assigned to you and still open, waiting for your approval, overdue, scheduled today or tomorrow with the crew link not opened, a crew link about to expire, suggestions or flagged problems waiting.', channels: { email: true, push: true } },
+  // this row — so it has to name every section the digest can hold, in the
+  // words the digest itself uses. 1.33 added the first one; 1.35 moved it off
+  // the building and onto the record, because a building on a punch list is
+  // never assigned to one person — the work order is, and everyone on it is
+  // equally responsible for every building. So the trigger is "a work order
+  // assigned to you with a building still open", which is the digest’s own
+  // first heading word for word. test/notify-events-work-orders.test.js pins
+  // this sentence to DIGEST_SECTIONS[0].label and holds every key in
+  // DIGEST_SECTIONS against it, so neither a new section nor a renamed one
+  // can slip past this row.
+  { key: 'work_order_digest',    group: 'Work orders', label: 'Work orders morning digest', desc: 'One message on weekday mornings, only when a work order needs you: a work order assigned to you with a building still open, waiting for your approval, overdue, scheduled today or tomorrow with the crew link not opened, a crew link about to expire, suggestions or flagged problems waiting.', channels: { email: true, push: true } },
   { key: 'job_assignment',      label: 'Job assignments',        desc: 'When you’re assigned (or reassigned) as the PM on a job.',             channels: { email: true, push: false } },
   { key: 'password_reset',      label: 'Password resets',        desc: 'When an admin resets your password. Recommended to leave on.',              channels: { email: true, push: false } }
 ];

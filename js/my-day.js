@@ -10,11 +10,15 @@
 //
 // WHY THE WORK-ORDERS STRIP EXISTS. Release 1.33 took work-order buildings off
 // every task list — a building is not a to-do, it is a line on a work order.
-// That removal would otherwise strand the person the building is assigned to,
-// so this strip is where their buildings surface instead: fed by the
-// assignee-based my-buildings door (NOT job access — a crew lead is
-// deliberately allowed to finish a building on a job they cannot open), and
-// each building row opens its task detail so it can still be finished.
+// 1.35 settled who is responsible for one: a building is NEVER assigned to
+// anybody. Responsibility sits on the work order's own Assigned to, and
+// everyone on that record is equally responsible for every building on its
+// punch list. So this strip lists the WORK ORDERS ASSIGNED TO ME that still
+// have a building open: fed by the record-keyed my-buildings door (NOT job
+// access — the person a work order is assigned to is deliberately allowed to
+// finish a building on a job they cannot open), and each building row opens
+// its task detail so it can still be finished. Nothing here says "your
+// buildings" and nothing shows a per-building owner.
 //
 // Scope: personal. Events + tasks are owner-scoped server-side; schedule
 // entries are filtered client-side to ones whose crew includes the user.
@@ -179,8 +183,10 @@
       ? window.p86Api.tasks.list({ assignee: 'me', exclude_done: 1, limit: 200 })
       : Promise.resolve({ tasks: [] })).catch(function () { return { tasks: [] }; });
 
-    // Work orders where I am the assignee of a live building. Its own narrow,
-    // assignee-based door — deliberately NOT gated on job access. Guarded for
+    // Work orders ASSIGNED TO ME that still have a building open. Its own
+    // narrow, record-keyed door — deliberately NOT gated on job access. The
+    // my_buildings_* keys it answers with describe the work order's own punch
+    // list, not a share of it: nobody owns a building. Guarded for
     // an older cached api.js that predates the endpoint, and failure-isolated
     // like every other feed: no strip, never a broken day.
     var pWorkOrders = (function () {
@@ -355,11 +361,16 @@
 
     // ── Work orders ──
     // Above the tasks section on purpose: a building is field work with a
-    // crew standing on it, and since 1.33 it is the only place its assignee
-    // can still see it. Crew-safe projection only — no prices, no internal
-    // notes; we render exactly the keys my-buildings promises.
+    // crew standing on it, and since 1.33 this is one of the few places a
+    // work order's punch list surfaces at all. Crew-safe projection only — no
+    // prices, no internal notes; we render exactly the keys my-buildings
+    // promises. The line under the heading is the rule on screen: the work
+    // order is yours, its buildings belong to everyone assigned to it.
     if (workOrders.length) {
-      html += '<div class="myday-sec"><div class="myday-sec-h">Work orders</div>';
+      html += '<div class="myday-sec"><div class="myday-sec-h">Work orders</div>' +
+        '<div class="myday-meta" style="margin:-4px 0 8px;">' +
+          'Assigned to you — everyone assigned to a work order is responsible for every building on it.' +
+        '</div>';
       workOrders.forEach(function (w) {
         var open = Number(w.my_buildings_open);
         if (!isFinite(open) || open < 0) open = 0;
@@ -386,8 +397,10 @@
             '<div class="myday-meta">' + esc(metaBits.join(' · ')) + '</div>' +
             (where ? '<div class="myday-meta">' + esc(where) + '</div>' : '') +
           '</div></div>';
-        // The caller's own open buildings, each a tappable row that opens the
-        // task detail — the one way left to finish one.
+        // The work order's open buildings, each a tappable row that opens the
+        // task detail — the one way left to finish one. The same list for
+        // everyone the work order is assigned to; no owner is shown because
+        // none exists.
         var bs = Array.isArray(w.buildings) ? w.buildings : [];
         bs.forEach(function (b) {
           if (!b || b.completed_at || b.status === 'done') return;

@@ -602,15 +602,22 @@
     assignees: function(kind, parentId) {
       return get('/api/service-tickets/assignees/' + encodeURIComponent(kind) + '/' + encodeURIComponent(parentId));
     },
-    // Every work order where you are the assignee of an open building — the
-    // one list that is NOT filtered by whether you can open the job, because a
-    // building is assigned to a PERSON. A crew lead is deliberately allowed to
-    // finish a building on a job they cannot otherwise see, so this door asks
-    // who the building belongs to and nothing else (1.33).
+    // Every work order ASSIGNED TO YOU that still has a building open — the
+    // one list that is NOT filtered by whether you can open the job. A
+    // building is never assigned to anybody (1.35): responsibility sits on the
+    // work order's own Assigned to, and everyone on that record is equally
+    // responsible for every building on its punch list. The person a work
+    // order is assigned to is deliberately allowed to finish a building on a
+    // job they cannot otherwise see, so this door asks who the WORK ORDER
+    // belongs to and nothing else.
     // opts: { limit, offset, count_only }. count_only answers
     // { total, buildings_open }; otherwise { tickets, today, total,
     // buildings_open, has_more, next_offset }, crew-safe by construction —
     // no prices, no internal notes, no scope text.
+    // my_buildings_open / my_buildings_total / my_next_due KEPT THEIR NAMES in
+    // 1.35 and changed meaning: they are the work order's own open count, live
+    // count and next due date, and `buildings` is its whole punch list. None
+    // of them is "mine" — a building row carries no assignee and never will.
     myBuildings: function(opts) {
       var o = opts || {};
       var qs = [];
@@ -623,6 +630,9 @@
     // line that replaced the buildings on its Tasks panel. entityType is
     // 'job' or 'lead'. 404 when the parent is not the caller's or not
     // reachable. Answers { buildings_open, work_orders }.
+    // An ENTITY count, not a person's: it is the job's or lead's own open
+    // buildings across its work orders, and nothing filters it by who is
+    // assigned — a building has no assignee.
     buildingCounts: function(entityType, entityId) {
       return get('/api/service-tickets/building-counts?entity_type=' + encodeURIComponent(entityType) +
         '&entity_id=' + encodeURIComponent(entityId));

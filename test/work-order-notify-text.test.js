@@ -441,9 +441,9 @@ describe('digest and waiting reminder', () => {
     expect(m.text).toBe([
       'Good morning, Paula',
       '2 work orders need your attention.',
-      // FIRST: since 1.33 a building is on no task list, so for the person it
-      // is assigned to this row is the only place the work is named.
-      'Buildings assigned to you (1)\n- Second job punch\n  M1002 · Pines · 3 buildings still open · next due Mon Sep 21\n  ' + L2,
+      // FIRST: since 1.33 a building is on no task list, so for the person the
+      // work order is assigned to this row is the only place it is named.
+      'Work orders assigned to you with buildings still open (1)\n- Second job punch\n  M1002 · Pines · 3 buildings still open · next due Mon Sep 21\n  ' + L2,
       'Ready for your approval (1)\n- Latitude 28 punch list\n  M1001 · BH Management Latitude · waiting 3 days · over 2 business days\n  ' + LINK,
       'Problems flagged by crews (1)\n- Second job punch\n  M1002 · Pines · No access · flagged Mon Sep 14\n  ' + L2,
       'Overdue (1)\n- Second job punch\n  M1002 · Pines · due Sat Sep 12 · 1 of 3 buildings done\n  ' + L2,
@@ -457,14 +457,19 @@ describe('digest and waiting reminder', () => {
     expect(m.html).toContain('>Open Service Tickets</a>');
     expect(m.push).toEqual({
       title: '🛠 Work orders need you',
-      body: '1 work order with your buildings · 1 to approve · 1 problem flagged · 1 overdue · 1 link not opened · 1 link expiring · 1 suggestion waiting',
+      body: '1 work order with buildings still open · 1 to approve · 1 problem flagged · 1 overdue · 1 link not opened · 1 link expiring · 1 suggestion waiting',
       url: 'https://project86.net/service-tickets',
       tag: 'work_order_digest',
     });
     expect(m.subject + m.text + m.html).not.toMatch(MONEY);
   });
 
-  test('buildings assigned to you: the heading, the count, the day, the push fragment, and nothing priced', () => {
+  // THE OWNER, 2026-09-20: "i dont want assignments to individual buildings
+  // like that, whoever is assigned to the ticket, task or work order is evenly
+  // responsible." The section names WORK ORDERS assigned to the reader and
+  // counts the buildings still open on each — so the heading, the push and the
+  // sub-line must say that, and must never put a person beside a building.
+  test('work orders assigned to you: the heading, the count, the day, the push fragment, and no owner on a building', () => {
     const m = T.digestMessage({
       recipient: { name: 'Carl Crew' }, zone: 'America/New_York',
       sections: {
@@ -474,20 +479,36 @@ describe('digest and waiting reminder', () => {
         ],
       },
     });
-    // A crew lead with nothing but buildings still gets a digest, and no
+    // A crew lead with nothing but this still gets a digest, and no
     // "[N to approve]" prefix: the subject keys on approvals alone.
     expect(m.subject).toBe('Work orders needing you today (2)');
-    expect(m.text).toContain('Buildings assigned to you (2)');
+    expect(m.text).toContain('Work orders assigned to you with buildings still open (2)');
     expect(m.text).toContain('M1001 · BH Management Latitude · 1 building still open · next due Fri Sep 18');
     // No due date on any of them: the count alone, never "next due " with nothing after it.
     expect(m.text).toContain('M1002 · Pines · 4 buildings still open\n');
     expect(m.text).not.toContain('next due \n');
-    expect(m.html).toContain('Buildings assigned to you (2)');
+    expect(m.html).toContain('Work orders assigned to you with buildings still open (2)');
     expect(m.html).toContain('4 buildings still open');
-    expect(m.push.body).toBe('2 work orders with your buildings');
+    expect(m.push.body).toBe('2 work orders with buildings still open');
+    // Nothing anywhere claims a building belongs to one person.
+    expect(m.subject + m.text + m.html).not.toMatch(/buildings? assigned/i);
+    expect(m.subject + m.text + m.html).not.toMatch(/your buildings/i);
     // The widening is the job line and the title, and stops there.
     expect(m.subject + m.text + m.html).not.toMatch(MONEY);
     expect(m.subject + m.text + m.html).not.toMatch(/[$£€]\s?\d|\b\d+\.\d{2}\b/);
+  });
+
+  test('the section is still FIRST, and its item shape is unchanged: {count, nextDue} and nothing else', () => {
+    const src = fs.readFileSync(REAL, 'utf8').replace(/\r\n/g, '\n');
+    const block = src.slice(src.indexOf('const DIGEST_SECTIONS = Object.freeze(['));
+    const keys = (block.slice(0, block.indexOf(']);')).match(/key: '([a-z_]+)'/g) || []).map((s) => s.slice(6, -1));
+    expect(keys[0]).toBe('your_buildings');
+    // The digest renders the section from a count and a day. A per-building
+    // owner, picker or label would need a third field, and there is none: the
+    // builder reads it.assignee, it.owner, it.who or it.buildings nowhere.
+    const sub = src.slice(src.indexOf('function digestSubLine('), src.indexOf('\n}\n', src.indexOf('function digestSubLine(')));
+    const arm = sub.slice(sub.indexOf("if (key === 'your_buildings')"), sub.indexOf("} else if (key === 'approvals')"));
+    expect(arm.match(/it\.[a-zA-Z_]+/g).sort()).toEqual(['it.count', 'it.nextDue']);
   });
 
   test('no approvals: no prefix; one ticket reads singular; no link sent', () => {
@@ -549,8 +570,14 @@ describe('the work_order_digest settings description', () => {
   // What each section's trigger is CALLED in the settings sentence. Plain
   // words, because the sentence is read by the person deciding whether to
   // keep the email — not by a developer.
+  //
+  // your_buildings: 1.35 moved the key from the building to the RECORD, so the
+  // trigger is "a work order assigned to you with a building still open" —
+  // pinned whole, because the half-phrase this test used to accept would also
+  // pass for the 1.34 wording the owner ruled out ("a building on it assigned
+  // to you and still open").
   const PHRASES = {
-    your_buildings: 'a building on it assigned to you and still open',
+    your_buildings: 'a work order assigned to you with a building still open',
     approvals: 'waiting for your approval',
     flags: 'flagged problems waiting',
     overdue: 'overdue',

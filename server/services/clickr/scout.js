@@ -137,7 +137,7 @@ const MAX_DISTINCT_TRACKED = 1000;
 // lost is only the "records arrived twice" signal; what is kept is the check
 // that actually settles the question, fetched === Clickr's own reported count.
 // A wrong idKey would have cost that instead.
-const NO_ID_KEY = ' scout:no-declared-id-key';
+const NO_ID_KEY = '[scout] no declared id key';
 
 function isPlainObject(v) {
   return v != null && typeof v === 'object' && !Array.isArray(v);
@@ -177,7 +177,7 @@ function shapeProblem(v) {
   }
   if (typeof v !== 'string') return 'shape';
   if (v.length > RULE.maxValueChars) return 'length';
-  if (/[ -]/.test(v)) return 'control';
+  if (/[\u0000-\u001f\u007f]/.test(v)) return 'control';
   if (v.indexOf('@') !== -1 || v.indexOf('://') !== -1) return 'contact';
   if ((v.match(/[0-9]/g) || []).length > RULE.maxDigits) return 'digits';
   return null;

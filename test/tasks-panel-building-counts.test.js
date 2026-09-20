@@ -1,5 +1,6 @@
-/* The Tasks panel's building line, the Punch-list note, and the entity card
- * (js/tasks.js, js/entity-card.js) — release 1.33.
+/* The Tasks panel's building line, the Punch-list note, the entity card and
+ * the office punch list (js/tasks.js, js/entity-card.js,
+ * js/service-tickets.js) — releases 1.33 and 1.35.
  * ═══════════════════════════════════════════════════════════════════════════
  * 1.33 took work-order BUILDINGS off every task list. On a job or a lead that
  * leaves a Tasks panel that can read "no tasks yet" while four buildings are
@@ -14,6 +15,10 @@
  *     spinner, no "none", nothing anybody has to be taught to ignore.
  *   • JOBS AND LEADS ONLY. Nothing else carries a work order, so nothing else
  *     may spend a request asking.
+ *   • NOBODY OWNS A BUILDING (1.35). The count is the JOB's or LEAD's, never
+ *     a person's, and the office screen where a per-building picker would be
+ *     added offers none — the last describe in this file drives the real
+ *     js/service-tickets.js to say so.
  *   • THE NEW CALL CANNOT REACH THE OLD PATHS. test/work-order-task-doors.js
  *     mounts js/tasks.js against a p86Api that has ONLY a `tasks` key, and
  *     js/entity-card.js holds an absolute rule that a task lookup can never
@@ -87,6 +92,12 @@ describe('js/tasks.js — the Tasks panel building line', () => {
     expect(lead.calls.buildingCounts).toEqual([['lead', 'l9']]);
     expect(lead.line.textContent.trim()).toBe('3 buildings open across 1 work order →');
 
+    // 1.35: it is the JOB's or LEAD's own open count across its work orders.
+    // It never was, and may never become, "your buildings".
+    for (const re of [/your\s+buildings?/i, /my\s+buildings?/i, /buildings?\s+(?:is|are)?\s*assigned/i]) {
+      expect([String(re), re.test(many.line.innerHTML)]).toEqual([String(re), false]);
+    }
+
     // The Tasks list itself is untouched: still entity-scoped, still no
     // knowledge of buildings.
     expect(many.calls.taskList).toEqual([{ entity_type: 'job', entity_id: 'j1' }]);
@@ -155,8 +166,10 @@ describe('js/tasks.js — the Tasks panel building line', () => {
 
     const note = pane.querySelector('.p86-punch-wo-note');
     expect(note).not.toBeNull();
-    expect(note.textContent.trim())
-      .toBe('Buildings on a work order are on the work order — see Service Tickets → My work.');
+    expect(note.textContent.trim().replace(/\s+/g, ' '))
+      .toBe('Buildings on a work order are on the work order — see Service Tickets → My work. ' +
+        'No building is assigned to one person: everyone the work order is assigned to is equally ' +
+        'responsible for every building on its punch list.');
     // The tab is not renamed and still lists what it always listed.
     expect(punchTab.textContent).toBe('Punch list');
     expect(pane.querySelector('#teamList')).not.toBeNull();
@@ -225,6 +238,27 @@ describe('js/entity-card.js — loadTasks carries the building count, optionally
 
     const one = c.w.p86EntityCard.render({ kind: 'job', title: 'L', buildings: { open: 1, workOrders: 1 } });
     expect(one).toContain('1 building open across 1 work order');
+  });
+
+  // 1.35: the count was never one person's, and now there is no such reading
+  // to be had — a building is never assigned, and everyone the work order is
+  // assigned to is equally responsible for every building on it.
+  test('the line counts the ENTITY, names no person, and says who is responsible', async () => {
+    const c = cardWindow({ counts: { buildings_open: 4, work_orders: 2 } });
+    const vm = await load(c.w, 'job', 'j1');
+    const html = c.w.p86EntityCard.render({
+      kind: 'job', title: 'Latitude', tasks: [], tasksMore: 0, buildings: vm.buildings
+    });
+    for (const re of [/your\s+buildings?/i, /my\s+buildings?/i, /buildings?\s+(?:is|are)?\s*assigned/i]) {
+      expect([String(re), re.test(html)]).toEqual([String(re), false]);
+    }
+    // Not vacuous: the scan does catch a line that hands them to somebody.
+    expect(/your\s+buildings?/i.test('<div>Your buildings: 4 open</div>')).toBe(true);
+
+    // The rule is in reach of the line it qualifies.
+    expect(html).toContain('Everyone the work order is assigned to is responsible for every building on it.');
+    // …and the door behind it asks the JOB, never a person.
+    expect(c.calls.buildingCounts).toEqual([['job', 'j1']]);
   });
 
   test('a refusal, a zero and an older api.js all leave the card exactly as it was', async () => {
@@ -343,5 +377,183 @@ describe('js/entity-card.js — loadTasks carries the building count, optionally
     // Tasks panel outright — the exact browser (stale api.js) the guard is for.
     const ctx = tasksWindow({ src: mutant, noServiceTickets: true });
     expect(() => ctx.w.p86Tasks.mountEntityPanel(ctx.host, 'job', 'j1', 'Latitude')).toThrow();
+  });
+});
+
+/* ── THE OFFICE PUNCH LIST (js/service-tickets.js) — release 1.35 ────────
+ * The owner, 2026-09-20: "i dont want assignments to individual buildings
+ * like that, whoever is assigned to the ticket, task or work order is evenly
+ * responsible."
+ *
+ * The office work-order screen is the one place a per-building picker would
+ * ever be added, so this drives the REAL js/service-tickets.js (with the
+ * editor kit, the extension registry and the status-move helper loaded before
+ * it, as index.html does) and holds four things:
+ *   • the ticket keeps its ONE Assigned to — the RECORD's, a real dropdown —
+ *     and it is not inside a building card;
+ *   • a building card has no owner, no initials and no picker, even when the
+ *     server (wrongly) sends one on the row;
+ *   • the punch list SAYS the rule, on its header and under the Add box;
+ *   • adding a building sends no assignee_user_id, so the refusal the server
+ *     now answers with (409 building_not_assignable) is unreachable from here.
+ * The two mutants at the end are those last two guards, broken.
+ */
+describe('the office punch list never offers to assign a building', () => {
+  const ROOT_DIR = path.join(__dirname, '..');
+  const read = (rel) => fs.readFileSync(path.join(ROOT_DIR, rel), 'utf8').replace(/\r\n/g, '\n');
+  const TICKETS_SRC = read('js/service-tickets.js');
+  const EDITOR_SRC = read('js/service-ticket-editor.js');
+  const EXT_SRC = read('js/service-ticket-ext.js');
+  const MOVE_SRC = read('js/service-ticket-status-move.js');
+  const JOB_LABEL = require('../js/job-label.js');
+  const copy = (v) => JSON.parse(JSON.stringify(v));
+  const flush = async () => { for (let i = 0; i < 14; i++) await new Promise((r) => setTimeout(r, 0)); };
+
+  const BUILDINGS = () => [
+    { id: 'tk_1', title: 'Bldg 784 — Side A: rail post', status: 'open', photos: [], notes: [] },
+    { id: 'tk_2', title: 'Bldg 790 — Side D: stringer', status: 'open', photos: [], notes: [] },
+  ];
+
+  async function office(o) {
+    o = o || {};
+    const { JSDOM } = require('jsdom');
+    const dom = new JSDOM(
+      '<!doctype html><body><div id="scroller"><div id="job-service-tickets"></div></div></body>',
+      { runScripts: 'outside-only', url: 'https://project86.test/' });
+    const w = dom.window;
+    const calls = { taskCreate: [] };
+    const tickets = [{
+      id: 'st_1', ticket_number: 'WO-0001', title: 'Replace stair treads', status: 'open',
+      priority: 'normal', job_id: 'job_77', lead_id: null, scope_proposed: '', due_date: null,
+      scheduled_for: null, assignee_user_id: 10, assignee_name: 'Pat Office',
+      task_total: 2, task_done: 0,
+    }];
+    const tasks = o.tasks || BUILDINGS();
+    w.appState = { currentJobId: 'job_77' };
+    w.appData = { jobs: [{ id: 'job_77', jobNumber: 'RV2006', title: 'Waterside' }], leads: [] };
+    w.p86JobLabel = JOB_LABEL;
+    w.p86Api = {
+      serviceTickets: {
+        list: () => Promise.resolve({ tickets: copy(tickets) }),
+        get: () => Promise.resolve({
+          ticket: copy(tickets[0]), tasks: copy(tasks), events: [], revisions: [],
+          participants: [], site: null,
+          progress: { tasksTotal: tasks.length, tasksDone: 0 },
+        }),
+        update: () => Promise.resolve({ ok: true, ticket: copy(tickets[0]), changed: [] }),
+        assignees: () => Promise.resolve({ users: [{ id: 10, name: 'Pat Office' }, { id: 12, name: 'Rosa Diaz' }] }),
+        shares: () => Promise.resolve({ shares: [] }),
+      },
+      tasks: { create: (p) => { calls.taskCreate.push(p); return Promise.resolve({ ok: true }); } },
+      users: { list: () => Promise.resolve({ users: [{ id: 10, name: 'Pat Office' }, { id: 12, name: 'Rosa Diaz' }] }) },
+      attachments: { upload: () => Promise.resolve({ ok: true }) },
+    };
+    w.p86Auth = { hasCapability: () => true, getUser: () => ({ id: 10 }) };
+    w.p86Toast = () => {};
+    w.p86Confirm = () => Promise.resolve(true);
+    w.p86ConfirmTernary = () => Promise.resolve(null);
+    w.eval(EXT_SRC);
+    w.eval(EDITOR_SRC);
+    w.eval(MOVE_SRC);
+    w.eval(o.src || TICKETS_SRC);
+    w.renderJobServiceTickets('job_77');
+    await flush();
+    const pane = w.document.getElementById('job-service-tickets');
+    pane.querySelector('.p86-st-row[data-ticket="st_1"] .p86-st-row-head').click();
+    await flush();
+    return { w, pane, calls, detail: pane.querySelector('.p86-st-row.is-open .p86-st-detail') };
+  }
+
+  const cards = (d) => Array.from(d.querySelectorAll('.p86-wo-sub'));
+
+  test('the ONE assignee control on the screen is the work order\'s, and no card holds it', async () => {
+    const r = await office();
+    const d = r.detail;
+    expect(cards(d)).toHaveLength(2); // the punch list really did render
+
+    const pickers = d.querySelectorAll('[data-st-field="assignee_user_id"]');
+    expect(pickers).toHaveLength(1);
+    expect(pickers[0].tagName).toBe('SELECT');
+    // It belongs to the RECORD's fields, not to any building.
+    expect(pickers[0].closest('.p86-wo-sub')).toBeNull();
+
+    cards(d).forEach((c) => {
+      expect(c.querySelectorAll('select')).toHaveLength(0);
+      expect(c.querySelectorAll('[data-st-field="assignee_user_id"]')).toHaveLength(0);
+      expect(c.querySelectorAll('.p86-st-who, [data-user], [data-assign], [data-assignee]')).toHaveLength(0);
+      expect(/assign/i.test(c.textContent)).toBe(false);
+    });
+  });
+
+  test('an owner the server (wrongly) sends on a building row is drawn nowhere', async () => {
+    const withOwners = BUILDINGS().map((t, i) => Object.assign(t, {
+      assignee_user_id: 40 + i, assignee_name: i ? 'Marco Vega' : 'Dana Ruiz', assignee_initials: 'DR',
+    }));
+    const r = await office({ tasks: withOwners });
+    expect(cards(r.detail)).toHaveLength(2);
+    const html = r.detail.innerHTML;
+    expect(html).not.toContain('Marco Vega');
+    expect(html).not.toContain('Dana Ruiz');
+    expect(html).not.toContain('assignee_name');
+  });
+
+  test('the punch list says the rule where it is made — the header and the Add box', async () => {
+    const RULE = 'No building is assigned to one person. Everyone this work order is assigned to ' +
+      'is equally responsible for every building on its punch list.';
+    const r = await office();
+    expect(r.detail.querySelector('.p86-wo-punch-head .p86-st-lbl').getAttribute('title')).toBe(RULE);
+    const note = r.detail.querySelector('.p86-st-task-note').textContent;
+    expect(note).toContain(RULE);
+    expect(note).toContain("Set the work order's Assigned to above");
+    expect(note).toContain('Service Tickets → My work');
+    // And it never tells the office a building has an owner to find.
+    expect(note).not.toMatch(/whoever a building is assigned to/i);
+  });
+
+  test('adding a building sends a title and its parents — never an assignee', async () => {
+    const r = await office();
+    r.detail.querySelector('.p86-st-task-new').value = 'Bldg 612 — Side B: tread 3';
+    r.detail.querySelector('.p86-st-task-go').click();
+    await flush();
+    expect(r.calls.taskCreate).toEqual([{
+      title: 'Bldg 612 — Side B: tread 3',
+      service_ticket_id: 'st_1',
+      entity_type: 'job',
+      entity_id: 'job_77',
+    }]);
+    // Said as its own assertion: this is the key the server refuses with 409
+    // building_not_assignable, and the office never sends it.
+    expect(Object.keys(r.calls.taskCreate[0])).not.toContain('assignee_user_id');
+  });
+
+  test('MUTANT: an owner chip on a building card puts a name on something nobody owns', async () => {
+    const anchor = "          (notes.length ? '<span class=\"p86-wo-chip\">' + notes.length + ' note' + " +
+      "(notes.length === 1 ? '' : 's') + '</span>' : '') +";
+    expect(TICKETS_SRC.split(anchor)).toHaveLength(2);
+    const mutant = TICKETS_SRC.split(anchor).join(anchor +
+      "\n          '<span class=\"p86-wo-chip p86-st-who\" data-user=\"' + escAttr(t.assignee_user_id || '') + " +
+      "'\">' + esc(t.assignee_name || 'Unassigned') + '</span>' +");
+
+    const withOwners = BUILDINGS().map((t) => Object.assign(t, { assignee_user_id: 40, assignee_name: 'Marco Vega' }));
+    const r = await office({ src: mutant, tasks: withOwners });
+    // Both guards above go red: the card now carries an owner and a chip.
+    expect(r.detail.innerHTML).toContain('Marco Vega');
+    expect(cards(r.detail)[0].querySelectorAll('.p86-st-who').length).toBe(1);
+  });
+
+  test('MUTANT: an assignee on the Add payload makes the refusal reachable from the office', async () => {
+    const anchor = [
+      '      window.p86Api.tasks.create({',
+      '        title: title,',
+      '        service_ticket_id: t.id,',
+    ].join('\n');
+    expect(TICKETS_SRC.split(anchor)).toHaveLength(2);
+    const mutant = TICKETS_SRC.split(anchor).join(anchor + '\n        assignee_user_id: 10,');
+
+    const r = await office({ src: mutant });
+    r.detail.querySelector('.p86-st-task-new').value = 'Bldg 612';
+    r.detail.querySelector('.p86-st-task-go').click();
+    await flush();
+    expect(Object.keys(r.calls.taskCreate[0])).toContain('assignee_user_id');
   });
 });

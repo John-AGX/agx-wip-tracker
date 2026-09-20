@@ -1114,11 +1114,20 @@
   // longer shows up on any general task list: every one of them now excludes
   // these rows through server/services/service-ticket-subtask-door.js
   // notAWorkOrderBuildingSql (a row is NOT a building when service_ticket_id
-  // IS NULL OR scope = 'personal'). Nobody lost sight of work assigned to
-  // them — the replacements are Service Tickets → My work (the assignee-based
-  // door, which deliberately ignores job access), the work-orders strip on My
-  // Day, the buildings line in the job and lead Tasks panel headers, and the
-  // morning digest. The note under the Add box says this on screen.
+  // IS NULL OR scope = 'personal'). Nobody lost sight of the work — the
+  // replacements are Service Tickets → My work (the record-keyed door, which
+  // deliberately ignores job access), the work-orders strip on My Day, the
+  // buildings line in the job and lead Tasks panel headers, and the morning
+  // digest. The note under the Add box says this on screen.
+  //
+  // WHAT CHANGED IN 1.35 IS WHO IS RESPONSIBLE FOR ONE. Nobody, personally. A
+  // building is NEVER assigned. The work order's own Assigned to — the real
+  // dropdown in the fields above — carries it, and everyone on that record is
+  // equally responsible for every building on this punch list. So a building
+  // card shows no owner, no initials and no picker, and none is ever to be
+  // added: the server refuses the write (409 building_not_assignable) from
+  // every door, including 86. If somebody asks for per-building owners again,
+  // the answer is the one the owner gave on 2026-09-20 — no.
   //
   // Each task is a work-order SUBTASK: one per building, with its own before
   // and completion photos, crew notes, and a complete box. Completing needs at
@@ -1131,6 +1140,11 @@
     return (tasks || []).filter(function (t) { return !t.archived_at; });
   }
 
+  // The one sentence the punch list says about responsibility, on the header
+  // label and under the Add box. A building has no owner: the work order does.
+  var PUNCH_RULE = 'No building is assigned to one person. Everyone this work order is assigned to ' +
+    'is equally responsible for every building on its punch list.';
+
   function punchHeadHTML(tasks) {
     var live = liveTasks(tasks);
     var done = live.filter(function (t) { return t.status === 'done'; }).length;
@@ -1139,7 +1153,7 @@
     // desktop, the Punch list header card on a phone, with the building cards
     // straight under it at full width (the crew link does the same).
     return '<div class="p86-wo-punch-head">' +
-      '<label class="p86-st-lbl">Punch list' +
+      '<label class="p86-st-lbl" title="' + escAttr(PUNCH_RULE) + '">Punch list' +
         (live.length ? ' <span class="p86-st-taskcount">' + done + ' of ' + live.length + ' done</span>' : '') +
       '</label>' +
       (live.length
@@ -1165,8 +1179,8 @@
           '<button class="ee-btn secondary p86-st-task-go">Add</button>' +
         '</div>' +
         '<div class="p86-st-task-note">Buildings live on the work order. They are not on the ' +
-          'job\'s Tasks list or in My Tasks — whoever a building is assigned to finds it under ' +
-          'Service Tickets → My work.</div>'
+          'job\'s Tasks list or in My Tasks. ' + PUNCH_RULE + ' Set the work order\'s Assigned to ' +
+          'above; everyone on it finds this punch list under Service Tickets → My work.</div>'
       : '';
   }
 

@@ -320,6 +320,20 @@ router.patch('/task-share/:token', loadShare, async (req, res) => {
   try {
     if (req.share.completed_at) return res.status(409).json({ error: 'This task was already completed.' });
     const body = req.body || {};
+
+    // A BUILDING IS NEVER ASSIGNED TO ANYBODY (1.35), and this door says so in
+    // the same sentence the two REST doors use. It has never written
+    // assignee_user_id — the sets below are checklist, note and status — so
+    // without this an assignee sent from a link would be dropped in silence
+    // and the caller told 200. It is refused BEFORE the name capture above
+    // writes anything, and only for a building: on an ordinary shared task the
+    // field is ignored exactly as it always was.
+    if (Object.prototype.hasOwnProperty.call(body, 'assignee_user_id') &&
+        subtaskDoor.isWorkOrderSubtask(req.task)) {
+      const refusal = subtaskDoor.assignVerdict();
+      return res.status(refusal.status).json({ error: refusal.error, code: refusal.code });
+    }
+
     // First action captures the worker's name for the audit trail.
     if (body.name && !req.share.recipient_name) {
       await pool.query('UPDATE task_shares SET recipient_name = $1 WHERE id = $2', [String(body.name).trim().slice(0, 120), req.share.id]);

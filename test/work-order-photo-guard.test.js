@@ -75,9 +75,17 @@ const TABLES = [
 ];
 
 const WIDE = 10;
+// The narrow tier, holding no grant on j1: CREW is the person st_prog and
+// st_appr are ASSIGNED TO (1.35), which is the only reason the attachment doors
+// let them write a building's photos at all. NONE is the same tier assigned
+// nothing — the control that never gets past the door.
+const CREW = 20;
+const NONE = 21;
 const RIVAL = 50;
 const USERS = {
   [WIDE]: { role: 'wog_wide', org: 1, name: 'Wendy Wide' },
+  [CREW]: { role: 'wog_crew', org: 1, name: 'Carl Crew' },
+  [NONE]: { role: 'wog_crew', org: 1, name: 'Nate None' },
   [RIVAL]: { role: 'wog_wide', org: 2, name: 'Rival Ray' },
 };
 
@@ -99,19 +107,25 @@ function seed() {
 
     INSERT INTO organizations (id, name) VALUES (1, 'AGX'), (2, 'Rival Co');
     INSERT INTO roles (name, capabilities) VALUES
-      ('wog_wide', ${caps(['JOBS_VIEW_ALL', 'JOBS_EDIT_ANY', 'LEADS_VIEW', 'LEADS_EDIT'])});
+      ('wog_wide', ${caps(['JOBS_VIEW_ALL', 'JOBS_EDIT_ANY', 'LEADS_VIEW', 'LEADS_EDIT'])}),
+      ('wog_crew', ${caps(['JOBS_VIEW_ASSIGNED', 'JOBS_EDIT_OWN'])});
     INSERT INTO users (id, name, email, role, organization_id) VALUES
       (10, 'Wendy Wide', 'w@agx.test', 'wog_wide', 1),
+      (20, 'Carl Crew', 'c@agx.test', 'wog_crew', 1),
+      (21, 'Nate None', 'n@agx.test', 'wog_crew', 1),
       (50, 'Rival Ray', 'r@rival.test', 'wog_wide', 2);
     INSERT INTO jobs (id, owner_id, data, organization_id) VALUES ('j1', 10, '{}', 1), ('j9', 50, '{}', 2);
 
-    INSERT INTO service_tickets (id, organization_id, title, job_id, lead_id, status, checklist) VALUES
-      ('st_prog',   1, 'Roof punch list', 'j1', NULL, 'in_progress', '[]'),
-      ('st_appr',   1, 'Approved list',   'j1', NULL, 'approved',    '[]'),
-      ('st_closed', 1, 'Closed list',     'j1', NULL, 'closed',      '[]'),
-      ('st_cancel', 1, 'Cancelled list',  'j1', NULL, 'cancelled',   '[]'),
-      ('st_draft',  1, 'Draft list',      'j1', NULL, 'draft',       '[]'),
-      ('st_b',      2, 'Rival list',      'j9', NULL, 'in_progress', '[]');
+    -- assignee_user_id is the RECORD's, and it is the whole of who is
+    -- responsible: no building below names anybody (1.35), and CREW holds no
+    -- job_access row on j1.
+    INSERT INTO service_tickets (id, organization_id, title, job_id, lead_id, status, checklist, assignee_user_id) VALUES
+      ('st_prog',   1, 'Roof punch list', 'j1', NULL, 'in_progress', '[]', 20),
+      ('st_appr',   1, 'Approved list',   'j1', NULL, 'approved',    '[]', 20),
+      ('st_closed', 1, 'Closed list',     'j1', NULL, 'closed',      '[]', NULL),
+      ('st_cancel', 1, 'Cancelled list',  'j1', NULL, 'cancelled',   '[]', NULL),
+      ('st_draft',  1, 'Draft list',      'j1', NULL, 'draft',       '[]', NULL),
+      ('st_b',      2, 'Rival list',      'j9', NULL, 'in_progress', '[]', NULL);
 
     INSERT INTO tasks (id, organization_id, title, status, scope, service_ticket_id, entity_type, entity_id, archived_at) VALUES
       ('t_784',    1, 'Bldg 784 — north side', 'done', 'org', 'st_prog',   'job', 'j1', NULL),
@@ -475,6 +489,68 @@ describe('POST /api/attachments/:id/move off a work order', () => {
     const b = await serve();
     expect((await move(b, 'a_cancel_only')).status).toBe(200);
     expect((await move(b, 'a_plain')).status).toBe(200);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE RECORD'S ASSIGNEE IS NOT EXEMPT FROM THE GUARD (1.35).
+//
+// routes/attachment-routes.js widens the WRITE half of a building's photos to
+// the person its WORK ORDER is assigned to — without that, the crew lead who
+// may tick a building could never upload the completion photo the tick demands.
+// It widens WHO MAY WRITE and nothing else: what may happen to the PROOF is
+// still the guard's to say, and this is where that is executed.
+//
+// Every refusal below is a 409 from the guard, which is also the evidence the
+// access door let them through: a caller the door refuses is answered 404 or
+// 403 and never reaches the guard at all. NONE, the same tier assigned nothing,
+// is that control.
+describe('the work order\'s assignee reaches the guard, and the guard still refuses', () => {
+  test('the only completion photo on a done building: the guard\'s 409, not the door\'s 404', async () => {
+    const b = await serve();
+    const r = await del(b, 'a_only', CREW);
+    expect([r.status, r.body]).toEqual([409, { error: LAST('delete the photo'), code: 'last_completion_photo' }]);
+    expect(exists('a_only')).toBe(true);
+    expect(deletes()).toEqual([]);
+    expect(events()).toEqual([]);
+  });
+
+  test('a photo on the APPROVED work order they are assigned: photo_locked, delete and retag alike', async () => {
+    const b = await serve();
+    expect((await del(b, 'a_appr_c1', CREW)).body).toEqual({ error: LOCKED_DELETE, code: 'photo_locked' });
+    expect(exists('a_appr_c1')).toBe(true);
+    expect((await putTags(b, 'a_appr_c1', ['before'], CREW)).body).toEqual({ error: LOCKED_RETAG, code: 'photo_locked' });
+    expect(tagsOf('a_appr_c1')).toEqual([]);
+    expect(deletes()).toEqual([]);
+    expect(events()).toEqual([]);
+  });
+
+  test('what the guard DOES allow them is allowed: one of two completion photos goes, with the timeline row', async () => {
+    const b = await serve();
+    const r = await del(b, 'a_c1', CREW);
+    expect([r.status, r.body]).toEqual([200, { ok: true }]);
+    expect(exists('a_c1')).toBe(false);
+    expect(exists('a_c2')).toBe(true);
+    // Attributed to the crew lead, on the work order that named them.
+    expect(events().map((e) => [e.ticket_id, e.kind, e.actor_user_id])).toEqual([['st_prog', 'photo_removed', CREW]]);
+  });
+
+  test('CONTROL: the same tier assigned NOTHING is answered like an absent photo and never reaches the guard', async () => {
+    const b = await serve();
+    // The guard would say last_completion_photo / photo_locked here. The door
+    // answers first, and says only that there is nothing to see.
+    expect(await del(b, 'a_only', NONE)).toEqual({ status: 404, body: { error: 'Attachment not found' } });
+    expect(await del(b, 'a_appr_c1', NONE)).toEqual({ status: 404, body: { error: 'Attachment not found' } });
+    expect(await putTags(b, 'a_appr_c1', ['before'], NONE)).toEqual({ status: 404, body: { error: 'Attachment not found' } });
+    expect(exists('a_only')).toBe(true);
+    expect(exists('a_appr_c1')).toBe(true);
+    expect(tagsOf('a_appr_c1')).toEqual([]);
+    expect(deletes()).toEqual([]);
+    expect(events()).toEqual([]);
+  });
+
+  test('and no building row carries an assignee — the widening is the record\'s or it is nothing', () => {
+    expect(mockEng.all('SELECT id FROM tasks WHERE assignee_user_id IS NOT NULL')).toEqual([]);
   });
 });
 

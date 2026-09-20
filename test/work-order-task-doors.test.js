@@ -79,13 +79,17 @@ function seed() {
       ('j1', 10, '{}', 1), ('j9', 50, '{}', 2);
     INSERT INTO leads (id, title, organization_id) VALUES ('l1', 'Maple St reroof', 1);
 
-    INSERT INTO service_tickets (id, organization_id, title, job_id, lead_id, status, checklist, created_by, approval_notified_at) VALUES
-      ('st_ip',   1, 'Latitude punch list', 'j1', NULL, 'in_progress',   '[]', 10, NULL),
-      ('st_wc',   1, 'Waiting on approval', 'j1', NULL, 'work_complete', '[]', 10, '2026-09-15 08:00:00'),
-      ('st_ap',   1, 'Approved list',       'j1', NULL, 'approved',      '[]', 10, NULL),
-      ('st_open', 1, 'Second list',         'j1', NULL, 'open',          '[]', 10, NULL),
-      ('st_lead', 1, 'Lead list',           NULL, 'l1', 'in_progress',   '[]', 10, NULL),
-      ('st_b',    2, 'Rival list',          'j9', NULL, 'in_progress',   '[]', 50, NULL);
+    -- assignee_user_id on the TICKET is who is responsible from 1.35, and the
+    -- only assignee any door reads. Carl is the crew lead on st_ip and st_ap;
+    -- the rest are on nobody, so the "neither an editor nor the assignee"
+    -- refusals are exercised on a record with no assignee at all.
+    INSERT INTO service_tickets (id, organization_id, title, job_id, lead_id, status, checklist, created_by, assignee_user_id, approval_notified_at) VALUES
+      ('st_ip',   1, 'Latitude punch list', 'j1', NULL, 'in_progress',   '[]', 10, 20,   NULL),
+      ('st_wc',   1, 'Waiting on approval', 'j1', NULL, 'work_complete', '[]', 10, NULL, '2026-09-15 08:00:00'),
+      ('st_ap',   1, 'Approved list',       'j1', NULL, 'approved',      '[]', 10, 20,   NULL),
+      ('st_open', 1, 'Second list',         'j1', NULL, 'open',          '[]', 10, NULL, NULL),
+      ('st_lead', 1, 'Lead list',           NULL, 'l1', 'in_progress',   '[]', 10, NULL, NULL),
+      ('st_b',    2, 'Rival list',          'j9', NULL, 'in_progress',   '[]', 50, NULL, NULL);
 
     INSERT INTO tasks (id, organization_id, title, status, scope, owner_user_id, assignee_user_id, service_ticket_id, entity_type, entity_id) VALUES
       ('k1',    1, 'Bldg 1 — Side A', 'open', 'org', NULL, 20,   'st_ip',   'job', 'j1'),
@@ -295,13 +299,12 @@ describe('PATCH /api/tasks/:id — finishing and reopening a building', () => {
     expect(ticket('st_wc').status).toBe('in_progress');
   });
 
-  test('someone who can neither edit the job nor is assigned: 403 with the exact sentence, nothing written', async () => {
+  test('someone who can neither edit the job nor is on the work order: 403 with the exact sentence, nothing written', async () => {
     photo('att_k1', 'k1', ['completion']);
-    eng.db.exec("UPDATE tasks SET assignee_user_id = NULL WHERE id = 'k1'");
     const res = await patchTask(NOBODY, 'k1', { status: 'done' });
     expect(res.statusCode).toBe(403);
     expect(res.body).toEqual({
-      error: 'Only someone who can edit this job, or the person this task is assigned to, can finish or reopen it.',
+      error: 'Only someone who can edit this job, or the person this work order is assigned to, can finish or reopen it.',
       code: 'no_access',
     });
     expect(task('k1').status).toBe('open');
@@ -311,15 +314,40 @@ describe('PATCH /api/tasks/:id — finishing and reopening a building', () => {
   test('on a lead\'s work order the sentence names the lead', async () => {
     const res = await patchTask(NOBODY, 'lk1', { status: 'done' });
     expect(res.statusCode).toBe(403);
-    expect(res.body.error).toBe('Only someone who can edit this lead, or the person this task is assigned to, can finish or reopen it.');
+    expect(res.body.error).toBe('Only someone who can edit this lead, or the person this work order is assigned to, can finish or reopen it.');
   });
 
-  test('the ASSIGNEE without job edit may finish their building', async () => {
+  test('the WORK ORDER\'s assignee without job edit may finish its buildings (1.35)', async () => {
+    // Carl is on st_ip's Assigned to and cannot edit j1. k1 names him too, but
+    // that is the dead field — clearing it changes nothing.
     photo('att_k1', 'k1', ['completion']);
+    eng.db.exec("UPDATE tasks SET assignee_user_id = NULL WHERE id = 'k1'");
     const res = await patchTask(CREW, 'k1', { status: 'done' });
     expect(res.statusCode).toBe(200);
     expect(task('k1').status).toBe('done');
     expect(events('st_ip')[0].actor_user_id).toBe(CREW);
+  });
+
+  test('…and so may finish a building that names SOMEBODY ELSE — everyone on the record is equal', async () => {
+    photo('att_k1', 'k1', ['completion']);
+    eng.db.exec("UPDATE tasks SET assignee_user_id = 40 WHERE id = 'k1'");
+    expect((await patchTask(CREW, 'k1', { status: 'done' })).statusCode).toBe(200);
+    expect(task('k1').status).toBe('done');
+  });
+
+  test('THE 1.34 RULE IS GONE: a building naming me on a work order that is not mine is refused', async () => {
+    // o1 lives on st_open, which is assigned to nobody. Under the old rule the
+    // building's own assignee was the key, so this walked straight through.
+    photo('att_o1', 'o1', ['completion']);
+    eng.db.exec("UPDATE tasks SET assignee_user_id = 20 WHERE id = 'o1'");
+    const res = await patchTask(CREW, 'o1', { status: 'done' });
+    expect(res.statusCode).toBe(403);
+    expect(res.body.code).toBe('no_access');
+    expect([task('o1').status, ticket('st_open').status]).toEqual(['open', 'open']);
+    // Put him on the RECORD and the same request lands.
+    eng.db.exec("UPDATE service_tickets SET assignee_user_id = 20 WHERE id = 'st_open'");
+    expect((await patchTask(CREW, 'o1', { status: 'done' })).statusCode).toBe(200);
+    expect([task('o1').status, ticket('st_open').status]).toEqual(['done', 'work_complete']);
   });
 
   test('…but not on an approved work order: 409 work_order_locked', async () => {
@@ -330,11 +358,15 @@ describe('PATCH /api/tasks/:id — finishing and reopening a building', () => {
     expect(task('a1').status).toBe('done');
   });
 
-  test('assigning yourself in the same PATCH does not make you the assignee the rule asks about', async () => {
+  test('assigning yourself in the same PATCH is refused before anything else is decided', async () => {
+    // The old two-step (assign yourself, then finish) is not merely refused —
+    // the assignment half no longer exists at all.
     photo('att_o1', 'o1', ['completion']);
     const res = await patchTask(NOBODY, 'o1', { status: 'done', assignee_user_id: NOBODY });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('building_not_assignable');
     expect([task('o1').status, task('o1').assignee_user_id]).toEqual(['open', null]);
+    expect(allEvents()).toEqual([]);
   });
 
   test('an office writer on a closed work order: 409 with the closed sentence', async () => {
@@ -420,58 +452,136 @@ describe('PATCH /api/tasks/:id — putting a task on, moving it and taking it of
   });
 });
 
-describe('PATCH /api/tasks/:id — who a building is assigned to', () => {
-  const REFUSED = { error: 'Only someone who can edit this job can change who this task is assigned to.', code: 'no_access' };
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 1.35 — A BUILDING IS NEVER ASSIGNED TO ANYBODY
+ *
+ * The owner, 2026-09-20: "i dont want assignments to individual buildings like
+ * that, whoever is assigned to the ticket, task or work order is evenly
+ * responsible." So this is no longer a permission question with a yes on one
+ * side. Every caller, from every door, gets the same sentence.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('PATCH /api/tasks/:id — a building can never be assigned', () => {
+  const SENTENCE = 'A building on a work order is never assigned to one person. ' +
+    "Set the work order's Assigned to instead — everyone on it is equally responsible for every building on its punch list.";
+  const REFUSED = { error: SENTENCE, code: 'building_not_assignable' };
 
-  test('someone who cannot edit the job cannot assign themselves, so the two-step finish is closed', async () => {
-    photo('att_o1', 'o1', ['completion']);
-    const assign = await patchTask(NOBODY, 'o1', { assignee_user_id: NOBODY });
-    expect([assign.statusCode, assign.body]).toEqual([403, REFUSED]);
+  test('the office, who CAN edit the job, is refused with a sentence they can act on', async () => {
+    const res = await patchTask(WIDE, 'o1', { assignee_user_id: CREW });
+    expect([res.statusCode, res.body]).toEqual([409, REFUSED]);
     expect(task('o1').assignee_user_id).toBeNull();
-    const finish = await patchTask(NOBODY, 'o1', { status: 'done' });
-    expect(finish.statusCode).toBe(403);
-    expect([task('o1').status, ticket('st_open').status]).toEqual(['open', 'open']);
-    await flush();
-    expect([allEvents(), notifyCalls]).toEqual([[], []]);
+    // It names the field that DOES mean something, so the next move is right.
+    expect(res.body.error).toContain("work order's Assigned to");
+    expect(allEvents()).toEqual([]);
   });
 
-  test('nor unassign someone, nor hand their own building on — the assignee without job edit included', async () => {
-    const res = await patchTask(CREW, 'k1', { assignee_user_id: NOBODY });
-    expect([res.statusCode, res.body]).toEqual([403, REFUSED]);
-    const off = await patchTask(CREW, 'k1', { assignee_user_id: null });
-    expect(off.statusCode).toBe(403);
+  test('so is the work order\'s own assignee, and so is a stranger', async () => {
+    for (const who of [CREW, NOBODY]) {
+      const res = await patchTask(who, 'k1', { assignee_user_id: NOBODY });
+      expect([res.statusCode, res.body]).toEqual([409, REFUSED]);
+    }
     expect(task('k1').assignee_user_id).toBe(CREW);
   });
 
-  test('on a lead\'s work order the sentence names the lead', async () => {
-    const res = await patchTask(NOBODY, 'lk1', { assignee_user_id: NOBODY });
-    expect(res.body).toEqual({ error: 'Only someone who can edit this lead can change who this task is assigned to.', code: 'no_access' });
+  test('CLEARING one is refused too: old data is left alone, not rewritten', async () => {
+    const off = await patchTask(WIDE, 'k1', { assignee_user_id: null });
+    expect([off.statusCode, off.body]).toEqual([409, REFUSED]);
+    const blank = await patchTask(WIDE, 'k1', { assignee_user_id: '' });
+    expect([blank.statusCode, blank.body]).toEqual([409, REFUSED]);
+    expect(task('k1').assignee_user_id).toBe(CREW);
   });
 
-  test('an office writer assigns a building, and that assignee may then finish it', async () => {
-    const res = await patchTask(WIDE, 'o1', { assignee_user_id: CREW });
-    expect(res.statusCode).toBe(200);
-    expect(task('o1').assignee_user_id).toBe(CREW);
-    photo('att_o1', 'o1', ['completion']);
-    const finish = await patchTask(CREW, 'o1', { status: 'done' });
-    expect([finish.statusCode, task('o1').status]).toEqual([200, 'done']);
+  test('the same sentence on a lead\'s work order — it is not a per-parent rule', async () => {
+    const res = await patchTask(WIDE, 'lk1', { assignee_user_id: NOBODY });
+    expect([res.statusCode, res.body]).toEqual([409, REFUSED]);
+    expect(task('lk1').assignee_user_id).toBeNull();
   });
 
-  test('CONTROLS: re-sending the same assignee, and assigning a plain task, are not asked', async () => {
-    const same = await patchTask(NOBODY, 'k1', { assignee_user_id: CREW, title: 'Bldg 1 — rail' });
+  test('and on an approved or closed work order — the status is never asked', async () => {
+    const res = await patchTask(WIDE, 'a2', { assignee_user_id: NOBODY });
+    expect([res.statusCode, res.body]).toEqual([409, REFUSED]);
+    eng.db.exec("UPDATE service_tickets SET status = 'closed' WHERE id = 'st_ip'");
+    expect((await patchTask(WIDE, 'k1', { assignee_user_id: NOBODY })).body).toEqual(REFUSED);
+  });
+
+  test('WHERE THE ROW ENDS UP is the test: onto a work order refused, off one allowed', async () => {
+    // A plain task moved ONTO a work order and assigned in the same request
+    // would be an assigned building.
+    const onto = await patchTask(WIDE, 'plain', { service_ticket_id: 'st_open', assignee_user_id: CREW });
+    expect([onto.statusCode, onto.body]).toEqual([409, REFUSED]);
+    expect([task('plain').service_ticket_id, task('plain').assignee_user_id]).toEqual([null, null]);
+    expect(allEvents()).toEqual([]);
+    // Taken OFF one it is an ordinary task again, and assignable as ever.
+    const off = await patchTask(WIDE, 'o1', { service_ticket_id: null, assignee_user_id: CREW });
+    expect(off.statusCode).toBe(200);
+    expect([task('o1').service_ticket_id, task('o1').assignee_user_id]).toEqual([null, CREW]);
+  });
+
+  test('CONTROLS: re-sending the same value, an ordinary task and a personal to-do are untouched', async () => {
+    // Not a CHANGE, so not an assignment: the title edit beside it lands.
+    const same = await patchTask(WIDE, 'k1', { assignee_user_id: CREW, title: 'Bldg 1 — rail' });
     expect([same.statusCode, task('k1').title]).toEqual([200, 'Bldg 1 — rail']);
-    const plain = await patchTask(NOBODY, 'plain', { assignee_user_id: NOBODY });
+    const plain = await patchTask(WIDE, 'plain', { assignee_user_id: NOBODY });
     expect([plain.statusCode, task('plain').assignee_user_id]).toEqual([200, NOBODY]);
+    const todo = await patchTask(WIDE, 'todo', { title: 'Call supplier back' });
+    expect([todo.statusCode, task('todo').title]).toEqual([200, 'Call supplier back']);
   });
 
-  test('MUTANT: without the assign verdict, assign-then-finish walks past the rule', async () => {
+  test('MUTANT: without the refusal, an office writer hands a building to one person', async () => {
     const mut = mutant(TASK_ROUTES,
-      '        if (assignChange) {\n          const verdict = await subtaskDoor.assignVerdict(client, { user: req.user, orgId, ticket: newTicket });\n          if (!verdict.ok) return { refusal: verdict };\n        }\n',
+      '    if (assignChange && endsUpABuilding) return sendRefusal(res, subtaskDoor.assignVerdict());\n',
       '');
-    photo('att_o1', 'o1', ['completion']);
-    expect((await patchTask(NOBODY, 'o1', { assignee_user_id: NOBODY }, mut)).statusCode).toBe(200);
-    expect((await patchTask(NOBODY, 'o1', { status: 'done' }, mut)).statusCode).toBe(200);
-    expect([task('o1').status, ticket('st_open').status]).toEqual(['done', 'work_complete']);
+    expect((await patchTask(WIDE, 'o1', { assignee_user_id: CREW }, mut)).statusCode).toBe(200);
+    expect(task('o1').assignee_user_id).toBe(CREW);
+    // The shipped door leaves it unassigned.
+    seed();
+    expect((await patchTask(WIDE, 'o1', { assignee_user_id: CREW })).statusCode).toBe(409);
+    expect(task('o1').assignee_user_id).toBeNull();
+  });
+
+  test('MUTANT: keyed on the row as READ, moving a task on and assigning it in one go slips through', async () => {
+    const mut = mutant(TASK_ROUTES, '&& !!newTicketId;\n    if (assignChange && endsUpABuilding)',
+      '&& !!oldTicketId;\n    if (assignChange && endsUpABuilding)');
+    expect((await patchTask(WIDE, 'plain', { service_ticket_id: 'st_open', assignee_user_id: CREW }, mut)).statusCode).toBe(200);
+    expect([task('plain').service_ticket_id, task('plain').assignee_user_id]).toEqual(['st_open', CREW]);
+  });
+});
+
+describe('POST /api/tasks — a building is created with no assignee', () => {
+  const SENTENCE = 'A building on a work order is never assigned to one person. ' +
+    "Set the work order's Assigned to instead — everyone on it is equally responsible for every building on its punch list.";
+
+  test('creating one with an assignee is refused by name, nothing inserted, no timeline row', async () => {
+    const res = await createTask(WIDE, {
+      title: 'Bldg 11', service_ticket_id: 'st_ip', entity_type: 'job', entity_id: 'j1',
+      assignee_user_id: CREW,
+    });
+    expect([res.statusCode, res.body]).toEqual([409, { error: SENTENCE, code: 'building_not_assignable' }]);
+    expect(eng.all("SELECT id FROM tasks WHERE title = 'Bldg 11'")).toEqual([]);
+    expect(allEvents()).toEqual([]);
+  });
+
+  test('without one it is created, unassigned, exactly as before', async () => {
+    const res = await createTask(WIDE, {
+      title: 'Bldg 11', service_ticket_id: 'st_ip', entity_type: 'job', entity_id: 'j1',
+    });
+    expect(res.statusCode).toBe(200);
+    expect([res.body.task.assignee_user_id, res.body.task.scope]).toEqual([null, 'org']);
+  });
+
+  test('CONTROL: an ordinary task is still created assigned', async () => {
+    const res = await createTask(WIDE, { title: 'Order the trim', assignee_user_id: CREW });
+    expect([res.statusCode, res.body.task.assignee_user_id]).toEqual([200, CREW]);
+  });
+
+  test('MUTANT: without the refusal, the assignee is written onto the new building', async () => {
+    const mut = mutant(TASK_ROUTES,
+      '    if (!wantPersonal && body.service_ticket_id && assigneeSent) {\n      return sendRefusal(res, subtaskDoor.assignVerdict());\n    }\n',
+      '');
+    const res = await createTask(WIDE, {
+      title: 'Bldg 11', service_ticket_id: 'st_ip', entity_type: 'job', entity_id: 'j1',
+      assignee_user_id: CREW,
+    }, mut);
+    expect([res.statusCode, res.body.task.assignee_user_id]).toEqual([200, CREW]);
   });
 });
 
@@ -772,6 +882,41 @@ describe('task link', () => {
   test('CONTROL: the photo door on an open work order still reaches the file check', async () => {
     const res = await sharePhoto(TOKEN);
     expect([res.statusCode, res.body.error]).toEqual([400, 'No file']);
+  });
+
+  test('a building cannot be assigned from a link either, in the same sentence (1.35)', async () => {
+    const res = await sharePatch(TOKEN, { assignee_user_id: CREW, status: 'in_progress', note: 'Mine now' });
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toEqual({
+      error: 'A building on a work order is never assigned to one person. ' +
+        "Set the work order's Assigned to instead — everyone on it is equally responsible for every building on its punch list.",
+      code: 'building_not_assignable',
+    });
+    // Refused BEFORE anything else the same request asked for.
+    expect([task('k1').status, task('k1').assignee_user_id]).toEqual(['open', CREW]);
+    expect(task('k1').notes).toBeNull();
+    expect(allEvents()).toEqual([]);
+  });
+
+  test('clearing one from a link is refused too, and a plain shared task is untouched by the rule', async () => {
+    expect((await sharePatch(TOKEN, { assignee_user_id: null })).body.code).toBe('building_not_assignable');
+    expect(task('k1').assignee_user_id).toBe(CREW);
+    // 'plain' is on no work order: the link ignores the key exactly as it
+    // always has, and the status it really does write still lands.
+    const plain = await sharePatch(TOKEN_PLAIN, { assignee_user_id: NOBODY, status: 'in_progress' });
+    expect([plain.statusCode, task('plain').status, task('plain').assignee_user_id]).toEqual([200, 'in_progress', null]);
+  });
+
+  test('MUTANT: without the link refusal, a guest is told 200 and the assignee vanishes in silence', async () => {
+    const mut = mutant(SHARE_ROUTES,
+      "    if (Object.prototype.hasOwnProperty.call(body, 'assignee_user_id') &&\n" +
+      '        subtaskDoor.isWorkOrderSubtask(req.task)) {\n' +
+      '      const refusal = subtaskDoor.assignVerdict();\n' +
+      '      return res.status(refusal.status).json({ error: refusal.error, code: refusal.code });\n' +
+      '    }\n', '');
+    const res = await sharePatch(TOKEN, { assignee_user_id: NOBODY, status: 'in_progress' }, mut);
+    expect(res.statusCode).toBe(200);
+    expect([task('k1').status, task('k1').assignee_user_id]).toEqual(['in_progress', CREW]);
   });
 });
 
@@ -1096,5 +1241,91 @@ describe('client — the day summary checkbox (js/schedule.js)', () => {
     if (src.split(anchor).length !== 2) throw new Error('anchor not found');
     const r = await tick(src.split(anchor).join(''), async () => { throw photoRefusal(); }, true);
     expect(r.cb.checked).toBe(true);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * THE SEAM: what the detail screen SENDS, driven into the real route.
+ *
+ * The describes above prove the door refuses an assignee on a building. This
+ * one proves the ONE SCREEN that can reach a building no longer earns that
+ * refusal — because a refusal here is not a warning, it is the whole edit
+ * thrown away. Since 1.33 window.p86Tasks.openDetail(id) is the only way into
+ * a building (Service Tickets → My work and the My Day strip both call it), so
+ * the real editor is driven in a JSDOM window, the payload its Save button
+ * builds is captured, and THAT payload is handed to the real PATCH route.
+ *
+ * k1 is the row that made this urgent: a LEGACY building still carrying Carl
+ * from before 1.35. The old editor read its picker back as an id or as '' and
+ * sent assignee_user_id either way — a write of the field, refused.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('client → server — a building saved from the task detail screen (js/tasks.js)', () => {
+  const TASKS_JS = path.join(__dirname, '..', 'js', 'tasks.js');
+  const settle = () => new Promise((r) => setTimeout(r, 30));
+
+  // Drive the REAL editor over a row shaped like GET /api/tasks/:id answers
+  // for k1, change the notes, press Save, and return what it tried to send.
+  async function detailSavePayload(src) {
+    const { JSDOM } = require('jsdom');
+    const dom = new JSDOM('<!doctype html><body></body>', { runScripts: 'outside-only', url: 'https://project86.test/' });
+    const w = dom.window;
+    const saves = [];
+    w.p86Toast = function () {};
+    w.p86Toast.show = w.p86Toast;
+    w.p86Api = {
+      isAuthenticated: () => true,
+      users: { list: async () => ({ users: [{ id: WIDE, name: 'Wendy Wide' }, { id: CREW, name: 'Carl Crew' }] }) },
+      attachments: { list: async () => ({ attachments: [] }) },
+      tasks: {
+        list: async () => ({ tasks: [] }),
+        get: async () => ({ task: Object.assign({}, task('k1'), { assignee_name: 'Carl Crew', checklist: [], kind: 'punch', priority: 'normal' }) }),
+        update: async (id, payload) => { saves.push({ id, payload }); return { task: {} }; },
+      },
+    };
+    w.eval(src || fs.readFileSync(TASKS_JS, 'utf8'));
+    w.p86Tasks.openDetail('k1');
+    await settle();
+    const modal = w.document.getElementById('p86TaskDetailModal');
+    if (!modal) throw new Error('the detail modal did not render');
+    const click = (sel) => modal.querySelector(sel).dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    click('#tdEditBtn');
+    modal.querySelector('#tdNotes').value = 'Gate rehung, photo added.';
+    click('#tdSave');
+    await settle();
+    if (!saves.length) throw new Error('the editor saved nothing');
+    return saves[0].payload;
+  }
+
+  test('the payload it builds carries no assignee_user_id, and the route takes it', async () => {
+    const payload = await detailSavePayload();
+    // ABSENT, not null: the door refuses the field being written at all.
+    expect(Object.prototype.hasOwnProperty.call(payload, 'assignee_user_id')).toBe(false);
+    expect(payload.notes).toBe('Gate rehung, photo added.');
+
+    // Carl is the work order’s assignee and cannot edit j1 — the exact person
+    // this screen exists for.
+    const res = await patchTask(CREW, 'k1', payload);
+    expect(res.statusCode).toBe(200);
+    expect(task('k1').notes).toBe('Gate rehung, photo added.');
+    // The legacy value is left where it was: history nothing reads, not
+    // something this save rewrites.
+    expect(task('k1').assignee_user_id).toBe(CREW);
+    expect(allEvents()).toEqual([]);
+  });
+
+  test('MUTANT: the 1.34 editor sends the field, and the whole edit is thrown away', async () => {
+    const client = fs.readFileSync(TASKS_JS, 'utf8').replace(/\r\n/g, '\n');
+    const anchor = '      if (!_isBldg) payload.assignee_user_id = (asgEl && asgEl.value) ? Number(asgEl.value) : null;\n';
+    if (client.split(anchor).length !== 2) throw new Error('anchor not found');
+    const payload = await detailSavePayload(client.split(anchor).join(
+      '      payload.assignee_user_id = (asgEl && asgEl.value) ? Number(asgEl.value) : null;\n'));
+    expect(payload.assignee_user_id).toBeNull();
+
+    const res = await patchTask(CREW, 'k1', payload);
+    expect([res.statusCode, res.body.code]).toEqual([409, 'building_not_assignable']);
+    // Not a warning: the notes, the title, the status and the pin beside it
+    // are all gone with it.
+    expect(task('k1').notes).not.toBe('Gate rehung, photo added.');
+    expect(task('k1').assignee_user_id).toBe(CREW);
   });
 });

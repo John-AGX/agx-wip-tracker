@@ -1,14 +1,30 @@
-// test/work-orders-1-33-release.test.js — release 1.34 is cut, and every ?v in
-// index.html tells the truth about the files this phase changed.
+// test/work-orders-1-34-release.test.js — the 1.34 note still says what it has
+// to say, and every ?v in index.html tells the truth about the files the phase
+// in flight changed.
 //
 // 1.34 is the release that takes work-order buildings off the task lists and
-// ships their replacements. Two things have to be true for it to be shippable:
+// ships their replacements. It is SHIPPED AND LIVE, and 1.35 corrects it the
+// same day — so 1.34 is no longer the newest entry, and the "APP_VERSION is
+// 1.34" assertion this file opened with moved out with that rule. What is
+// asserted here now:
 //
-//   THE NOTE — APP_VERSION is 1.34, 1.34 is the newest entry, its rows are
-//   grouped new / improved / fixed, it says out loud that task counts will
-//   drop (the one number every user will notice the morning after), it names
-//   the three replacements by the words on the screen (My work, My Day, the
-//   digest), and it carries no money — the note is read by crews.
+//   THE NOTE — 1.34 is still in the catalog, one or more places below the
+//   newest entry and directly above 1.33; whatever the newest entry is,
+//   APP_VERSION mirrors it; 1.34's rows are grouped new / improved / fixed, it
+//   says out loud that task counts will drop (the one number every user will
+//   notice the morning after), it names the three replacements by the words on
+//   the screen (My work, My Day, the digest), and it carries no money — the
+//   note is read by crews.
+//
+//   WHAT 1.34 STILL SAYS — that a BUILDING is assigned to a person. That was
+//   true of what 1.34 shipped and is not true of the product any more, but a
+//   patch note is dated: it records what one version did, it is not a
+//   description of the app today. The entry was briefly rewritten onto the
+//   record, which left two notes dated the same day contradicting each other
+//   with 1.35 billed as fixing what 1.34 claimed to have shipped. It is
+//   restored, and pinned below. The correction is in 1.35’s own rows, and the
+//   scan that holds the CURRENT release to the rule lives with it, in
+//   test/work-order-responsibility-release.test.js.
 //
 //   THE TAGS — every js/ or css/ file this phase edited has its ?v bumped in
 //   index.html. The rule and its three clauses live in test/helpers/cache-
@@ -58,6 +74,7 @@ function releaseProblems(r) {
 }
 
 const rel133 = () => catalog.releases.find((r) => r.version === VERSION);
+const indexOfRel = (v) => catalog.releases.findIndex((r) => r.version === v);
 const rowsOf = (r) => (r.changes || []).map((c) => c.text);
 const allText = (r) => [r.name, r.summary].concat(rowsOf(r)).join('\n');
 
@@ -93,10 +110,10 @@ describe('release ' + VERSION + ' is cut', () => {
   });
 
   test('mutant: APP_VERSION left on the previous release is caught', () => {
-    const stale = Object.assign({}, catalog, { APP_VERSION: '1.32' });
+    const stale = Object.assign({}, catalog, { APP_VERSION: catalog.releases[1].version });
     // The assertion above, made against the mutant, must fail.
     expect(() => {
-      expect(stale.APP_VERSION).toBe(VERSION);
+      expect(stale.APP_VERSION).toBe(stale.releases[0].version);
     }).toThrow();
     // And the list really is ordered newest-first, not a coincidence: this
     // release sits directly above 1.33, which shipped from another branch the
@@ -224,5 +241,46 @@ describe('every ?v in index.html tells the truth', () => {
     const back = cacheBuster.tagIn(reverted, target);
     expect(back.n).toBe(real.n - 1);
     expect(back.n).toBeLessThan(real.n);
+  });
+});
+
+// ── 4. the note is the record of what 1.34 shipped ───────────────────
+// These are the sentences 1.34 went out with. They describe a rule the app no
+// longer follows — that is what makes them history rather than documentation,
+// and history is not edited to agree with the present. Pinned verbatim so the
+// next correction goes in the next release’s rows instead of in here.
+describe('the ' + VERSION + ' note is the record of what ' + VERSION + ' shipped', () => {
+  const SHIPPED = [
+    'a Buildings assigned to you section in the morning digest, every one of them following who a building is assigned to rather than who can open the job.',
+    'Your buildings live on the work order now.',
+    'a building is assigned to a person, not to whoever can see the job',
+    'The morning work-orders digest carries your buildings.',
+  ];
+
+  test('it still carries the sentences ' + VERSION + ' went out with', () => {
+    const text = allText(rel133());
+    expect(SHIPPED.filter((s) => text.indexOf(s) === -1)).toEqual([]);
+  });
+
+  test('MUTANT: the entry restated onto the record loses every one of them', () => {
+    // Exactly the rewrite that was made and is now undone.
+    const rewritten = [
+      'a work-orders section in the morning digest, every one of them following who the work order is assigned to rather than who can open the job.',
+      'Buildings live on the work order now.',
+      'a work order is assigned to a person, not to whoever can see the job',
+      'The morning work-orders digest carries the buildings still open on your work orders.',
+    ].join('\n');
+    expect(SHIPPED.filter((s) => rewritten.indexOf(s) !== -1)).toEqual([]);
+  });
+
+  test('the correction lives in a later release, not in this entry', () => {
+    // Found by looking above 1.34 rather than by naming a version, so the
+    // release after next does not move this line.
+    const above = catalog.releases.slice(0, indexOfRel(VERSION));
+    expect(above.filter((r) => /never assigned to one person/i.test(allText(r))).length)
+      .toBeGreaterThan(0);
+    // And the correcting note tells the reader this entry was left alone.
+    expect(above.some((r) => /directly below/i.test(allText(r)) && /shipped/i.test(allText(r))))
+      .toBe(true);
   });
 });

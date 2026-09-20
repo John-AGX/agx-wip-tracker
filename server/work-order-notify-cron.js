@@ -26,13 +26,17 @@
 //      so no event is told twice and none is lost.
 //
 //   D. MORNING DIGEST / WAITING REMINDER (services/work-order-attention.js)
-//      Since 1.33 the digest also carries the BUILDINGS ASSIGNED TO THE
-//      RECIPIENT (the your_buildings section), and carries them first. It has
-//      to: a building is off every task list now (the owner's rule — a service
-//      ticket is not a task), and the daily task email in reminders-cron.js
-//      stopped naming one in the same release. That section is keyed on
+//      Since 1.33 the digest also carries the WORK ORDERS ASSIGNED TO THE
+//      RECIPIENT THAT STILL HAVE OPEN BUILDINGS (the your_buildings section),
+//      and carries them first. It has to: a building is off every task list now
+//      (the owner's rule — a service ticket is not a task), and the daily task
+//      email in reminders-cron.js stopped naming one in the same release.
+//      1.35 moved that section's key from the BUILDING to the RECORD (the
+//      owner: "whoever is assigned to the ticket, task or work order is evenly
+//      responsible") — it reads service_tickets.assignee_user_id, which the
+//      office actually sets, and never a building's own. It is keyed on that
 //      assignment alone and not on job access, so this is the one notice that
-//      reaches a crew lead assigned a building on a job they cannot open. The
+//      reaches a crew lead assigned a work order on a job they cannot open. The
 //      assembly below passes entry.sections through whole and enumerates no
 //      section, so the row arrives without a change here.
 //      Weekdays, per person, between 7:00 and 12:00 in their own zone (user,

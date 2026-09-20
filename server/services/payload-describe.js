@@ -302,7 +302,14 @@ const BAGS = {
     'site_contact_phone', 'street_address', 'city', 'state', 'zip', 'lat', 'lng', 'access_notes',
     'scheduled_for', 'due_date', 'materials',
   ], lowIds: ['job_id', 'lead_id', 'assignee_user_id'] }),
-  ticketTask: bagSpec({ low: ['title', 'notes', 'priority', 'due_date'], lowIds: ['assignee_user_id'] }),
+  // A task_adds entry is a BUILDING on a work order's punch list, and from 1.35
+  // a building is never assigned to anybody (the work order's own assignee is
+  // the whole answer). validateServiceTicketOps refuses `assignee_user_id` here
+  // by name and terminally, so it can no longer reach an approval card — and it
+  // must not sit in lowIds advertising itself as a harmless owner link if it
+  // ever does. Out of the bag it falls to the link rule and reads as a re-link,
+  // which is what setting an owner on a building would be.
+  ticketTask: bagSpec({ low: ['title', 'notes', 'priority', 'due_date'] }),
   // An assembly's output UNIT is what every takeoff quantity is measured in —
   // SF to LF silently re-prices every estimate that uses the recipe.
   assemblyHeader: bagSpec({ low: ['name', 'code', 'trade', 'category', 'description', 'notes', 'source'],

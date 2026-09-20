@@ -1,15 +1,18 @@
-/* My Day — the work-orders strip (js/my-day.js), release 1.33.
+/* My Day — the work-orders strip (js/my-day.js), releases 1.33 and 1.35.
  * ═══════════════════════════════════════════════════════════════════════════
  * 1.33 took work-order BUILDINGS off every task list: a building is a line on
- * a work order, not a to-do. The removal and its replacement ship together,
- * and this strip is one of the replacements — the place where the person a
- * building is assigned to still sees it, and still has a way to finish it.
+ * a work order, not a to-do. 1.35 settled who is responsible for one — NOBODY,
+ * personally. A building is never assigned; the work order's own Assigned to
+ * is, and everyone on that record is equally responsible for every building on
+ * its punch list. So this strip lists the WORK ORDERS ASSIGNED TO ME that need
+ * me today, and gives whoever is on them a way to finish any building on them.
  *
- * So the tests here are not "does a section render". They are the four
+ * So the tests here are not "does a section render". They are the five
  * promises the removal is only safe if we keep:
  *   • the work I am on today is ABOVE my task list, not buried under it;
  *   • each building is one tap from the detail that can mark it done;
  *   • the strip is crew-facing, so no price and no internal note reaches it;
+ *   • NOT ONE WORD says a building is mine, and no owner is ever drawn on one;
  *   • a dead or missing my-buildings feed costs the strip and NOTHING else —
  *     My Day renders exactly as it did before.
  *
@@ -118,6 +121,17 @@ const sectionAfter = (body, label) => {
 };
 
 const DUE_TASK = { id: 'tk_9', title: 'Call the inspector', due_date: TODAY, priority: 'normal' };
+
+// Phrases that would hand one person a building. The strip may say the WORK
+// ORDER is the reader's — that is what the door asks — and may never say a
+// building is.
+const OWNS_A_BUILDING = [
+  /your\s+buildings?/i,
+  /my\s+buildings?/i,
+  /buildings?\s+(?:is|are)?\s*assigned/i,
+  /assigned\s+building/i,
+];
+const ownershipWords = (html) => OWNS_A_BUILDING.filter((re) => re.test(html)).map(String);
 
 describe('My Day — the work-orders strip', () => {
   test('a work order whose next building is due today renders ABOVE the task list', async () => {
@@ -229,6 +243,62 @@ describe('My Day — the work-orders strip', () => {
     // Belt and braces: the section really did render, so the absence above
     // is the projection doing its job and not an empty strip.
     expect(heads(r.body)).toContain('Work orders');
+  });
+
+  test('the strip names the work order as mine and the buildings as everyone\'s', async () => {
+    const r = await mountDay({ tickets: [ticket()], tasks: [DUE_TASK] });
+    const sec = sectionAfter(r.body, 'Work orders');
+
+    // Not one word hands the reader a building of their own…
+    expect(ownershipWords(sec.innerHTML)).toEqual([]);
+    // …not vacuously: the scan does catch the wording this replaced.
+    expect(ownershipWords('<div>Your buildings · 2 open</div>')).toHaveLength(1);
+
+    // …and the rule is on screen, under the heading, in one line.
+    expect(sec.textContent)
+      .toContain('Assigned to you — everyone assigned to a work order is responsible for every building on it.');
+    // The count is the work order's own punch list, said plainly.
+    expect(r.body.querySelector('[data-kind="workorder"]').textContent).toContain('2 buildings open');
+  });
+
+  test('an owner the server (wrongly) sends on a building or a ticket is drawn nowhere', async () => {
+    const r = await mountDay({
+      tickets: [ticket({
+        assignee_user_id: 7,
+        assignee_name: 'Dana Ruiz',
+        buildings: [
+          { id: 'tk_b1', title: 'Building 4', status: 'open', due_date: TODAY, completed_at: null,
+            assignee_user_id: 42, assignee_name: 'Marco Vega', assignee_initials: 'MV' },
+        ],
+      })],
+    });
+    // The strip really did render, so the absences below mean something.
+    expect(r.body.querySelectorAll('[data-kind="building"]')).toHaveLength(1);
+    expect(r.body.innerHTML).not.toContain('Marco Vega');
+    expect(r.body.innerHTML).not.toContain('Dana Ruiz');
+    expect(r.body.innerHTML).not.toContain('assignee');
+    expect(r.body.innerHTML).not.toContain('MV');
+    // Nothing on the strip could set one either: it is cards, not controls.
+    expect(r.body.querySelectorAll('select, input, button')).toHaveLength(0);
+  });
+
+  test('MUTANT: an owner chip on a building row puts a name on something nobody owns', async () => {
+    const anchor = "'<div class=\"myday-title\" style=\"font-size:13px;\">' + esc(b.title || '(untitled building)') + '</div>' +";
+    expect(SRC.split(anchor)).toHaveLength(2);
+    const mutant = SRC.split(anchor).join(
+      "'<div class=\"myday-title\" style=\"font-size:13px;\">' + esc(b.title || '(untitled building)') + " +
+      "' · ' + esc(b.assignee_name || 'Unassigned') + '</div>' +");
+
+    const bad = await mountDay({
+      src: mutant,
+      tickets: [ticket({
+        buildings: [
+          { id: 'tk_b1', title: 'Building 4', status: 'open', due_date: TODAY, completed_at: null,
+            assignee_name: 'Marco Vega' },
+        ],
+      })],
+    });
+    expect(bad.body.innerHTML).toContain('Marco Vega');
   });
 
   test('MUTANT: with the boundary at < instead of <=, the work order due TODAY disappears', async () => {

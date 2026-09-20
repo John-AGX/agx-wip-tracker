@@ -56,7 +56,11 @@ const RIVAL = { userId: 50, organizationId: 2 };
 //   LEADS  LEADS_VIEW + LEADS_EDIT -> `no_capability` on a JOB work order, and
 //          ok on a LEAD one. Passes the coarse 'task' capability either way,
 //          which is exactly what made the building half a hole.
-//   BLDG   the same narrow tier as CREW, and the ASSIGNEE of two buildings.
+//   BLDG   the same narrow tier as CREW, and (1.35) the ASSIGNEE OF THE
+//          RECORD st_prog — of the work order itself, never of a building.
+//          A building is assigned to nobody: tasks.assignee_user_id is frozen
+//          on them, so the fixture below leaves it out entirely and the crew
+//          lead's right to every building on st_prog comes from the ticket row.
 const CREW = { userId: 20, organizationId: 1 };
 const LEADS = { userId: 30, organizationId: 1 };
 const BLDG = { userId: 40, organizationId: 1 };
@@ -96,25 +100,25 @@ function seed() {
     INSERT INTO projects (id, name, organization_id) VALUES ('p1', 'Maple St', 1), ('p9', 'Rival Site', 2);
     INSERT INTO projects (id, name) VALUES ('p_legacy', 'No org stamp');
 
-    INSERT INTO service_tickets (id, organization_id, title, job_id, lead_id, status, checklist) VALUES
-      ('st_prog',   1, 'Roof punch list', 'j1', NULL, 'in_progress', '[]'),
-      ('st_appr',   1, 'Approved list',   'j1', NULL, 'approved',    '[]'),
-      ('st_closed', 1, 'Closed list',     'j1', NULL, 'closed',      '[]'),
-      ('st_cancel', 1, 'Cancelled list',  'j1', NULL, 'cancelled',   '[]'),
-      ('st_lead',   1, 'Lead survey',     NULL, 'l1', 'in_progress', '[]'),
-      ('st_b',      2, 'Rival list',      'j9', NULL, 'in_progress', '[]');
+    INSERT INTO service_tickets (id, organization_id, title, job_id, lead_id, status, checklist, assignee_user_id) VALUES
+      ('st_prog',   1, 'Roof punch list', 'j1', NULL, 'in_progress', '[]', 40),
+      ('st_appr',   1, 'Approved list',   'j1', NULL, 'approved',    '[]', NULL),
+      ('st_closed', 1, 'Closed list',     'j1', NULL, 'closed',      '[]', NULL),
+      ('st_cancel', 1, 'Cancelled list',  'j1', NULL, 'cancelled',   '[]', 10),
+      ('st_lead',   1, 'Lead survey',     NULL, 'l1', 'in_progress', '[]', NULL),
+      ('st_b',      2, 'Rival list',      'j9', NULL, 'in_progress', '[]', NULL);
 
-    INSERT INTO tasks (id, organization_id, title, status, scope, service_ticket_id, entity_type, entity_id, archived_at, assignee_user_id) VALUES
-      ('t_784',    1, 'Bldg 784 — north side', 'done', 'org', 'st_prog',   'job', 'j1', NULL, 40),
-      ('t_785',    1, 'Bldg 785',              'done', 'org', 'st_prog',   'job', 'j1', NULL, NULL),
-      ('t_786',    1, 'Bldg 786',              'open', 'org', 'st_prog',   'job', 'j1', NULL, 40),
-      ('t_787',    1, 'Bldg 787',              'done', 'org', 'st_prog',   'job', 'j1', NULL, NULL),
-      ('t_900',    1, 'Bldg 900',              'done', 'org', 'st_appr',   'job', 'j1', NULL, NULL),
-      ('t_950',    1, 'Bldg 950',              'done', 'org', 'st_closed', 'job', 'j1', NULL, NULL),
-      ('t_700',    1, 'Bldg 700',              'done', 'org', 'st_cancel', 'job', 'j1', NULL, NULL),
-      ('t_plain',  1, 'Plain task',            'done', 'org', NULL,        'job', 'j1', NULL, NULL),
-      ('t_lead',   1, 'Lead bldg',             'open', 'org', 'st_lead',   'lead', 'l1', NULL, NULL),
-      ('t_rival',  2, 'Rival bldg',            'done', 'org', 'st_b',      'job', 'j9', NULL, NULL);
+    INSERT INTO tasks (id, organization_id, title, status, scope, service_ticket_id, entity_type, entity_id, archived_at) VALUES
+      ('t_784',    1, 'Bldg 784 — north side', 'done', 'org', 'st_prog',   'job', 'j1', NULL),
+      ('t_785',    1, 'Bldg 785',              'done', 'org', 'st_prog',   'job', 'j1', NULL),
+      ('t_786',    1, 'Bldg 786',              'open', 'org', 'st_prog',   'job', 'j1', NULL),
+      ('t_787',    1, 'Bldg 787',              'done', 'org', 'st_prog',   'job', 'j1', NULL),
+      ('t_900',    1, 'Bldg 900',              'done', 'org', 'st_appr',   'job', 'j1', NULL),
+      ('t_950',    1, 'Bldg 950',              'done', 'org', 'st_closed', 'job', 'j1', NULL),
+      ('t_700',    1, 'Bldg 700',              'done', 'org', 'st_cancel', 'job', 'j1', NULL),
+      ('t_plain',  1, 'Plain task',            'done', 'org', NULL,        'job', 'j1', NULL),
+      ('t_lead',   1, 'Lead bldg',             'open', 'org', 'st_lead',   'lead', 'l1', NULL),
+      ('t_rival',  2, 'Rival bldg',            'done', 'org', 'st_b',      'job', 'j9', NULL);
     INSERT INTO tasks (id, title, status, scope, service_ticket_id, entity_type, entity_id, archived_at) VALUES
       ('t_legacy', 'Legacy bldg', 'done', 'org', 'st_prog', 'job', 'j1', NULL);
 
@@ -624,27 +628,61 @@ describe('photo_updates: a building photo follows its work order, not the coarse
   });
 });
 
-describe('photo_updates: the building\'s ASSIGNEE keeps the one exception the crew door needs', () => {
-  test('the assignee fixes their own building\'s photo without any right to edit the job', async () => {
+describe('photo_updates: the WORK ORDER\'s ASSIGNEE keeps the one exception the crew door needs', () => {
+  test('the assignee fixes a building\'s photo on their record without any right to edit the job', async () => {
     const t0 = eng.log.length;
     const r = await photoUpdates([{ attachment_id: 'a_open', caption: 'North face, after' }], BLDG);
     expect(r.stage).toBe('applied');
     expect(captionOf('a_open')).toBe('North face, after');
-    // The assignee lookup is org-scoped on the CALLER's proven organization.
-    const hit = eng.log.slice(t0).find((q) => /SELECT assignee_user_id FROM tasks/.test(q.sql));
+    // The question is the RECORD's, reached through the building's own join,
+    // and org-scoped on the CALLER's proven organization on BOTH rows.
+    const hit = eng.log.slice(t0).find((q) => /SELECT assignee_user_id FROM service_tickets/.test(q.sql));
     expect(hit).toBeDefined();
-    expect(hit.sql).toBe('SELECT assignee_user_id FROM tasks WHERE id = $1 AND organization_id = $2');
+    // The shim logs the statement with its whitespace collapsed.
+    expect(hit.sql.replace(/\s+/g, ' ').trim()).toBe(
+      'SELECT assignee_user_id FROM service_tickets ' +
+      'WHERE id = (SELECT service_ticket_id FROM tasks WHERE id = $1 AND organization_id = $2 ' +
+      "AND scope = 'org' AND service_ticket_id IS NOT NULL) " +
+      'AND organization_id = $2');
     expect(hit.params).toEqual(['t_786', 1]);
+    // Nothing was asked of the frozen column.
+    expect(stmts(t0).some((s) => /assignee_user_id FROM tasks/.test(s))).toBe(false);
   });
 
-  test('it is THEIR building, not every building: the same user is refused on one they are not assigned', async () => {
-    const r = await photoUpdates([{ attachment_id: 'a_c1', caption: 'x' }], BLDG);
+  test('EVERY building on the record is theirs — the 1.35 rule, not a per-building one', async () => {
+    // a_c1 hangs on t_785, a building nobody is assigned and nobody can be.
+    // Under the old per-building question this was a refusal; the record names
+    // Andy, so every building on its punch list is equally his.
+    expect(eng.all(
+      'SELECT COUNT(*) AS c FROM tasks WHERE service_ticket_id IS NOT NULL AND assignee_user_id IS NOT NULL'
+    )[0].c).toBe(0);
+    const r = await photoUpdates([{ attachment_id: 'a_c1', caption: 'South face' }], BLDG);
+    expect(r.stage).toBe('applied');
+    expect(captionOf('a_c1')).toBe('South face');
+  });
+
+  test('it is THEIR record, not every record: a building on a work order assigned to someone else is refused', async () => {
+    // t_700 is on st_cancel — a work order in the same org, on the same job,
+    // assigned to Wendy. Same shape, different record, and the crew lead is
+    // held to the absent-id refusal.
+    const r = await photoUpdates([{ attachment_id: 'a_cancel_only', caption: 'x' }], BLDG);
     expect(r.stage).toBe('refused');
     expect(r.detail.code).toBe('unresolvable_id');
-    expect(captionOf('a_c1')).toBeNull();
+    expect(captionOf('a_cancel_only')).toBeNull();
+  });
+
+  test('a work order assigned to nobody hands nobody the exception', async () => {
+    eng.db.exec("UPDATE service_tickets SET assignee_user_id = NULL WHERE id = 'st_prog'");
+    const r = await photoUpdates([{ attachment_id: 'a_open', caption: 'x' }], BLDG);
+    expect(r.stage).toBe('refused');
+    expect(r.detail.code).toBe('unresolvable_id');
+    expect(captionOf('a_open')).toBeNull();
   });
 
   test('it is a BUILDING\'s exception, never the work order\'s own site photos', async () => {
+    // a_site_prog hangs on st_prog itself — the very record Andy is assigned.
+    // The exception is asked only when the photo resolved to a BUILDING, so
+    // being the assignee is still no right to edit the job's site photos.
     const r = await photoUpdates([{ attachment_id: 'a_site_prog', caption: 'x' }], BLDG);
     expect(r.stage).toBe('refused');
     expect(r.detail.code).toBe('unresolvable_id');
@@ -652,8 +690,9 @@ describe('photo_updates: the building\'s ASSIGNEE keeps the one exception the cr
   });
 
   test('it widens WHO may write, never what may happen to the proof', async () => {
-    // Andy IS assigned t_784, so the access rule lets him through — and the
-    // photo guard still refuses to take the last completion photo off it.
+    // Andy is assigned st_prog, and t_784 is on it, so the access rule lets him
+    // through — and the photo guard still refuses to take the last completion
+    // photo off that building.
     const r = await photoUpdates([{ attachment_id: 'a_only', tags: ['before'] }], BLDG);
     expect(r.stage).toBe('refused');
     expect(r.detail.code).toBe('last_completion_photo');
@@ -665,7 +704,7 @@ describe('photo_updates: the building\'s ASSIGNEE keeps the one exception the cr
     const t0 = eng.log.length;
     const r = await photoUpdates([{ attachment_id: 'a_open', caption: 'North face' }], OWN);
     expect(r.stage).toBe('applied');
-    expect(stmts(t0).some((s) => /SELECT assignee_user_id FROM tasks/.test(s))).toBe(false);
+    expect(stmts(t0).some((s) => /SELECT assignee_user_id FROM service_tickets/.test(s))).toBe(false);
   });
 });
 
@@ -882,6 +921,38 @@ describe('mutants: payload-dispatcher.js', () => {
     expect(r.stage).toBe('refused');
     expect(r.detail.code).toBe('unresolvable_id');
     expect(captionOf('a_open')).toBeNull();
+  });
+
+  // THE REGRESSION THIS FIX EXISTS FOR (1.35). Put the lookup back on the
+  // BUILDING's own assignee — the shipped 1.35 statement, one line — and 86's
+  // photo writes dead-end for the very person the work order is assigned to.
+  // Nothing writes tasks.assignee_user_id any more, so no fixture and no
+  // production row can make that arm fire: the column it reads is frozen NULL
+  // on every building, and the value it would have read can no longer be
+  // revoked by anybody either.
+  test('re-keyed on the BUILDING\'s assignee: 86\'s photo write dead-ends for the record\'s own assignee', async () => {
+    const mod = mutantDispatcher([[
+      '    `SELECT assignee_user_id FROM service_tickets\n' +
+      '       WHERE id = (SELECT service_ticket_id FROM tasks WHERE id = $1 AND organization_id = $2\n' +
+      "                     AND scope = 'org' AND service_ticket_id IS NOT NULL)\n" +
+      '         AND organization_id = $2`,',
+      "    'SELECT assignee_user_id FROM tasks WHERE id = $1 AND organization_id = $2',"]]);
+    const t0 = eng.log.length;
+    // Andy IS the assignee of st_prog, and a_open is the completion photo on
+    // one of its buildings — the proof the done-tick he IS allowed demands.
+    const r = await photoUpdates([{ attachment_id: 'a_open', caption: 'North face' }], BLDG, mod);
+    expect(r.stage).toBe('refused');
+    expect(r.detail.code).toBe('unresolvable_id');
+    expect(captionOf('a_open')).toBeNull();
+    // It asked the frozen column, and the answer was the NULL it must be.
+    const hit = eng.log.slice(t0).find((q) => /SELECT assignee_user_id FROM tasks/.test(q.sql));
+    expect(hit).toBeDefined();
+    expect(hit.params).toEqual(['t_786', 1]);
+    expect(eng.all("SELECT assignee_user_id FROM tasks WHERE id = 't_786'")[0].assignee_user_id).toBeNull();
+    // The shipped file answers the same call with the caption written.
+    const ok = await photoUpdates([{ attachment_id: 'a_open', caption: 'North face' }], BLDG);
+    expect(ok.stage).toBe('applied');
+    expect(captionOf('a_open')).toBe('North face');
   });
 
   test('report photo ids ask the TICKET type again: the crew\'s building photo is attached to the report', async () => {

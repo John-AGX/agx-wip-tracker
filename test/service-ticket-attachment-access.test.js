@@ -26,10 +26,24 @@
 // own, or deleted it, on any work order the 1.29 photo guard does not lock.
 // ticketParentOk now resolves a task through the photo guard (task ->
 // service_ticket_id -> ticket, org-scoped) and asks the ticket's rule, with ONE
-// exception: on the WRITE half, the building's own assignee passes, because
-// service-ticket-subtask-door.js lets them finish a building without the right
-// to edit the job and finishing means uploading its completion photo. A task on
-// no ticket keeps its own rule, untouched.
+// exception: on the WRITE half, the WORK ORDER's assignee passes, because
+// service-ticket-subtask-door.js lets them finish its buildings without the
+// right to edit the job and finishing means uploading a completion photo. A
+// task on no ticket keeps its own rule, untouched.
+//
+// -- THE EXCEPTION DEAD-ENDED (1.35) ---------------------------------------
+// That exception used to read the BUILDING's own assignee
+// (tasks.assignee_user_id). 1.35 made a building unassignable from every door
+// and nothing writes that column any more, so the exception could never fire
+// again: doneVerdict lets the WORK ORDER's assignee tick a building, ticking
+// one demands a completion photo, and uploading that photo was refused to the
+// only person the release exists for. This suite did not catch it because its
+// fixture set tasks.assignee_user_id with a raw INSERT, green-lighting a path
+// production could no longer reach. The lookup is now the record's
+// (service_tickets.assignee_user_id, reached task -> service_ticket_id ->
+// ticket in the caller's own organization), the fixture assigns the TICKET and
+// no building at all, and "the whole flow, end to end" below drives the upload
+// and the tick together through the real routers so it cannot dead-end again.
 //
 // ── THE FIX UNDER TEST ────────────────────────────────────────────────────
 // The flat functions now return the COARSE list for 'service_ticket' (the
@@ -103,6 +117,13 @@ const DISPATCHER_FILE = path.join(SERVER, 'services', 'payload-dispatcher.js');
 
 const attachmentRouter = require('../server/routes/attachment-routes');
 const foldersRouter = require('../server/routes/file-folders-routes');
+// The tick half of finishing a building. Never mutated here — it is mounted so
+// the release's promise can be driven end to end through the real doors.
+const tasksRouter = require('../server/routes/tasks-routes');
+// The router's own image pipeline. Used to build a completion photo the door
+// will actually accept: it sniffs the bytes, and the finish rule counts only
+// rows whose stored mime is an image.
+const sharp = require('sharp');
 const entityAccess = require('../server/services/attachment-entity-access');
 const ticketAccess = require('../server/services/service-ticket-access');
 const dispatcher = require('../server/services/payload-dispatcher');
@@ -153,12 +174,17 @@ const PHOTO = {
   foreign: 'att_b', unowned: 'att_unowned', orphan: 'att_orphan', absent: 'att_nope',
 };
 // The BUILDINGS of those work orders — where the before / completion photos
-// actually live (entity_type 'task'). `asg` is a building on job j3, assigned
-// to CREW, who holds no grant on j3: the assignee exception, and nothing else.
+// actually live (entity_type 'task'). `asg` and `sib` are the two buildings of
+// st_j3b, a SECOND work order on job j3 whose Assigned to is CREW, who holds no
+// grant on j3: the record-keyed exception, and nothing else. NO building row in
+// this fixture carries an assignee — a building is never assigned to anybody
+// (1.35), so a fixture that assigned one would prove a path production cannot
+// reach. `j3` is a building on st_j3, the work order on the SAME JOB that CREW
+// is not on, which is what makes the exception the record's and not the job's.
 // `plain` is an ordinary org to-do on no ticket — the control that must not move.
 const BUILDING = {
   j1: 'tk_j1', j2: 'tk_j2', j3: 'tk_j3', l1: 'tk_l1',
-  asg: 'tk_asg', plain: 'tk_plain', foreign: 'tk_b', absent: 'tk_nope',
+  asg: 'tk_asg', sib: 'tk_sib', plain: 'tk_plain', foreign: 'tk_b', absent: 'tk_nope',
 };
 const BPHOTO = {
   j1: 'att_tk_j1', j2: 'att_tk_j2', j3: 'att_tk_j3', l1: 'att_tk_l1',
@@ -199,25 +225,33 @@ function seed() {
     INSERT INTO leads (id, title, organization_id) VALUES
       ('l1', 'Maple St reroof', 1), ('l9', 'Rival lead', 2);
 
-    INSERT INTO service_tickets (id, organization_id, title, job_id, lead_id, status, checklist) VALUES
-      ('st_j1', 1, 'Gate on j1', 'j1', NULL, 'open', '[]'),
-      ('st_j2', 1, 'Gate on j2', 'j2', NULL, 'open', '[]'),
-      ('st_j3', 1, 'Gate on j3', 'j3', NULL, 'open', '[]'),
-      ('st_l1', 1, 'Lead gate',  NULL, 'l1', 'open', '[]'),
-      ('st_b',  2, 'RIVAL gate', 'j9', NULL, 'open', '[]'),
-      ('st_unowned', NULL, 'No tenant named', 'j1', NULL, 'open', '[]');
+    -- assignee_user_id is WHO IS RESPONSIBLE, and it lives here, on the record
+    -- (1.35). st_j3b is the work order the office put CREW on; CREW holds no
+    -- grant on its job. Every other ticket is on nobody, so the refusals below
+    -- are exercised against a record with no assignee at all.
+    INSERT INTO service_tickets (id, organization_id, title, job_id, lead_id, status, checklist, assignee_user_id) VALUES
+      ('st_j1',  1, 'Gate on j1', 'j1', NULL, 'open', '[]', NULL),
+      ('st_j2',  1, 'Gate on j2', 'j2', NULL, 'open', '[]', NULL),
+      ('st_j3',  1, 'Gate on j3', 'j3', NULL, 'open', '[]', NULL),
+      ('st_j3b', 1, 'Punch list on j3', 'j3', NULL, 'open', '[]', 20),
+      ('st_l1',  1, 'Lead gate',  NULL, 'l1', 'open', '[]', NULL),
+      ('st_b',   2, 'RIVAL gate', 'j9', NULL, 'open', '[]', NULL),
+      ('st_unowned', NULL, 'No tenant named', 'j1', NULL, 'open', '[]', NULL);
 
-    -- The buildings on those work orders. tk_asg is assigned to CREW (20), who
-    -- holds no grant on j3; tk_plain hangs on no ticket at all.
+    -- The buildings on those work orders. tk_asg and tk_sib are the two
+    -- buildings of st_j3b, the work order CREW is assigned; tk_plain hangs on
+    -- no ticket at all. assignee_user_id is NULL on every one of them and is
+    -- never set anywhere in this file: a building is not an assignable thing.
     INSERT INTO tasks (id, organization_id, title, status, scope, service_ticket_id,
                        entity_type, entity_id, assignee_user_id, archived_at) VALUES
-      ('tk_j1',    1, 'Bldg 1 — j1',   'open', 'org', 'st_j1', 'job',  'j1', NULL, NULL),
-      ('tk_j2',    1, 'Bldg 2 — j2',   'open', 'org', 'st_j2', 'job',  'j2', NULL, NULL),
-      ('tk_j3',    1, 'Bldg 3 — j3',   'open', 'org', 'st_j3', 'job',  'j3', NULL, NULL),
-      ('tk_l1',    1, 'Bldg L — l1',   'open', 'org', 'st_l1', 'lead', 'l1', NULL, NULL),
-      ('tk_asg',   1, 'Bldg 9 — j3',   'open', 'org', 'st_j3', 'job',  'j3', 20,   NULL),
-      ('tk_plain', 1, 'Office to-do',  'open', 'org', NULL,    'job',  'j1', NULL, NULL),
-      ('tk_b',     2, 'Rival bldg',    'open', 'org', 'st_b',  'job',  'j9', NULL, NULL);
+      ('tk_j1',    1, 'Bldg 1 — j1',   'open', 'org', 'st_j1',  'job',  'j1', NULL, NULL),
+      ('tk_j2',    1, 'Bldg 2 — j2',   'open', 'org', 'st_j2',  'job',  'j2', NULL, NULL),
+      ('tk_j3',    1, 'Bldg 3 — j3',   'open', 'org', 'st_j3',  'job',  'j3', NULL, NULL),
+      ('tk_l1',    1, 'Bldg L — l1',   'open', 'org', 'st_l1',  'lead', 'l1', NULL, NULL),
+      ('tk_asg',   1, 'Bldg 9 — j3',   'open', 'org', 'st_j3b', 'job',  'j3', NULL, NULL),
+      ('tk_sib',   1, 'Bldg 10 — j3',  'open', 'org', 'st_j3b', 'job',  'j3', NULL, NULL),
+      ('tk_plain', 1, 'Office to-do',  'open', 'org', NULL,     'job',  'j1', NULL, NULL),
+      ('tk_b',     2, 'Rival bldg',    'open', 'org', 'st_b',   'job',  'j9', NULL, NULL);
 
     -- Crew photos, written the way the guest door writes them: uploaded_by
     -- NULL, organization stamp copied off the ticket.
@@ -272,6 +306,8 @@ beforeAll(async () => {
   auth.setRolePool(mockEng.pool);
   seed();
   await auth.refreshRoleCache();
+  jpegBytes = await sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 200, g: 120, b: 40 } } })
+    .jpeg({ quality: 70 }).toBuffer();
 });
 
 beforeEach(() => { seed(); mockStorageCalls.length = 0; });
@@ -312,6 +348,10 @@ async function serve(attRouter, ffRouter) {
   app.use(express.json());
   app.use('/api/attachments', attRouter || attachmentRouter);
   app.use('/api/file-folders', ffRouter || foldersRouter);
+  // Always the SHIPPED tasks router, even on a mutant attachment router: the
+  // tick is the door that makes the upload matter, and mutating the upload
+  // must be shown to dead-end the real tick.
+  app.use('/api/tasks', tasksRouter);
   const server = http.createServer(app);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   servers.push(server);
@@ -343,10 +383,22 @@ const answer = (r) => [r.status, r.body];
 const caption = (id) => (mockEng.all('SELECT caption FROM attachments WHERE id = ?', id)[0] || {}).caption;
 const exists = (id) => mockEng.all('SELECT id FROM attachments WHERE id = ?', id).length === 1;
 const where = (id) => (mockEng.all('SELECT entity_type, entity_id FROM attachments WHERE id = ?', id)[0]);
+const taskRow = (id) => mockEng.all('SELECT * FROM tasks WHERE id = ?', id)[0];
+const ticketRow = (id) => mockEng.all('SELECT * FROM service_tickets WHERE id = ?', id)[0];
 
 function uploadForm() {
   const fd = new FormData();
   fd.append('file', new Blob(['crew note'], { type: 'text/plain' }), 'note.txt');
+  return fd;
+}
+
+// A REAL photo, for the end-to-end drive: the completion photo the tick demands
+// has to be an image row, and the upload door refuses bytes that contradict the
+// declared type. Built once, with the sharp the router itself uses.
+let jpegBytes = null;
+function jpegForm(name) {
+  const fd = new FormData();
+  fd.append('file', new Blob([jpegBytes], { type: 'image/jpeg' }), name || 'completion.jpg');
   return fd;
 }
 
@@ -862,15 +914,29 @@ describe('move and copy — the SOURCE is a BUILDING photo', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// THE ONE EXCEPTION. services/service-ticket-subtask-door.js lets a building's
-// ASSIGNEE finish it without the right to edit the job, and finishing means
-// uploading its completion photo — so the assignee passes the WRITE half on
-// THEIR building. Nothing else moves: not the read half, not another building
-// on the same job, and not what the photo guard says may happen to the proof.
-describe('the building ASSIGNEE — the write half only', () => {
-  const assigneeQueries = () => mockEng.log.filter((e) => /SELECT assignee_user_id FROM tasks/.test(e.sql));
+// THE ONE EXCEPTION. services/service-ticket-subtask-door.js lets the WORK
+// ORDER's ASSIGNEE finish its buildings without the right to edit the job, and
+// finishing means uploading a completion photo — so that person passes the
+// WRITE half on the buildings of THEIR work order. Responsibility sits on the
+// record and is not divisible: every building on that punch list, not one of
+// them. Nothing else moves: not the read half, not a building on another work
+// order (even on the same job), and not what the photo guard says may happen
+// to the proof.
+describe('the WORK ORDER\'s assignee — the write half only', () => {
+  // The lookup the exception makes. It reads the RECORD's assignee, reached
+  // through the building — the column 1.35 left writable, not the one it froze.
+  const assigneeQueries = () => mockEng.log.filter((e) => /SELECT assignee_user_id FROM service_tickets/.test(e.sql));
+  const taskAssigneeQueries = () => mockEng.log.filter((e) => /SELECT assignee_user_id FROM tasks\b/.test(e.sql));
 
-  test('CREW is not on job j3 at all: the READ half still refuses the building they are assigned', async () => {
+  test('THE FIXTURE ITSELF: no building carries an assignee — the field the old rule read is dead', () => {
+    // If this ever finds a row, every pass below is about a path production
+    // cannot reach: tasks.assignee_user_id is unwritable from every door.
+    expect(mockEng.all('SELECT id FROM tasks WHERE assignee_user_id IS NOT NULL')).toEqual([]);
+    expect(mockEng.all("SELECT id FROM service_tickets WHERE assignee_user_id IS NOT NULL").map((r) => r.id))
+      .toEqual(['st_j3b']);
+  });
+
+  test('CREW is not on job j3 at all: the READ half still refuses the buildings of the work order they are on', async () => {
     const b = await shipped();
     for (const name of Object.keys(BUILDING_READ_DOORS)) {
       const door = BUILDING_READ_DOORS[name];
@@ -880,7 +946,7 @@ describe('the building ASSIGNEE — the write half only', () => {
     }
   });
 
-  test('...but may upload the completion photo that finishing the building requires, and fix it', async () => {
+  test('...but may upload the completion photo that finishing a building requires, and fix it', async () => {
     const b = await shipped();
     const up = await BUILDING_WRITE_DOORS.upload.go(b, CREW, 'asg');
     expect(BUILDING_WRITE_DOORS.upload.ok(up)).toBe(true);
@@ -892,8 +958,20 @@ describe('the building ASSIGNEE — the write half only', () => {
     expect(exists('att_tk_asg')).toBe(false);
   });
 
-  test('the exception is the building they are assigned, not the job: the next building over is refused', async () => {
+  // "whoever is assigned to the ticket, task or work order is evenly
+  // responsible" — so it is never one nominated building. tk_sib is the other
+  // building on the same record and names nobody.
+  test('EVENLY RESPONSIBLE: every building on their work order, not a nominated one', async () => {
     const b = await shipped();
+    const up = await BUILDING_WRITE_DOORS.upload.go(b, CREW, 'sib');
+    expect(BUILDING_WRITE_DOORS.upload.ok(up)).toBe(true);
+    expect(up.body.attachment.entity_id).toBe('tk_sib');
+    expect(mockEng.all("SELECT assignee_user_id AS a FROM tasks WHERE id = 'tk_sib'")[0].a).toBeNull();
+  });
+
+  test('the exception is the WORK ORDER, not the job: a building on the OTHER list on j3 is refused', async () => {
+    const b = await shipped();
+    // tk_j3 hangs on st_j3 — same job, a record CREW is not on.
     const r = await BUILDING_WRITE_DOORS.upload.go(b, CREW, 'j3');
     expect(answer(r)).toEqual(answer(await BUILDING_WRITE_DOORS.upload.go(b, CREW, 'absent')));
     expect(r.status).toBe(404);
@@ -909,7 +987,7 @@ describe('the building ASSIGNEE — the write half only', () => {
     expect(exists('att_tk_asg')).toBe(true);
   });
 
-  test('the assignee lookup is asked only when the ticket rule already refused, and carries the org predicate', async () => {
+  test('the lookup is the RECORD\'s, asked only after the ticket rule refused, and org-scoped on both rows', async () => {
     const b = await shipped();
     // A caller the ticket rule ALLOWS never reaches the lookup.
     mockEng.log.length = 0;
@@ -924,8 +1002,13 @@ describe('the building ASSIGNEE — the write half only', () => {
     await BUILDING_WRITE_DOORS.caption.go(b, CREW, 'asg');
     const asked = assigneeQueries();
     expect(asked.length).toBe(1);
-    expect(asked[0].sql).toMatch(/WHERE id = \$1 AND organization_id = \$2/);
+    // The building resolves to its work order, and BOTH rows are pinned to the
+    // caller's proven organization — the ticket's own stamp is never the key.
+    expect(asked[0].sql).toMatch(/FROM tasks WHERE id = \$1 AND organization_id = \$2/);
+    expect(asked[0].sql).toMatch(/FROM service_tickets[\s\S]*organization_id = \$2/);
     expect(asked[0].params).toEqual(['tk_asg', 1]);
+    // And the frozen column is not read at all — by any door in this drive.
+    expect(taskAssigneeQueries()).toEqual([]);
   });
 
   test('the photo guard still governs what the assignee may remove', async () => {
@@ -936,6 +1019,82 @@ describe('the building ASSIGNEE — the write half only', () => {
     expect(r.body.code).toBe('last_completion_photo');
     expect(exists('att_tk_asg')).toBe(true);
     expect(mockStorageCalls.filter((c) => c[0] === 'delete')).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE WHOLE FLOW, END TO END. "The person a work order is assigned to can
+// finish its buildings" is the release's headline promise, and finishing one
+// takes TWO doors: the completion photo goes through THIS router, and the tick
+// goes through routes/tasks-routes.js. While the photo exception still read the
+// building's own assignee the two disagreed — the tick was allowed and the
+// upload was refused — so the promise dead-ended on a 409 demanding proof the
+// only person it named could not supply. Both doors, in order, same crew lead,
+// over real HTTP against the same engine.
+describe('the whole flow, end to end: upload the proof, then tick the building', () => {
+  const tick = (b, uid, taskId, status) =>
+    call(b, uid, 'PATCH', '/api/tasks/' + taskId, { json: { status: status || 'done' } });
+  const uploadPhoto = (b, uid, taskId, name) =>
+    call(b, uid, 'POST', '/api/attachments/task/' + taskId, { form: jpegForm(name) });
+
+  test('CREW holds nothing on job j3, is assigned the work order, and finishes a building', async () => {
+    const b = await shipped();
+    // The job really is closed to them — the ticket itself reads like an
+    // absent one, which is what makes this the exception and not a grant.
+    expect((await READ_DOORS.list.go(b, CREW, 'j3')).status).toBe(404);
+    expect(ticketRow('st_j3b').assignee_user_id).toBe(20);
+    expect(taskRow('tk_sib').assignee_user_id).toBeNull();
+    // tk_sib carries no proof yet — the state a crew lead actually starts from.
+    expect(mockEng.all("SELECT id FROM attachments WHERE entity_id = 'tk_sib'")).toEqual([]);
+
+    // 1. The tick alone is refused: no completion photo yet.
+    const early = await tick(b, CREW, 'tk_sib');
+    expect([early.status, early.body.code]).toEqual([409, 'completion_photo_required']);
+    expect(taskRow('tk_sib').status).toBe('open');
+
+    // 2. So they upload one — the door this fix re-keyed.
+    const up = await uploadPhoto(b, CREW, 'tk_sib');
+    expect([up.status, up.body.ok]).toEqual([200, true]);
+    expect(up.body.attachment.entity_id).toBe('tk_sib');
+    expect(up.body.attachment.mime_type).toMatch(/^image\//);
+
+    // 3. And now the box ticks, on the same request the release promises.
+    const done = await tick(b, CREW, 'tk_sib');
+    expect(done.status).toBe(200);
+    expect(done.body.task.status).toBe('done');
+    expect(taskRow('tk_sib').status).toBe('done');
+    // One building of two: the punch list is not finished, so the work order
+    // has NOT gone to Awaiting approval and nobody was paged.
+    expect(ticketRow('st_j3b').status).toBe('open');
+    expect(taskRow('tk_asg').status).toBe('open');
+  });
+
+  test('the other building on the same record goes the same way — equal responsibility, both doors', async () => {
+    const b = await shipped();
+    // tk_asg already has its completion photo; the same crew lead finishes it
+    // too, because responsibility is the record's and covers every building.
+    expect(BUILDING_WRITE_DOORS.caption.ok(await BUILDING_WRITE_DOORS.caption.go(b, CREW, 'asg'))).toBe(true);
+    const done = await tick(b, CREW, 'tk_asg');
+    expect([done.status, done.body.task.status]).toEqual([200, 'done']);
+    expect(ticketRow('st_j3b').status).toBe('open');
+  });
+
+  test('and neither door opens on the OTHER work order on that job', async () => {
+    const b = await shipped();
+    // st_j3 names nobody: the upload is answered like an absent id...
+    const up = await uploadPhoto(b, CREW, 'tk_j3');
+    expect(up.status).toBe(404);
+    // ...and the tick is refused too, so the two doors still agree.
+    const t = await tick(b, CREW, 'tk_j3');
+    expect(t.status).toBe(403);
+    expect(taskRow('tk_j3').status).toBe('open');
+  });
+
+  test('CONTROL: a user with neither the grant nor the record is refused at both doors', async () => {
+    const b = await shipped();
+    expect((await uploadPhoto(b, LEADS, 'tk_asg')).status).toBe(403);
+    expect((await tick(b, LEADS, 'tk_asg')).status).toBe(403);
+    expect(taskRow('tk_asg').status).toBe('open');
   });
 });
 
@@ -1442,7 +1601,7 @@ describe('MUTANT: the BUILDING half of the rule (1.30)', () => {
     expect(answer(await READ_DOORS.list.go(b, LEADVIEW, 'j1'))).toEqual([403, { error: 'Forbidden' }]);
   });
 
-  test('the assignee exception removed: the building\'s own assignee can no longer finish it', async () => {
+  test('the exception removed: the work order\'s assignee can no longer finish its buildings', async () => {
     const b = await serveMutant({ routePairs: [[
       "  if (mode === 'write' && wo.taskId != null && await isBuildingAssignee(req, wo.taskId)) return true;",
       '  /* MUTANT */']] });
@@ -1452,7 +1611,37 @@ describe('MUTANT: the BUILDING half of the rule (1.30)', () => {
     expect((await BUILDING_WRITE_DOORS.caption.go(b, CREW, 'asg')).status).toBe(404);
   });
 
-  test('the exception widened to anyone: a leads editor writes a building they were never assigned', async () => {
+  // THE REGRESSION THIS FIX EXISTS FOR (1.35). Put the lookup back on the
+  // BUILDING's own assignee — the shipped 1.35 code, one statement — and the
+  // headline promise dead-ends: the same crew lead the release names is
+  // refused the upload, so the tick they ARE allowed can never be satisfied.
+  // Nothing writes tasks.assignee_user_id any more, so no fixture and no
+  // production row can make that arm fire again.
+  test('re-keyed on the BUILDING\'s assignee: the upload is refused and the promised tick dead-ends', async () => {
+    const b = await serveMutant({ routePairs: [[
+      '    `SELECT assignee_user_id FROM service_tickets\n' +
+      "       WHERE id = (SELECT service_ticket_id FROM tasks WHERE id = $1 AND organization_id = $2\n" +
+      "                     AND scope = 'org' AND service_ticket_id IS NOT NULL)\n" +
+      '         AND organization_id = $2`,',
+      "    'SELECT assignee_user_id FROM tasks WHERE id = $1 AND organization_id = $2',"]] });
+    // The door the tick depends on is shut to the person the record names...
+    const up = await call(b, CREW, 'POST', '/api/attachments/task/tk_sib', { form: jpegForm() });
+    expect(up.status).toBe(404);
+    expect(mockEng.all("SELECT id FROM attachments WHERE entity_id = 'tk_sib'")).toEqual([]);
+    // ...while the tick itself is still theirs to make, and now cannot be
+    // made: 409, asking for proof they have just been refused permission to
+    // supply. That is the dead end, executed.
+    const done = await call(b, CREW, 'PATCH', '/api/tasks/tk_sib', { json: { status: 'done' } });
+    expect([done.status, done.body.code]).toEqual([409, 'completion_photo_required']);
+    expect(taskRow('tk_sib').status).toBe('open');
+    // The shipped file answers the same two calls with an upload and a tick.
+    const s = await shipped();
+    expect((await call(s, CREW, 'POST', '/api/attachments/task/tk_sib', { form: jpegForm() })).status).toBe(200);
+    expect((await call(s, CREW, 'PATCH', '/api/tasks/tk_sib', { json: { status: 'done' } })).status).toBe(200);
+    expect(taskRow('tk_sib').status).toBe('done');
+  });
+
+  test('the exception widened to anyone: a leads editor writes a building on a record they are not on', async () => {
     const b = await serveMutant({ routePairs: [[
       '  return Number(row.assignee_user_id) === uid;', '  return true;']] });
     expect(BUILDING_WRITE_DOORS.caption.ok(await BUILDING_WRITE_DOORS.caption.go(b, LEADS, 'asg'))).toBe(true);

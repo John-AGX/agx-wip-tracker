@@ -672,11 +672,20 @@ function workOrdersUrl() {
 }
 
 // FIRST, deliberately: since 1.33 a building is off every task list, so for a
-// crew lead this row is the only place the work assigned to them is named — and
-// it is the most actionable thing in the email for everyone else too.
+// crew lead this row is the only place the work they are responsible for is
+// named — and it is the most actionable thing in the email for everyone else
+// too.
+//
+// WHAT IT SAYS, and why it says it that way (1.35, the owner: "whoever is
+// assigned to the ticket, task or work order is evenly responsible"). A
+// building is never assigned to anybody. These rows are the WORK ORDERS
+// assigned to the reader that still have open buildings, and the count is the
+// work order's own open punch list, not a share of it. So the heading names
+// the work orders, and the sub-line counts the buildings — never "your
+// buildings", never a building with an owner of its own.
 const DIGEST_SECTIONS = Object.freeze([
-  { key: 'your_buildings', label: 'Buildings assigned to you',
-    push: function (n) { return plural(n, 'work order') + ' with your buildings'; } },
+  { key: 'your_buildings', label: 'Work orders assigned to you with buildings still open',
+    push: function (n) { return plural(n, 'work order') + ' with buildings still open'; } },
   { key: 'approvals', label: 'Ready for your approval', push: function (n) { return n + ' to approve'; } },
   { key: 'flags', label: 'Problems flagged by crews', push: function (n) { return plural(n, 'problem') + ' flagged'; } },
   { key: 'overdue', label: 'Overdue', push: function (n) { return n + ' overdue'; } },
@@ -693,7 +702,9 @@ const DIGEST_SECTIONS = Object.freeze([
 //   unopened    {when:'today'|'tomorrow', linkSent}
 //   expiring    {crewName, expiresAt}
 //   suggestions {count}
-//   your_buildings {count, nextDue}   a count and a calendar day, never a price
+//   your_buildings {count, nextDue}   how many buildings are still open ON THIS
+//                 WORK ORDER and the soonest due date among them: a count and a
+//                 calendar day, never a price and never a person
 function digestSubLine(key, item, ctx) {
   const it = item || {};
   const parts = [lineFor(it)];
@@ -733,8 +744,8 @@ function digestSubLine(key, item, ctx) {
  *   unopened, expiring, suggestions}, overDays, zone, total?})
  *   -> {subject, html, text, push}
  * total defaults to the number of distinct tickets across the sections.
- * The subject's "[N to approve]" prefix keys on `approvals` only — buildings
- * assigned to you are not something to approve.
+ * The subject's "[N to approve]" prefix keys on `approvals` only — a work order
+ * assigned to you with buildings still open is not something to approve.
  */
 function digestMessage(o) {
   const opts = o || {};

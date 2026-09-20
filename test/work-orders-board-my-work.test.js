@@ -1,32 +1,39 @@
 /**
  * @jest-environment jsdom
  */
-// "MY WORK" — THE REPLACEMENT FOR THE BUILDINGS 1.33 TOOK OFF THE TASK LISTS.
+// "MY WORK" — THE WORK ORDERS ASSIGNED TO ME THAT STILL HAVE A BUILDING OPEN.
 //
 // A building on a work order is not a to-do, so from 1.33 it is on no task
-// list at all. The person it is assigned to must still be able to find it, and
-// this view is where they do: js/work-orders-board.js's FIRST view pill,
-// reading GET /api/service-tickets/my-buildings.
+// list at all. 1.35 settled who is responsible for one: NOBODY, personally. A
+// building is never assigned. Responsibility sits on the RECORD — the work
+// order's own Assigned to — and everyone on it is equally responsible for
+// every building on its punch list. So this view lists the work orders
+// assigned to the caller that still have a building open:
+// js/work-orders-board.js's FIRST view pill, reading
+// GET /api/service-tickets/my-buildings.
 //
 // It cannot be a server board view. Every ?board=1 row is ANDed onto
-// access.listVisibility — the JOB ACCESS rule — and a crew lead is
-// deliberately allowed to finish a building on a job they cannot otherwise
-// open. A view built on that door would show exactly the person this release
-// exists for exactly nothing. So the door is assignee-based, the view is
-// client-only, and what this file pins is the seam between them:
+// access.listVisibility — the JOB ACCESS rule — and the person a work order
+// is assigned to is deliberately allowed to finish a building on a job they
+// cannot otherwise open. A view built on that door would show exactly the
+// person this release exists for exactly nothing. So the door is record-keyed,
+// the view is client-only, and what this file pins is the seam between them:
 //
 //   1. pressing My work goes to myBuildings, never to list({board:1,…});
-//   2. a row says what it is: title, N of M buildings, the due date, and one
-//      button per building;
-//   3. a building button opens window.p86Tasks.openDetail(id) — THE crew
-//      lead's way in, and the reason the removal stranded nobody;
+//   2. a row says what it is: title, N of M buildings open, the due date, and
+//      one button per building on the work order's punch list;
+//   3. a building button opens window.p86Tasks.openDetail(id) — THE way in for
+//      whoever the work order is assigned to, and the reason the removal
+//      stranded nobody;
 //   4. a job this browser has not loaded gets NO job link (the narrow-tier
 //      case: the door answers for jobs the caller cannot open);
 //   5. the pill's number comes from its own count call, and a failed count
 //      leaves the pill numberless rather than breaking the page;
 //   6. NOTHING PRICED reaches a crew screen, even when the server (wrongly)
 //      sends a price — pickMyWork is what makes that true;
-//   7. a status pill is the way back out, to the board door.
+//   7. NO BUILDING IS ANYBODY'S: not in a word on the page, not as an owner
+//      the server (wrongly) sends, and not as a control that could set one;
+//   8. a status pill is the way back out, to the board door.
 //
 // Mutants at the end break one guard in a copy of the source and show the
 // same drive fail. test/work-orders-board-client.test.js drives the board
@@ -48,6 +55,9 @@ function mutate(src, from, to) {
 }
 
 // A my-buildings row: EXACTLY the 19 keys the door promises, and nothing else.
+// my_buildings_open / my_buildings_total / my_next_due kept their 1.33 names
+// and changed meaning in 1.35 — they are the WORK ORDER's own open count, live
+// count and next due date, and `buildings` is its whole punch list.
 function mwRow(over) {
   return Object.assign({
     id: 'st_1',
@@ -173,13 +183,15 @@ describe('the door My work reads', () => {
     // Nothing but limit/offset is ever sent.
     expect(Object.keys(myListCalls()[0]).sort()).toEqual(['limit', 'offset']);
     expect(host.querySelector('.p86-wob-note').textContent)
-      .toBe("Ordered by due date. Filters and search don't apply to My work.");
+      .toBe('Work orders assigned to you with a building still open. ' +
+        'Everyone assigned to a work order is equally responsible for every building on it. ' +
+        "Ordered by due date. Filters and search don't apply to My work.");
     for (const sel of ['.p86-wob-search', '.p86-wob-prio', '.p86-wob-parent', '.p86-wob-sort']) {
       expect([sel, host.querySelector(sel).disabled]).toEqual([sel, true]);
     }
     // The column header drops Crew and names what My work actually shows.
     expect(Array.from(host.querySelectorAll('.p86-wob-colhead span')).map((s) => s.textContent))
-      .toEqual(['', 'Ticket', 'Status', 'Scheduled', 'Due', 'Where', 'Your buildings', '']);
+      .toEqual(['', 'Ticket', 'Status', 'Scheduled', 'Due', 'Where', 'Buildings open', '']);
   });
 
   test('the empty state is the view\'s own, even with a status remembered from before', async () => {
@@ -190,7 +202,8 @@ describe('the door My work reads', () => {
     await flush();
     click(viewPill('my_work'));
     await flush();
-    expect(host.querySelector('.p86-wob-list').textContent).toBe('No buildings are assigned to you right now.');
+    expect(host.querySelector('.p86-wob-list').textContent)
+      .toBe('No work order assigned to you has a building open right now.');
   });
 
   test('Show more pages the same door; a failed quiet refresh keeps what is on screen', async () => {
@@ -236,8 +249,9 @@ describe('what a My work row says', () => {
     expect(r.querySelector('.p86-wob-title').textContent).toBe('Rehang the gates');
     expect(r.querySelector('.p86-st-num').textContent).toBe('WO-0007');
     expect(r.querySelector('.p86-wob-job').textContent).toBe('RV2001 Waterside 1');
-    // The board's task_done/task_total are gone: these are the CALLER's.
-    expect(r.querySelector('.p86-wob-bldg-m').textContent).toBe('2 of 3 buildings');
+    // The board's task_done/task_total are gone: this is the WORK ORDER's own
+    // punch list — open of live — not a share of it belonging to the caller.
+    expect(r.querySelector('.p86-wob-bldg-m').textContent).toBe('2 of 3 buildings open');
     expect(r.querySelector('.p86-wob-bldg-d').textContent).toBe('2/3');
     expect(r.querySelector('.p86-wob-c-due').textContent).toBe('DueSep 22, 2026');
     expect(r.querySelector('.p86-wob-c-assignee').textContent).toBe('Where4120 Waterside Dr, Sanford');
@@ -245,7 +259,10 @@ describe('what a My work row says', () => {
     expect(bldgBtns().map((x) => x.textContent)).toEqual([
       'Bldg 784 · Sep 21, 2026', 'Bldg 790 · Sep 23, 2026', 'Bldg 612 · done',
     ]);
-    expect(r.querySelector('.p86-wob-mw-bldgs .p86-wob-dim').textContent).toBe('Your buildings · next due Sep 21, 2026');
+    expect(r.querySelector('.p86-wob-mw-bldgs .p86-wob-dim').textContent).toBe('Punch list · next due Sep 21, 2026');
+    // …and the strip says whose it is: everyone's, not the reader's.
+    expect(r.querySelector('.p86-wob-mw-bldgs').getAttribute('title'))
+      .toBe('Everyone this work order is assigned to is responsible for every building on it.');
     // The door sends none of the board's crew badges, so the row's own crew
     // cell is empty (the buildings strip below it is a SIBLING of the row).
     expect(r.querySelectorAll('.p86-wob-row .p86-wob-c-crew .p86-wob-chip')).toHaveLength(0);
@@ -423,7 +440,86 @@ describe('nothing priced reaches a crew screen', () => {
 });
 
 /* ─────────────────────────────────────────────────────────────────────────
- * 6. BACK OUT
+ * 6. NO BUILDING IS ANYBODY'S  (1.35)
+ * ────────────────────────────────────────────────────────────────────────*/
+// The owner's rule, on 2026-09-20: "i dont want assignments to individual
+// buildings like that, whoever is assigned to the ticket, task or work order
+// is evenly responsible." So this view may say the WORK ORDER is yours — that
+// is what the door asks — and may never say a BUILDING is. Three ways it could
+// break the rule, all three closed here: the words on the page, an owner the
+// server (wrongly) sends, and a control that could set one.
+
+// Phrases that would hand one person a building. "My work" is the view's own
+// name (the work orders really are the caller's) and is deliberately not here.
+const OWNS_A_BUILDING = [
+  /your\s+buildings?/i,
+  /my\s+buildings?/i,
+  /buildings?\s+(?:is|are)?\s*assigned/i,
+  /assigned\s+(?:building|to\s+you\s+right\s+now)/i,
+];
+function ownershipWords(html) {
+  return OWNS_A_BUILDING.filter((re) => re.test(html)).map(String);
+}
+
+describe('no building belongs to one person', () => {
+  test('not a word on the view claims a building is yours — and the rule is said out loud', async () => {
+    await openMyWork();
+    // Every rendered surface: rows, the buildings strip, the note, and the
+    // tooltips/labels that only live in attributes.
+    expect(ownershipWords(host.innerHTML)).toEqual([]);
+    // Not vacuous: the scan does catch the 1.34 wording it replaced.
+    expect(ownershipWords('<span>Your buildings · next due Sep 21</span>')).toHaveLength(1);
+    expect(ownershipWords('No buildings are assigned to you right now.').length).toBeGreaterThan(0);
+
+    // And the page states the rule where someone would look for it.
+    expect(host.querySelector('.p86-wob-note').textContent)
+      .toContain('Everyone assigned to a work order is equally responsible for every building on it');
+    expect(viewPill('my_work').getAttribute('title'))
+      .toContain('Everyone assigned to a work order is responsible for every building on it');
+    expect(viewPill('my_work').getAttribute('title')).toContain('Work orders assigned to you');
+  });
+
+  test('an owner the server (wrongly) sends on a building is not shown and not kept', async () => {
+    const b = await openMyWork({
+      myResponder: (p) => Promise.resolve(p.count_only ? { total: 1 } : BODY({
+        tickets: [mwRow({
+          buildings: [{
+            id: 't_100', title: 'Bldg 784', status: 'open', due_date: '2026-09-21', completed_at: null,
+            assignee_user_id: 42, assignee_name: 'Dana Ruiz', assignee_initials: 'DR',
+          }],
+        })],
+      })),
+    });
+    expect(bldgBtns()).toHaveLength(1); // it really did render
+    expect(host.innerHTML).not.toContain('Dana Ruiz');
+    expect(host.innerHTML).not.toContain('assignee_user_id');
+    expect(host.innerHTML).not.toContain('DR');
+    // The whitelist is what makes that true on every later paint too.
+    expect(Object.keys(b._rows()[0].buildings[0]).sort())
+      .toEqual(['completed_at', 'due_date', 'id', 'status', 'title']);
+    expect(JSON.stringify(b._rows())).not.toContain('Dana Ruiz');
+  });
+
+  test('nothing on the view could SET an owner: no picker, no assign control', async () => {
+    await openMyWork();
+    const list = host.querySelector('.p86-wob-list');
+    expect(list.querySelectorAll('select')).toHaveLength(0);
+    expect(list.querySelectorAll('input')).toHaveLength(0);
+    expect(list.querySelectorAll('[data-assign], [data-user], [data-assignee]')).toHaveLength(0);
+    // Every control under a row is a building button that opens the task.
+    expect(Array.from(list.querySelectorAll('button')).map((x) => x.className))
+      .toEqual(['p86-wob-chip p86-wob-mw-bldg', 'p86-wob-chip p86-wob-mw-bldg', 'p86-wob-chip p86-wob-mw-bldg is-quiet']);
+    // …and nothing in the list offers the word as an action. (The row's
+    // p86-wob-c-assignee class is the board's layout slot, reused here for
+    // Where; it is a class name, never a label.)
+    expect(Array.from(list.querySelectorAll('button, a, [role="button"]'))
+      .filter((x) => /assign/i.test(x.textContent))).toHaveLength(0);
+    expect(/assign/i.test(list.textContent)).toBe(false);
+  });
+});
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * 7. BACK OUT
  * ────────────────────────────────────────────────────────────────────────*/
 describe('leaving My work', () => {
   test('a status pill returns to the board door with that status', async () => {
@@ -455,7 +551,7 @@ describe('leaving My work', () => {
 });
 
 /* ─────────────────────────────────────────────────────────────────────────
- * 7. MUTANTS
+ * 8. MUTANTS
  * ────────────────────────────────────────────────────────────────────────*/
 describe('mutants', () => {
   test('the harness refuses an anchor that is not in the source', () => {
@@ -529,6 +625,43 @@ describe('mutants', () => {
     click(viewPill('my_work'));
     await flush();
     expect(host.querySelector('.p86-wob-list').textContent).toBe('No tickets match these filters.');
+  });
+
+  test('(f) the 1.34 wording put back hands the reader a building of their own', async () => {
+    const src = mutate(SRC, "    var lead = 'Punch list' + (next ? ' · next due ' + next : '');",
+      "    var lead = 'Your buildings' + (next ? ' · next due ' + next : '');");
+    await openMyWork({ src });
+    // The scan that came back clean above now names the phrase.
+    expect(ownershipWords(host.innerHTML)).toHaveLength(1);
+    expect(host.querySelector('.p86-wob-mw-bldgs .p86-wob-dim').textContent)
+      .toBe('Your buildings · next due Sep 21, 2026');
+  });
+
+  test('(g) without BUILDING_KEYS, an owner the server sends is kept and reachable', async () => {
+    const src = mutate(SRC,
+      [
+        '    out.buildings = Array.isArray(row && row.buildings)',
+        '      ? row.buildings.map(function (b) {',
+        '          var o = {};',
+        '          BUILDING_KEYS.forEach(function (k) { o[k] = b && b[k] !== undefined ? b[k] : null; });',
+        '          return o;',
+        '        })',
+        '      : [];',
+      ].join('\n'),
+      '    out.buildings = Array.isArray(row && row.buildings) ? row.buildings.slice() : [];');
+    const b = await openMyWork({
+      src,
+      myResponder: (p) => Promise.resolve(p.count_only ? { total: 1 } : BODY({
+        tickets: [mwRow({
+          buildings: [{
+            id: 't_100', title: 'Bldg 784', status: 'open', due_date: '2026-09-21', completed_at: null,
+            assignee_user_id: 42, assignee_name: 'Dana Ruiz',
+          }],
+        })],
+      })),
+    });
+    expect(b._rows()[0].buildings[0]).toHaveProperty('assignee_name', 'Dana Ruiz');
+    expect(JSON.stringify(b._rows())).toContain('Dana Ruiz');
   });
 
   test('(e) without the loaded-job test, an unreachable job becomes a link that lands nowhere', async () => {

@@ -27,6 +27,12 @@ const ticketAccess = require('./service-ticket-access');
 // the same way every other door that adds a building recounts it. Requires
 // only ./service-tickets, so this module stays loadable with no JWT_SECRET.
 const workOrder = require('./service-ticket-workorder');
+// The punch-list door, for ONE thing here: the sentence every door says when
+// something tries to assign a BUILDING (1.35). The REST doors, the task link
+// and 86 must refuse in the same words, or the same rule reads as three. It
+// requires only ./service-tickets and ./service-ticket-access, both JWT-free,
+// so this module stays loadable with no JWT_SECRET.
+const subtaskDoor = require('./service-ticket-subtask-door');
 // PHOTO PROOF STAYS PUT (Work Orders 1.29, A2). 86's two photo writes that can
 // take proof away from a work order — photo_updates retags and attach_files
 // moves — run through the same guard as the attachment doors. It requires only
@@ -276,7 +282,20 @@ const SERVICE_TICKET_REFUSED_FIELDS = {
 // Every key a task_adds entry is READ for, and nothing else. The ticket, the
 // job/lead link, the org and the creator are stamped from the ticket and the
 // approver, so a key naming any of them is refused rather than trusted.
-const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date', 'assignee_user_id']);
+//
+// assignee_user_id LEFT THIS SET IN 1.35 — a building is never assigned to one
+// person; the work order's own fields.assignee_user_id is the one that means
+// anything. It is refused BY NAME below (SERVICE_TICKET_TASK_REFUSED_KEYS)
+// rather than falling into the unknown-key answer, for the reason
+// SERVICE_TICKET_REFUSED_FIELDS gives: "unknown field" reads like a typo, and
+// the Scribe's next move on a typo is a spelling variant or a workaround.
+const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date']);
+// Keys on a task_adds entry that are REAL columns and deliberately not the
+// model's to write. Same shape and same reason as SERVICE_TICKET_REFUSED_FIELDS
+// above, checked before the unknown-key sweep so the answer names the rule.
+const SERVICE_TICKET_TASK_REFUSED_KEYS = {
+  assignee_user_id: subtaskDoor.MSG.notAssignable,
+};
 // A work order with more than this many child tasks is a project plan, not a
 // ticket — and one approval card should not hide that many writes.
 const SERVICE_TICKET_TASK_ADDS_CAP = 25;
@@ -525,9 +544,12 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     //   (YYYY-MM-DD), due_date? (YYYY-MM-DD), assignee_user_id?,
     //   materials? ([{ description, qty?, unit? }] — no price keys) }
     // task_adds: [{ title, notes?, priority? ('' is the column default),
-    //   due_date? ('' is no due date),
-    //   assignee_user_id? }] — child tasks, filed under the ticket AND on its
-    //   job/lead.
+    //   due_date? ('' is no due date) }] — the BUILDINGS on the punch list,
+    //   filed under the ticket AND on its job/lead. NO assignee_user_id (1.35):
+    //   a building is never assigned to one person, and the entry is refused by
+    //   name if it carries one. Who is responsible is fields.assignee_user_id,
+    //   the work order's own, and everyone on it is equally responsible for
+    //   every building.
     //
     // update: target.entity_id is the existing ticket; job_id / lead_id are
     // refused (no re-parenting). status, scope_approved, checklist, guest_log,
@@ -1115,6 +1137,21 @@ function validateOps(entityType, ops) {
     if (!fields.title || !String(fields.title).trim()) {
       throw new Error(`${entityType}.create requires fields.title`);
     }
+    // A BUILDING IS NOT WRITTEN THROUGH THIS DOOR (1.35). service_ticket_id is
+    // what makes an org task a building on a punch list, and dispatchTask
+    // always stamps an assignee_user_id — so if this key ever reached it, 86
+    // would be minting assigned buildings, the one thing the owner's rule
+    // forbids. It is not in TASK_FIELDS and never will be; refused by name so
+    // the model is sent to the door that does add buildings, rather than
+    // trying a spelling variant of an "unknown field".
+    if (Object.prototype.hasOwnProperty.call(fields, 'service_ticket_id')) {
+      throw new PayloadValidationError(
+        `${entityType}.ops.fields.service_ticket_id cannot be set. A building on a work order's punch list is added ` +
+        'through service_ticket.ops.task_adds, and it is never assigned to one person — ' +
+        "the work order's own assignee_user_id is who is responsible. Nothing was saved.",
+        { code: 'building_not_assignable', field_path: `${entityType}.ops.fields.service_ticket_id`, retryable: false }
+      );
+    }
     const allowed = entityType === 'task' ? TASK_FIELDS : TODO_FIELDS;
     const bad = Object.keys(fields).filter(k => !allowed.has(k));
     if (bad.length) {
@@ -1393,7 +1430,7 @@ function validateServiceTicketOps(ops) {
   let taskCount = 0;
   if (ops.task_adds != null) {
     if (!Array.isArray(ops.task_adds)) {
-      throw new PayloadValidationError('service_ticket.ops.task_adds must be an array of {title, notes?, priority?, due_date?, assignee_user_id?}.',
+      throw new PayloadValidationError('service_ticket.ops.task_adds must be an array of {title, notes?, priority?, due_date?}.',
         { code: 'wrong_type', field_path: 'service_ticket.ops.task_adds', expected: 'array', received: typeof ops.task_adds });
     }
     if (ops.task_adds.length > SERVICE_TICKET_TASK_ADDS_CAP) {
@@ -1406,8 +1443,18 @@ function validateServiceTicketOps(ops) {
     ops.task_adds.forEach((t, i) => {
       const where = `service_ticket.ops.task_adds[${i}]`;
       if (!t || typeof t !== 'object' || Array.isArray(t)) {
-        throw new PayloadValidationError(`${where} must be an object {title, notes?, priority?, due_date?, assignee_user_id?}.`,
+        throw new PayloadValidationError(`${where} must be an object {title, notes?, priority?, due_date?}.`,
           { code: 'wrong_type', field_path: where, expected: 'object', received: Array.isArray(t) ? 'array' : typeof t });
+      }
+      // BY NAME AND BEFORE THE UNKNOWN-KEY SWEEP (1.35). A building is never
+      // assigned to one person, and a model told "unknown field" would try a
+      // spelling variant; told the rule, it puts the person on the work order's
+      // own fields.assignee_user_id, which is what the office means.
+      for (const key of Object.keys(t)) {
+        if (!Object.prototype.hasOwnProperty.call(SERVICE_TICKET_TASK_REFUSED_KEYS, key)) continue;
+        throw ticketRefusal(
+          `${where}.${key} cannot be set. ${SERVICE_TICKET_TASK_REFUSED_KEYS[key]} Nothing was saved.`,
+          { code: 'building_not_assignable', field_path: `${where}.${key}` });
       }
       const stray = Object.keys(t).filter((key) => !SERVICE_TICKET_TASK_KEYS.has(key));
       if (stray.length) {
@@ -1449,7 +1496,6 @@ function validateServiceTicketOps(ops) {
       // '' IS NO DUE DATE — the ticket-level reading, and the tasks REST door's,
       // which drops a falsy due_date. It is skipped here and never written.
       if (t.due_date != null && t.due_date !== '') validateServiceTicketFieldValue('due_date', t.due_date, `${where}.due_date`);
-      if (t.assignee_user_id != null) validateServiceTicketFieldValue('assignee_user_id', t.assignee_user_id, `${where}.assignee_user_id`);
     });
     taskCount = ops.task_adds.length;
   }
@@ -4167,22 +4213,38 @@ function workOrderTicketResolver(dbClient, orgId) {
  *
  * THE ONE EXCEPTION, and only on the WRITE half of a BUILDING — the same one
  * routes/attachment-routes.js isBuildingAssignee applies, for the same reason:
- * services/service-ticket-subtask-door.js doneVerdict lets a building's
- * ASSIGNEE finish it without any right to edit the job, and finishing a
- * building means uploading and fixing its completion photo. Nobody can hand
- * themselves this (assignVerdict lets only someone who may edit the parent
- * decide who a building is assigned to), and it is an exception to WHO MAY
- * WRITE, never to what may happen to the proof — the photo guard below still
- * refuses to take the last completion photo off a done building or any photo
- * off an approved or closed work order.
+ * services/service-ticket-subtask-door.js doneVerdict lets the WORK ORDER's
+ * ASSIGNEE finish its buildings without any right to edit the job, and
+ * finishing a building means uploading and fixing its completion photo. It is
+ * an exception to WHO MAY WRITE, never to what may happen to the proof — the
+ * photo guard below still refuses to take the last completion photo off a done
+ * building or any photo off an approved or closed work order.
  *
- * The org predicate is the CALLER's proven organization, not the task's.
+ * RESPONSIBILITY SITS ON THE RECORD (1.35). This used to read the BUILDING's
+ * own assignee. A building is never assigned to anyone now — assignVerdict
+ * refuses it from every door, and nothing writes tasks.assignee_user_id — so
+ * that question had no answer left and the exception could never fire: 86's
+ * photo writes would dead-end for the very person the work order is assigned
+ * to. The question is the record's instead: whoever the work order is assigned
+ * to is equally responsible for every building on its punch list, and that
+ * field can only be written by someone who may edit the parent, so nobody can
+ * hand themselves this. (The function keeps its name so it stays legible beside
+ * the identical copy in routes/attachment-routes.js; what it answers is "is the
+ * caller the assignee of THIS BUILDING'S WORK ORDER".)
+ *
+ * The building is resolved to its work order exactly as the ticket rule
+ * resolves it — task -> service_ticket_id -> ticket, org subtasks only — and
+ * the org predicate on BOTH rows is the CALLER's proven organization, never the
+ * stamp on the task or on the ticket.
  */
 async function isBuildingAssignee(dbClient, taskId, orgId, actor) {
   const uid = actor && actor.id != null ? Number(actor.id) : null;
   if (taskId == null || orgId == null || uid == null || !Number.isFinite(uid)) return false;
   const r = await dbClient.query(
-    'SELECT assignee_user_id FROM tasks WHERE id = $1 AND organization_id = $2',
+    `SELECT assignee_user_id FROM service_tickets
+       WHERE id = (SELECT service_ticket_id FROM tasks WHERE id = $1 AND organization_id = $2
+                     AND scope = 'org' AND service_ticket_id IS NOT NULL)
+         AND organization_id = $2`,
     [String(taskId), orgId]
   );
   const row = r.rows[0];
@@ -4211,10 +4273,10 @@ async function isBuildingAssignee(dbClient, taskId, orgId, actor) {
 //     other parents in the same org stay attachable, exactly as before, and so
 //     does a photo on a task that is on no work order.
 //
-//     The building's assignee exception is deliberately NOT applied here: it is
-//     an exception to who may WRITE a building's own proof (see
-//     isBuildingAssignee above), never to who may pull that proof into a report
-//     other people read.
+//     The work order's assignee exception is deliberately NOT applied here: it
+//     is an exception to who may WRITE the proof on the buildings they are
+//     responsible for (see isBuildingAssignee above), never to who may pull
+//     that proof into a report other people read.
 //   * Anything else is DROPPED, not refused: absent, foreign and unreadable
 //     ids take one path, so the stored sections and the apply summary say
 //     nothing about which of them exist. The drop is counted (a number, never
@@ -5104,10 +5166,11 @@ async function dispatchAttachment(dbClient, target, refTable, ctx) {
         mode: 'write',
       })
       : null;
-    // The building's assignee, asked AFTER the ticket rule so it can only ever
-    // widen a refusal to an allow, never the reverse — and only on a BUILDING,
-    // never on the ticket's own site photos. See isBuildingAssignee above. The
-    // two arms below are left in terms of `ticketVerdict` exactly as they were.
+    // The WORK ORDER's assignee, asked AFTER the ticket rule so it can only
+    // ever widen a refusal to an allow, never the reverse — and only on a
+    // BUILDING, never on the ticket's own site photos. See isBuildingAssignee
+    // above. The two arms below are left in terms of `ticketVerdict` exactly as
+    // they were.
     if (ticketVerdict && !ticketVerdict.ok && wo.taskId != null &&
         await isBuildingAssignee(dbClient, wo.taskId, orgId, actor)) {
       ticketVerdict = { ok: true };
@@ -5631,13 +5694,11 @@ async function dispatchServiceTicket(dbClient, target, refTable, ctx) {
     await proveTicketAssigneeInOrg(dbClient, fields.assignee_user_id, orgId,
       'service_ticket.ops.fields.assignee_user_id');
   }
-  const taskAssignees = [];
-  for (let i = 0; i < taskAdds.length; i++) {
-    taskAssignees.push(taskAdds[i].assignee_user_id != null
-      ? await proveTicketAssigneeInOrg(dbClient, taskAdds[i].assignee_user_id, orgId,
-        `service_ticket.ops.task_adds[${i}].assignee_user_id`)
-      : null);
-  }
+  // 1.35: there is no per-BUILDING assignee to prove. task_adds carries no
+  // assignee_user_id at all (validateServiceTicketOps refuses the key by name),
+  // because responsibility sits on the work order's own Assigned to, proved
+  // just above, and everyone on that record is equally responsible for every
+  // building on the punch list.
 
   // ── THE WRITES ──────────────────────────────────────────────────────────
   // Column names come from SERVICE_TICKET_FIELDS, never from the payload.
@@ -5716,9 +5777,9 @@ async function dispatchServiceTicket(dbClient, target, refTable, ctx) {
     // '' is no due date (see validateServiceTicketOps): not a column at all, so
     // the task is written exactly as the tasks REST door writes a blank one.
     if (t.due_date != null && t.due_date !== '') { cols.push('due_date'); vals.push(String(t.due_date).trim()); names.push('due_date'); }
-    // Unassigned unless named — the tasks REST door's default. The approver
-    // signed off on a work order; that does not make them its crew.
-    if (taskAssignees[i] != null) { cols.push('assignee_user_id'); vals.push(taskAssignees[i]); names.push('assignee_user_id'); }
+    // NO assignee_user_id COLUMN, EVER (1.35). A building is not assigned to
+    // anybody — not to the approver, not to whoever the payload named. The
+    // column is simply never in `cols`, so there is no value to get wrong.
     const ph = cols.map((_, j) => '$' + (j + 1)).join(', ');
     await dbClient.query(`INSERT INTO tasks (${cols.join(', ')}) VALUES (${ph})`, vals);
     await insertTicketEvent(dbClient, orgId, ticketId, 'task_added', userId,

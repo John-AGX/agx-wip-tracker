@@ -41,8 +41,10 @@ const assignees = require('../services/service-ticket-assignees');
 const inflight = require('../services/inflight');
 const notices = require('../services/work-order-notices');
 // 1.33: the one place that says in SQL what a work-order building is
-// (notAWorkOrderBuildingSql) and what "assigned to me" means on one
-// (myOpenBuildingSql). GET /my-buildings below is the second's only caller here.
+// (notAWorkOrderBuildingSql). 1.35: and what "a work order that is MINE and
+// still has an open building" is (myOpenBuildingSql) — responsibility sits on
+// the record, never on a building. GET /my-buildings below is the second's
+// only caller here.
 const subtaskDoor = require('../services/service-ticket-subtask-door');
 // 1.29: what the crew flagged and what the office has seen (B4), and the change
 // orders started from a work order (B8). Office reads only.
@@ -183,8 +185,8 @@ const TICKET_COLS = [
   'approved_at', 'approved_by', 'cancelled_at', 'cancelled_by',
 ].join(', ');
 
-// What a work order may carry to someone who is only the assignee of a
-// building on it. Projection by INCLUSION, like svc.PUBLIC_TICKET_KEYS: a
+// What a work order may carry to someone whose only claim on it is that it is
+// ASSIGNED TO THEM. Projection by INCLUSION, like svc.PUBLIC_TICKET_KEYS: a
 // column added to service_tickets later must not appear here by default.
 // NO MONEY, NO OFFICE TEXT: no internal_notes, no scope_proposed, no
 // scope_approved, no materials, no crew_takeoff, no guest_log, no
@@ -193,9 +195,19 @@ const TICKET_COLS = [
 // It DELIBERATELY widens what an assignee learns beyond what they could read
 // anywhere else: the job's number and title, the site address and the work
 // order's own title, for a job they may not be able to open at all. That is
-// the point — a crew lead handed a building has to know where to go. Nothing
+// the point — a crew lead handed a work order has to know where to go. Nothing
 // past that, and test/work-order-my-buildings-door.test.js asserts the key set
 // EXACTLY rather than as a subset, so a new column cannot be added silently.
+//
+// THE THREE my_* KEYS KEEP THEIR NAMES AND CHANGE THEIR MEANING (1.35). They
+// counted "buildings on this work order assigned to me" — a count of a field
+// nothing sets, so every one of them was zero on a normal job. They now count
+// the work order's OWN buildings, because everyone assigned the record is
+// equally responsible for all of them:
+//   my_buildings_open   open live org buildings on this work order
+//   my_buildings_total  live org buildings on it, open and done
+//   my_next_due         the earliest due date among the open ones
+// The names stay so the strip, the board view and the digest keep working.
 const MY_BUILDING_ROW_KEYS = Object.freeze([
   'id', 'ticket_number', 'title', 'status', 'priority',
   'scheduled_for', 'due_date', 'street_address', 'city',
@@ -204,12 +216,19 @@ const MY_BUILDING_ROW_KEYS = Object.freeze([
   'buildings',
 ]);
 
-// Each building object carries exactly these and nothing else.
+// Each building object carries exactly these and nothing else. No assignee:
+// a building has none, and printing one would be the per-building owner the
+// owner's rule refuses.
 const MY_BUILDING_TASK_KEYS = Object.freeze(['id', 'title', 'status', 'due_date', 'completed_at']);
 
 // At most this many buildings per ticket travel inline. The strip and the
 // "My work" view open each one with window.p86Tasks.openDetail(id); a punch
 // list longer than this is a scrolling problem, not a paging one.
+//
+// WHICH 25 IS NOT ARBITRARY: the statement that fills them ranks each work
+// order's punch list with the OPEN buildings first, so the cap only ever drops
+// finished ones. A person sent 25 buildings they have already done has been
+// sent nothing at all — see GET /my-buildings below.
 const MY_BUILDINGS_PER_TICKET = 25;
 
 function newId(prefix) { return svc.genId(prefix); }
@@ -456,13 +475,17 @@ router.get('/assignees/:kind/:parentId', requireAuth, requireOrgId, async (req, 
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * 1.33: THE BUILDINGS ASSIGNED TO ME, AND HOW MANY ARE OPEN ON A PARENT
+ * 1.33: THE BUILDINGS I AM RESPONSIBLE FOR, AND HOW MANY ARE OPEN ON A PARENT
  *
  * A building on a work order's punch list is an ordinary org task carrying a
  * service_ticket_id. From 1.33 those rows are subtracted from every task list
  * — My Tasks, Team Tasks, the job and lead Tasks panels, My Day, the calendar,
  * the admin count, the daily email and 86's task list — because a building is
  * not a to-do. These two reads are what makes that removal safe.
+ *
+ * 1.35: "I am responsible for it" means THE WORK ORDER IS ASSIGNED TO ME, not
+ * that some building on it carries my user id. A building is never assigned to
+ * anybody; everyone on the record is equally responsible for all of it.
  *
  * ROUTE ORDER IS LOAD-BEARING. Express matches in declaration order and
  * `router.get('/:id')` is declared below, so '/my-buildings' and
@@ -480,7 +503,8 @@ function truthy(v) {
   return v === true || v === 1 || v === '1' || v === 't' || v === 'true';
 }
 
-// The caller's buildings on one ticket, exactly five keys each.
+// One of a ticket's buildings, exactly five keys each. Not "the caller's":
+// they are the WORK ORDER's, and the caller is responsible for every one.
 function shapeMyBuilding(row) {
   const r = row || {};
   const out = {};
@@ -514,20 +538,30 @@ function activeStatusIn(alias) {
     board.STATUS_GROUPS.active.map(function (s) { return "'" + s + "'"; }).join(', ') + ')';
 }
 
-// ── 1.33: GET /my-buildings — the work orders where a building is MINE ────
+// ── GET /my-buildings — MY work orders, and the buildings still open on them ─
+//
+// 1.33 shipped this as "the work orders where a BUILDING is mine" and 1.34
+// keyed four more surfaces on the same idea. The field it asked,
+// tasks.assignee_user_id on a building row, is one a building only has because
+// a building is a task row: no screen has ever offered to set it, so on a
+// normal job this door answered nothing at all while the Assigned to the
+// office really fills in fed none of it. 1.35 moves the key to the record —
+// THE WORK ORDER IS ASSIGNED TO ME and still has an open building — and the
+// counts below follow: they are the work order's buildings, not "mine", since
+// everyone on the record is equally responsible for every one of them.
 //
 // THIS IS THE ONE ARM THAT DELIBERATELY DOES NOT ASK
 // services/service-ticket-access.js listVisibility, and it must stay that way.
 // listVisibility resolves to "every job-parented ticket" (JOBS_VIEW_ALL), "the
 // jobs I own or hold a job_access grant on" (JOBS_VIEW_ASSIGNED) or nothing —
 // the rule GET / and the whole Service Tickets board run through. But
-// services/service-ticket-subtask-door.js doneVerdict deliberately lets a
-// building's ASSIGNEE finish it on a job they cannot otherwise open, so a crew
-// lead on JOBS_VIEW_ASSIGNED with no grant on the job is a real, intended
-// case. Gating this read on listVisibility would answer that person zero rows
-// and strand them with no way to reach work that is assigned to them by name —
-// the exact regression removing buildings from the task lists exists to
-// prevent. So the key here is assignment and nothing else.
+// services/service-ticket-subtask-door.js doneVerdict deliberately lets the
+// WORK ORDER's assignee finish a building on a job they cannot otherwise open,
+// so a crew lead on JOBS_VIEW_ASSIGNED with no grant on the job is a real,
+// intended case. Gating this read on listVisibility would answer that person
+// zero rows and strand them with no way to reach work that was handed to them
+// by name — the exact regression removing buildings from the task lists exists
+// to prevent. So the key here is the record's assignment and nothing else.
 //
 // What that costs is written down rather than waved at: the answer tells an
 // assignee the job's number and title, the site address and the work order's
@@ -562,11 +596,16 @@ router.get('/my-buildings', requireAuth, requireOrgId, async (req, res) => {
       ' AND ' + subtaskDoor.myOpenBuildingSql('t', '$2');
 
     // Two counts, never derived from the page: `total` is how many work orders
-    // match, `buildings_open` is how many of the caller's buildings are open
-    // across all of them (the number the My Day strip and the tab badge show).
-    // Each carries its own organization predicate, and the buildings count
-    // re-states the ticket predicate through a join rather than trusting the
-    // ticket id alone.
+    // match, `buildings_open` is how many buildings are still open across all
+    // of them (the number the My Day strip and the tab badge show). Each
+    // carries its own organization predicate, and the buildings count re-states
+    // the ticket predicate through a join rather than trusting the ticket id
+    // alone.
+    //
+    // 1.35: the JOIN now keys on `s.assignee_user_id = $2` — the work order is
+    // mine — where it used to key on `k.assignee_user_id = $2`, a building of
+    // mine. Both counts must mean the same thing as the rows below, or the
+    // badge says a number the list cannot show.
     const [totalRes, openRes] = await Promise.all([
       pool.query('SELECT COUNT(*)::int AS total FROM service_tickets t WHERE ' + baseWhere, [orgId, me]),
       pool.query(
@@ -574,7 +613,7 @@ router.get('/my-buildings', requireAuth, requireOrgId, async (req, res) => {
            FROM tasks k
            JOIN service_tickets s ON s.id = k.service_ticket_id AND s.organization_id = k.organization_id
           WHERE k.organization_id = $1 AND k.archived_at IS NULL AND k.scope = 'org'
-            AND k.status <> 'done' AND k.assignee_user_id = $2
+            AND k.status <> 'done' AND s.assignee_user_id = $2
             AND s.archived_at IS NULL AND ${activeStatusIn('s')}`,
         [orgId, me]
       ),
@@ -590,6 +629,11 @@ router.get('/my-buildings', requireAuth, requireOrgId, async (req, res) => {
     // two label joins are pinned to the ticket's own org for the same reason
     // the list route pins its: a parent in another tenant comes back as a null
     // label, never as someone else's name.
+    //
+    // 1.35: none of the three asks `assignee_user_id = $2` any more. WHOSE work
+    // order it is was already decided by baseWhere, once, on the record; these
+    // count the record's own punch list, which is what the person assigned it
+    // is responsible for. $2 is still the caller — it is baseWhere's.
     const rowsSql =
       `SELECT t.id, t.ticket_number, t.title, t.status, t.priority,
               t.scheduled_for, t.due_date, t.street_address, t.city,
@@ -600,15 +644,14 @@ router.get('/my-buildings', requireAuth, requireOrgId, async (req, res) => {
               (SELECT COUNT(*)::int FROM tasks bo
                 WHERE bo.service_ticket_id = t.id AND bo.organization_id = t.organization_id
                   AND bo.archived_at IS NULL AND bo.scope = 'org'
-                  AND bo.assignee_user_id = $2 AND bo.status <> 'done') AS my_buildings_open,
+                  AND bo.status <> 'done') AS my_buildings_open,
               (SELECT COUNT(*)::int FROM tasks bt
                 WHERE bt.service_ticket_id = t.id AND bt.organization_id = t.organization_id
-                  AND bt.archived_at IS NULL AND bt.scope = 'org'
-                  AND bt.assignee_user_id = $2) AS my_buildings_total,
+                  AND bt.archived_at IS NULL AND bt.scope = 'org') AS my_buildings_total,
               (SELECT MIN(bd.due_date)::text FROM tasks bd
                 WHERE bd.service_ticket_id = t.id AND bd.organization_id = t.organization_id
                   AND bd.archived_at IS NULL AND bd.scope = 'org'
-                  AND bd.assignee_user_id = $2 AND bd.status <> 'done') AS my_next_due,
+                  AND bd.status <> 'done') AS my_next_due,
               (t.due_date IS NOT NULL AND t.due_date < $3) AS is_overdue
          FROM service_tickets t
          LEFT JOIN jobs jl ON jl.id = t.job_id AND jl.organization_id = t.organization_id
@@ -629,17 +672,50 @@ router.get('/my-buildings', requireAuth, requireOrgId, async (req, res) => {
     // access on the parent, which they fail), so these rows are what the client
     // hands to window.p86Tasks.openDetail(id) — without them the removal
     // strands the person this door exists to serve.
+    //
+    // 1.35: the WHOLE punch list of each work order on the page, not a slice of
+    // it filtered by assignee. The tickets were already chosen by baseWhere as
+    // the caller's, and on a record they are assigned there is no building that
+    // is somebody else's.
+    //
+    // THE CAP TAKES THE OPEN ONES FIRST, AND TAKES THEM IN SQL. Dropping the
+    // per-caller filter turned this into the record's whole punch list, and an
+    // apartment community's is long. Capping it in CREATION order handed a
+    // 30-building record its 25 oldest rows — which on a list worked front to
+    // back are the FINISHED ones — so a person could be sent every building
+    // they had already done and none of the ones still open. js/my-day.js drops
+    // done rows before it renders, so the strip printed "4 buildings open" over
+    // nothing to tap, and these rows are the only way in for someone who cannot
+    // open the job at all.
+    //
+    // ROW_NUMBER() ranks each work order's OWN rows (PARTITION BY the ticket)
+    // with the open ones first: `(status = 'done')` is false before true, and
+    // false sorts first in both engines. created_at breaks the tie exactly as
+    // this list was always ordered, and `rn <= $3` drops the rest before they
+    // travel rather than after. So `buildings` carries min(my_buildings_open,
+    // 25) OPEN rows — never zero while the count above says otherwise — and a
+    // done row only ever fills a slot no open one wanted. `status <> 'done'` is
+    // the same open/done line the three counts above and
+    // services/service-ticket-subtask-door.js draw.
     const byTicket = new Map();
     if (page.length) {
       const ids = page.map(function (r) { return String(r.id); });
       const kids = await pool.query(
         `SELECT id, service_ticket_id, title, status, due_date, completed_at
-           FROM tasks
-          WHERE organization_id = $1 AND service_ticket_id = ANY($2::text[])
-            AND archived_at IS NULL AND scope = 'org' AND assignee_user_id = $3
-          ORDER BY created_at ASC`,
-        [orgId, ids, me]
+           FROM (
+             SELECT id, service_ticket_id, title, status, due_date, completed_at,
+                    ROW_NUMBER() OVER (PARTITION BY service_ticket_id
+                                       ORDER BY (status = 'done'), created_at ASC, id ASC) AS rn
+               FROM tasks
+              WHERE organization_id = $1 AND service_ticket_id = ANY($2::text[])
+                AND archived_at IS NULL AND scope = 'org'
+           ) ranked
+          WHERE rn <= $3
+          ORDER BY service_ticket_id ASC, rn ASC`,
+        [orgId, ids, MY_BUILDINGS_PER_TICKET]
       );
+      // The statement has already capped every list; the guard below is the
+      // second lock on how much travels, never the thing that chooses WHICH.
       for (const k of kids.rows) {
         const key = String(k.service_ticket_id);
         const list = byTicket.get(key) || [];

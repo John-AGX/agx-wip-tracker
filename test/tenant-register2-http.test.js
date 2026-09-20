@@ -430,11 +430,20 @@ describe('REGISTER 2 — the route population', () => {
     //        GET /api/service-tickets/building-counts
     //      Both are param-less GETs, so unlike the 1.30 ten they are DRIVEN
     //      here, not waived, and the split below moves with them.
-    //      MY-BUILDINGS is deliberately NOT gated on listVisibility: a
-    //      building's assignee may finish it on a job they cannot otherwise
-    //      open, so the key is `k.assignee_user_id = $2` on the caller's own
-    //      id, beside `k.organization_id = $1`, with no usable identity
-    //      answering EMPTY rather than everything. The projection is the
+    //      MY-BUILDINGS is deliberately NOT gated on listVisibility: the
+    //      person a work order is assigned to may finish its buildings on a
+    //      job they cannot otherwise open. Its key MOVED IN 1.35 and the route
+    //      did not: no URL, method, parameter or position changed, so the
+    //      three numbers in this ledger are unmoved and this note is the only
+    //      thing that had to. The key is now `s.assignee_user_id = $2` — the
+    //      WORK ORDER's own Assigned to, the field the office actually sets —
+    //      rather than `k.assignee_user_id = $2` on a building, a column no
+    //      screen ever offered to set. Nobody is assigned an individual
+    //      building any more; everyone on the record is equally responsible
+    //      for every building on it. `k.organization_id = $1` is unchanged,
+    //      and no usable identity still answers EMPTY rather than everything.
+    //      Both org predicates are asserted, with mutants, in
+    //      test/work-order-my-buildings-door.test.js. The projection is the
     //      MY_BUILDING_ROW_KEYS whitelist — job number and title, site,
     //      ticket title, counts and dates — so no price, scope text or
     //      internal note rides out to a crew lead.

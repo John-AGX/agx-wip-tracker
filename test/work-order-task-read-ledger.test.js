@@ -14,13 +14,34 @@
 // server/services/service-ticket-subtask-door.js notAWorkOrderBuildingSql, so
 // the SQL and isWorkOrderSubtask beside it cannot drift apart.
 //
-// Removing buildings from the task lists is only safe because the people they
-// are ASSIGNED to were given somewhere else to see them in the same release
-// (GET /api/service-tickets/my-buildings, Service Tickets → My work, the My Day
-// strip, and the work-orders morning digest's your_buildings section). If a new
-// read drops buildings without that, somebody loses sight of work assigned to
-// them. That is why a new reader has to stop and be classified here rather than
-// inherit a default.
+// Removing buildings from the task lists is only safe because the people
+// RESPONSIBLE for them were given somewhere else to see them in the same
+// release (GET /api/service-tickets/my-buildings, Service Tickets → My work,
+// the My Day strip, and the work-orders morning digest's your_buildings
+// section). If a new read drops buildings without that, somebody loses sight of
+// work they are on the hook for. That is why a new reader has to stop and be
+// classified here rather than inherit a default.
+//
+// ── WHO IS RESPONSIBLE IS THE RECORD'S OWN ASSIGNED TO (1.35) ─────────────
+//
+// The owner, 2026-09-20, overriding every earlier answer on this subject: "i
+// dont want assignments to individual buildings like that, whoever is assigned
+// to the ticket, task or work order is evenly responsible."
+//
+// So the two replacement reads key on the WORK ORDER — service_tickets
+// .assignee_user_id, the one Assigned to a screen really sets — and count the
+// whole punch list, because everyone on the record is equally responsible for
+// every building on it. Neither asks who a BUILDING is assigned to.
+// tasks.assignee_user_id exists on a building row only because a building IS a
+// task row; since 1.35 nothing reads it there and nothing writes it (the write
+// half of that rule is test/work-order-task-path-ledger.test.js).
+//
+// This ledger says so out loud in the two entries that carry those reads,
+// server/services/service-ticket-subtask-door.js and
+// server/services/work-order-attention.js: each proves the key is the ticket's,
+// AND that no building assignee has crept back into the statement. Both halves
+// matter. A per-building owner sliding back into either one would undo the rule
+// with no screen changing and nothing else failing.
 //
 // Every file under server/ with a `FROM tasks` or `JOIN tasks` must be named
 // below as one of:
@@ -29,9 +50,11 @@
 //                    entry's check proves the file really calls the predicate.
 //   'ticket-scoped'  buildings are EXPECTED here: the read is pinned — to one
 //                    work order, to one ticket's punch list, to one task id, or
-//                    (the 1.33 replacement reads) joined to service_tickets and
-//                    keyed on the assignee, which is a list OF BUILDINGS on
-//                    purpose. The entry's check proves the pin is really there.
+//                    (the replacement reads) joined to service_tickets and keyed
+//                    on the WORK ORDER's assignee, which is a list OF BUILDINGS
+//                    on purpose. The entry's check proves the pin is really
+//                    there, and that it is the record's assignee and never a
+//                    building's.
 //
 // One entry, server/services/org-reset.js, is a ticket-scoped entry marked
 // `sweep`: it is the tenant wipe's own count and DELETE, pinned to nothing
@@ -207,10 +230,10 @@ const FULL_LEDGER = {
   // ── ticket-scoped: buildings are expected ────────────────────────────────
   'server/routes/service-ticket-routes.js': {
     kind: 'ticket-scoped',
-    why: 'The work order\'s own reads: the punch-list counts on every board row, the punch list on the detail read, and the 1.33 replacements — /my-buildings and /building-counts, which are lists OF BUILDINGS keyed on the assignee, not on listVisibility.',
+    why: 'The work order\'s own reads: the punch-list counts on every board row, the punch list on the detail read, and the replacements — /my-buildings and /building-counts, which are lists OF BUILDINGS keyed on the WORK ORDER\'s assignee (myOpenBuildingSql, whose whole shape this ledger pins at the door module below), not on listVisibility and never on a building\'s own owner.',
     check(src) {
       const problems = [];
-      const detail = between(src, 'SELECT id, title, status, due_date, assignee_user_id, completed_at, archived_at', 'ORDER BY created_at ASC');
+      const detail = between(src, 'SELECT id, title, status, due_date, assignee_user_id, completed_at, archived_at', 'ORDER BY');
       if (!detail || !/service_ticket_id = \$1/.test(detail)) {
         problems.push("the ticket detail's punch list is no longer pinned to one ticket");
       }
@@ -260,8 +283,28 @@ const FULL_LEDGER = {
     check(src) {
       const problems = [];
       const assignee = between(src, 'async function isBuildingAssignee(', '\n}\n');
-      if (!assignee || !/FROM tasks WHERE id = \$1 AND organization_id = \$2/.test(assignee)) {
-        problems.push('isBuildingAssignee is no longer one task by id, in the caller\'s own org');
+      if (!assignee) problems.push('isBuildingAssignee not found');
+      else {
+        // One task, BY ID, in the caller's proven organization. Both tables are
+        // pinned to that org, so a building is never reached on an id alone.
+        if (!/\bid = \$\d/.test(assignee)) problems.push('isBuildingAssignee is no longer one task by id');
+        if (!/organization_id = \$\d/.test(assignee)) problems.push("isBuildingAssignee lost the caller's organization predicate");
+        // AND IT ASKS THE WORK ORDER WHO IT IS ASSIGNED TO (1.35). This is the
+        // third place responsibility is decided, and the one that decides
+        // whether the person allowed to TICK a building may add the completion
+        // photo the tick requires. Keyed on the building's own column, the
+        // release's headline promise dead-ends: nobody is that, so nobody can
+        // upload. The exact SQL is not pinned — only that the answer comes
+        // from service_tickets and that the read of the tasks table does not
+        // select an assignee of its own.
+        if (assignee.indexOf('FROM service_tickets') < 0) {
+          problems.push('isBuildingAssignee no longer asks the work order who it is assigned to');
+        }
+        const fromTasksAt = assignee.indexOf('FROM tasks');
+        const selectAt = fromTasksAt < 0 ? -1 : assignee.lastIndexOf('SELECT', fromTasksAt);
+        if (selectAt >= 0 && /assignee/i.test(assignee.slice(selectAt, fromTasksAt))) {
+          problems.push("isBuildingAssignee reads the BUILDING's own assignee — responsibility sits on the work order");
+        }
       }
       const feed = between(src, 'NOT EXISTS (SELECT 1 FROM tasks t', 'ORDER BY a.uploaded_at DESC');
       if (!feed || !/t\.service_ticket_id IS NOT NULL/.test(feed)) {
@@ -272,17 +315,33 @@ const FULL_LEDGER = {
   },
   'server/services/service-ticket-subtask-door.js': {
     kind: 'ticket-scoped',
-    why: 'THE predicate module. notAWorkOrderBuildingSql is the exclusion every general list above asks for, and myOpenBuildingSql is the assignee-based replacement — its EXISTS reads tasks pinned to the ticket and to the ticket\'s own organization.',
+    why: 'THE predicate module. notAWorkOrderBuildingSql is the exclusion every general list above asks for, and myOpenBuildingSql is the replacement read — since 1.35 it keys on the WORK ORDER\'s own Assigned to, and its EXISTS arm asks only whether the ticket still has an open org building, with no owner of its own, because everyone on the record is equally responsible for every building on it.',
     check(src) {
       const problems = [];
       const fn = between(src, 'function myOpenBuildingSql(', '\n}\n');
       if (!fn) return ['myOpenBuildingSql not found'];
-      for (const need of ['wob.service_ticket_id', 'wob.organization_id', "wob.scope = 'org'", 'wob.assignee_user_id']) {
+      // THE KEY IS THE TICKET'S OWN COLUMN (1.35). The alias is concatenated
+      // with the caller's $n, so an apostrophe closes the alias immediately
+      // before the column name — which `wob.assignee_user_id` cannot match,
+      // and that is the point: THAT spelling is the rule being undone.
+      if (fn.indexOf("'.assignee_user_id = ' + me") < 0) {
+        problems.push("myOpenBuildingSql no longer keys on the work order's own assignee");
+      }
+      for (const need of ['wob.service_ticket_id', 'wob.organization_id', "wob.scope = 'org'", "wob.status <> 'done'"]) {
         if (fn.indexOf(need) < 0) problems.push('myOpenBuildingSql lost ' + need);
       }
-      // BLOCKING 1 again, at the source: assignment is the only key.
+      // ...and the building arm has NO owner of its own. A per-building
+      // assignee here is 1.35 undone inside the one predicate every
+      // replacement surface asks.
+      const armAt = fn.indexOf('EXISTS (SELECT 1 FROM tasks wob');
+      if (armAt < 0) problems.push('myOpenBuildingSql no longer asks whether an open building is left on the ticket');
+      else if (/assignee/i.test(fn.slice(armAt))) {
+        problems.push('myOpenBuildingSql asks who a BUILDING is assigned to — responsibility sits on the work order');
+      }
+      // BLOCKING 1 again, at the source: the record's Assigned to is the only
+      // key, never job access.
       if (/listVisibility|myTicketRelationSql/.test(fn)) {
-        problems.push('myOpenBuildingSql is no longer assignee-based');
+        problems.push('myOpenBuildingSql is no longer keyed on the work order it is assigned to');
       }
       const neg = between(src, 'function notAWorkOrderBuildingSql(', '\n}\n');
       if (!neg) problems.push('notAWorkOrderBuildingSql not found');
@@ -294,17 +353,40 @@ const FULL_LEDGER = {
   },
   'server/services/work-order-attention.js': {
     kind: 'ticket-scoped',
-    why: 'Two per-ticket groups for the morning digest: the done/total tally on every row, and the your_buildings group — how many of the recipient\'s own buildings are open on each work order, which is what the digest tells a crew lead now that no task list will.',
+    why: 'ONE per-ticket group for the morning digest, read once for both of its readers: the done/total tally on every overdue row, and your_buildings — how many buildings are still open on a work order ASSIGNED TO the recipient, and the soonest of their due dates. Since 1.35 the recipient is the ticket\'s own assignee and the count is the work order\'s WHOLE punch list, never one person\'s share of it, because there are no shares.',
     check(src) {
       const problems = [];
       readStatements(src).forEach(function (stmt, i) {
         if (!pinned(stmt)) problems.push('the attention read #' + (i + 1) + ' is no longer pinned to the tickets in hand');
       });
-      const mine = between(src, 'SELECT k.service_ticket_id AS ticket_id, k.assignee_user_id AS user_id', 'GROUP BY k.service_ticket_id, k.assignee_user_id');
-      if (!mine) problems.push('the your_buildings group was not found');
+      // THE PUNCH-LIST GROUP. Pinned to the org and to the tickets in hand, org
+      // rows only (a private to-do carrying a ticket id stays its owner's), and
+      // it has to go on counting the OPEN ones — that count is the whole of
+      // what your_buildings tells anybody.
+      const group = between(src, 'SELECT service_ticket_id AS ticket_id, COUNT(*)::int AS total', 'GROUP BY service_ticket_id');
+      if (!group) problems.push('the punch-list group was not found');
       else {
-        for (const need of ['k.organization_id = $1', "k.scope = 'org'", "k.status <> 'done'", 'k.assignee_user_id IS NOT NULL']) {
-          if (mine.indexOf(need) < 0) problems.push('the your_buildings group lost ' + need);
+        for (const need of ['organization_id = $1', 'service_ticket_id = ANY($2::text[])', "scope = 'org'", "FILTER (WHERE status <> 'done')"]) {
+          if (group.indexOf(need) < 0) problems.push('the punch-list group lost ' + need);
+        }
+        // NO ASSIGNEE COLUMN, in any clause of it. Grouping or filtering on one
+        // here is per-building responsibility coming back as a GROUP BY.
+        if (/assignee/i.test(group)) {
+          problems.push('the punch-list group reads a building assignee — responsibility sits on the work order, not on a building');
+        }
+      }
+      // WHO IS TOLD: the ticket's own assignee, looked up straight in this
+      // org's active users — and NEVER through reaches(), because that person
+      // may be a crew lead with no grant on the job, and since buildings left
+      // the task lists this section is the only place they are told at all.
+      const told = between(src, 'if (punch.open > 0) {', 'count: punch.open,');
+      if (!told) problems.push('the your_buildings recipient was not found');
+      else {
+        if (told.indexOf('people.get(positiveInt(ticket.assignee_user_id))') < 0) {
+          problems.push("your_buildings is no longer told to the work order's own assignee");
+        }
+        if (/reaches\(|readers|writers/.test(told)) {
+          problems.push('your_buildings is gated on job access — the crew lead it exists for would be told nothing');
         }
       }
       if (src.indexOf("'your_buildings'") < 0) problems.push('the your_buildings section is gone — the digest stopped telling assignees');
@@ -559,13 +641,65 @@ describe('the census is not decoration', () => {
     ]);
   });
 
-  test('MUTANT: the your_buildings group stops asking for the assignee and tells everyone about everything', () => {
+  test('MUTANT: the crew-photo rule goes back to the building\'s own assignee and nobody can upload', () => {
+    const file = 'server/routes/attachment-routes.js';
+    const src = mutate(sourceOf(file),
+      '    `SELECT assignee_user_id FROM service_tickets\n',
+      '    `SELECT assignee_user_id FROM tasks\n');
+    expect(census(withFile(file, src))).toEqual([
+      file + ': isBuildingAssignee no longer asks the work order who it is assigned to',
+      file + ": isBuildingAssignee reads the BUILDING's own assignee — responsibility sits on the work order",
+    ]);
+  });
+
+  test('MUTANT: myOpenBuildingSql stops keying on the work order and /my-buildings answers everybody', () => {
+    const file = 'server/services/service-ticket-subtask-door.js';
+    const src = mutate(sourceOf(file),
+      "  return '(' + t + '.assignee_user_id = ' + me +\n",
+      "  return '(' + t + '.id IS NOT NULL' +\n");
+    expect(census(withFile(file, src))).toEqual([
+      file + ": myOpenBuildingSql no longer keys on the work order's own assignee",
+    ]);
+  });
+
+  test('MUTANT: a building assignee creeps back into myOpenBuildingSql and per-building responsibility is back', () => {
+    const file = 'server/services/service-ticket-subtask-door.js';
+    const src = mutate(sourceOf(file),
+      "    \" AND wob.status <> 'done'))\";\n",
+      "    \" AND wob.status <> 'done'\" +\n    ' AND wob.assignee_user_id = ' + me + '))';\n");
+    expect(census(withFile(file, src))).toEqual([
+      file + ': myOpenBuildingSql asks who a BUILDING is assigned to — responsibility sits on the work order',
+    ]);
+  });
+
+  test('MUTANT: the punch-list group filters on a building assignee and the digest under-counts again', () => {
     const file = 'server/services/work-order-attention.js';
     const src = mutate(sourceOf(file),
-      "          AND k.status <> 'done' AND k.assignee_user_id IS NOT NULL",
-      "          AND k.status <> 'done'");
+      "        WHERE organization_id = $1 AND service_ticket_id = ANY($2::text[]) AND archived_at IS NULL AND scope = 'org'\n",
+      "        WHERE organization_id = $1 AND service_ticket_id = ANY($2::text[]) AND archived_at IS NULL AND scope = 'org'" +
+      ' AND assignee_user_id IS NOT NULL\n');
     expect(census(withFile(file, src))).toEqual([
-      file + ': the your_buildings group lost k.assignee_user_id IS NOT NULL',
+      file + ': the punch-list group reads a building assignee — responsibility sits on the work order, not on a building',
+    ]);
+  });
+
+  test("MUTANT: the digest goes back to a building's own owner, and the work order's assignee hears nothing", () => {
+    const file = 'server/services/work-order-attention.js';
+    const src = mutate(sourceOf(file),
+      'people.get(positiveInt(ticket.assignee_user_id))',
+      'people.get(positiveInt(punch.assignee_user_id))');
+    expect(census(withFile(file, src))).toEqual([
+      file + ": your_buildings is no longer told to the work order's own assignee",
+    ]);
+  });
+
+  test('MUTANT: your_buildings is put through job access and the crew lead it exists for is told nothing', () => {
+    const file = 'server/services/work-order-attention.js';
+    const src = mutate(sourceOf(file),
+      '      if (owner) {\n',
+      '      if (owner && readers.indexOf(owner) >= 0) {\n');
+    expect(census(withFile(file, src))).toEqual([
+      file + ': your_buildings is gated on job access — the crew lead it exists for would be told nothing',
     ]);
   });
 

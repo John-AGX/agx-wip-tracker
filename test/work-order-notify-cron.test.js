@@ -15,9 +15,11 @@
 //      next burst carries only its own events; settle 5 min / max wait 20 min;
 //      finishing and flags never batch; two ticks racing send once.
 //   D. digest: nothing when nothing needs attention; sections; once per local
-//      day; a crew lead whose ONLY item is a building assigned to them still
-//      gets one (1.33 — the daily task email stopped carrying buildings and
-//      every other section is gated on job access, which they fail);
+//      day; a crew lead whose ONLY item is a WORK ORDER ASSIGNED TO THEM with
+//      buildings still open gets one (1.33 — the daily task email stopped
+//      carrying buildings and every other section is gated on job access,
+//      which they fail; 1.35 — the key is the record's own Assigned to, and a
+//      leftover assignee on a building row reaches nobody);
 //      weekdays 7-12 in the person's own zone; digest off + waiting on =
 //      the standalone reminder, honouring the org's N; and a digest that
 //      reached NO channel falls through to that reminder in the same pass,
@@ -423,7 +425,9 @@ describe('D. morning digest and waiting reminder', () => {
     const back = (days) => sqlTime(new Date(W.getTime() - days * DAY + 2 * 3600000));
     ticket({ id: 'd_over5', title: 'Waiting since last week', completed_at: back(7), updated_at: back(7), approval_notified_at: back(7) });
     ticket({ id: 'd_fri3', title: 'Waiting since Friday', completed_at: back(5), updated_at: back(5), approval_notified_at: back(5) });
-    ticket({ id: 'd_due', title: 'Gate overdue', status: 'in_progress', completed_at: null, due_date: localDay(new Date(W.getTime() - DAY)) });
+    // Assigned to Carl, the way the office sets it from the real dropdown.
+    ticket({ id: 'd_due', title: 'Gate overdue', status: 'in_progress', completed_at: null,
+      assignee_user_id: 11, due_date: localDay(new Date(W.getTime() - DAY)) });
     ticket({ id: 'd_sched', title: 'Crew today', status: 'open', completed_at: null, scheduled_for: localDay(W) });
     return back;
   }
@@ -433,31 +437,47 @@ describe('D. morning digest and waiting reminder', () => {
   test('one digest per person with something to do, on a weekday morning, with the sections and no Reply-To', async () => {
     const W = WED9();
     digestFixture(W);
-    // 1.33: Carl is on no work order and holds no grant on j1, so every section
-    // that goes through listVisibility skips him — and since the same release
-    // took buildings off the daily task email, this digest is the ONLY thing
-    // that tells him a building is assigned to him. Before it, he got nothing.
-    insert('tasks', {
-      id: 'b_carl', organization_id: 1, title: 'Bldg 12', status: 'open', scope: 'org',
-      service_ticket_id: 'd_due', assignee_user_id: 11, archived_at: null,
-      due_date: localDay(new Date(W.getTime() + DAY)),
-    });
+    // Carl holds no grant on j1, so every section that goes through
+    // listVisibility skips him — and since 1.33 took buildings off the daily
+    // task email, this digest is the ONLY thing that tells him about the punch
+    // list he is on the hook for. Neither building carries his name: nothing
+    // assigns a building, and the leftover id on the second one (Cora's, from
+    // before 1.35) must reach nobody.
+    insert('tasks', [
+      {
+        id: 'b_carl', organization_id: 1, title: 'Bldg 12', status: 'open', scope: 'org',
+        service_ticket_id: 'd_due', assignee_user_id: null, archived_at: null,
+        due_date: localDay(new Date(W.getTime() + DAY)),
+      },
+      {
+        id: 'b_left', organization_id: 1, title: 'Bldg 14', status: 'open', scope: 'org',
+        service_ticket_id: 'd_due', assignee_user_id: 13, archived_at: null,
+        due_date: localDay(new Date(W.getTime() + 3 * DAY)),
+      },
+    ]);
     const s = senders();
     const out = await cron.runOnce({ now: W, deps: s.deps });
     const d = digests(s);
-    // Paula runs j1; Cora raised the tickets (admin); Carl is on nothing but is
-    // the assignee of a building.
+    // Paula runs j1; Cora raised the tickets (admin); Carl can open nothing but
+    // is the ASSIGNEE of a work order whose punch list is still open.
     expect(d.map((m) => m.to).sort()).toEqual(['creator@agx.test', 'crew@agx.test', 'pm@agx.test']);
     const carl = d.find((x) => x.to === 'crew@agx.test');
     expect(carl.subject).toBe('Work orders needing you today (1)');
-    expect(carl.text).toContain('Buildings assigned to you (1)');
-    expect(carl.text).toContain('1 building still open · next due ');
+    expect(carl.text).toContain('Work orders assigned to you with buildings still open (1)');
+    // BOTH buildings on his work order are his to answer for — the one with
+    // nobody's name on it and the one still carrying Cora's.
+    expect(carl.text).toContain('2 buildings still open · next due ');
     ['Ready for your approval', 'Overdue (', 'Crew scheduled soon'].forEach((head) => {
       expect([head, carl.text.includes(head)]).toEqual([head, false]);
     });
     // Crew-facing: he is told the job number and where to go, and nothing more.
     expect(carl.text).toContain('M1001 · Latitude');
     expect(carl.subject + carl.text + carl.html).not.toMatch(/[$£€]\s?\d|\b\d+\.\d{2}\b/);
+    // Cora's id is on b_left, and that is not a claim on anything: the work
+    // order is not hers, so the section is not in her digest at all.
+    const cora = d.find((x) => x.to === 'creator@agx.test');
+    expect(cora.text).not.toContain('Work orders assigned to you with buildings still open');
+    expect(JSON.stringify(s.emails)).not.toMatch(/buildings? assigned|your buildings/i);
     const m = d.find((x) => x.to === 'pm@agx.test');
     expect(m.subject).toBe('[2 to approve] Work orders needing you today (4)');
     expect(m.text).toContain('Ready for your approval (2)');
@@ -472,6 +492,27 @@ describe('D. morning digest and waiting reminder', () => {
     expect(push.payload.body).toBe('2 to approve · 1 overdue · 1 link not opened');
     expect(out.digest).toMatchObject({ digests: 3 });
     expect(out.digest.users).toBeGreaterThanOrEqual(3);
+    // Delivered under the digest's own preference key, unchanged: the section
+    // did not arrive with a new switch of its own.
+    expect(carl.tag).toBe('work_order_digest');
+    expect(s.pushes.filter((p) => p.userId === 11).map((p) => p.key)).toEqual(['work_order_digest']);
+  });
+
+  test('the section keeps the digest’s preference key: muting work_order_digest silences it, on both channels', async () => {
+    const W = WED9();
+    digestFixture(W);
+    insert('tasks', {
+      id: 'b_carl', organization_id: 1, title: 'Bldg 12', status: 'open', scope: 'org',
+      service_ticket_id: 'd_due', assignee_user_id: null, archived_at: null,
+      due_date: localDay(new Date(W.getTime() + DAY)),
+    });
+    eng.db.exec(`UPDATE users SET notification_prefs = '{"work_order_digest":false,"push":{"work_order_digest":false}}' WHERE id = 11`);
+    const s = senders();
+    await cron.runOnce({ now: W, deps: s.deps });
+    expect(s.emails.filter((m) => m.to === 'crew@agx.test')).toHaveLength(0);
+    expect(s.pushes.filter((p) => p.userId === 11)).toHaveLength(0);
+    // Everyone else still receives theirs.
+    expect(digests(s).map((m) => m.to).sort()).toEqual(['creator@agx.test', 'pm@agx.test']);
   });
 
   test('once per local day: a second tick the same morning sends nothing', async () => {

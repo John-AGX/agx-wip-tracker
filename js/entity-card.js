@@ -261,12 +261,19 @@
     // above; this says how much of the work on this entity lives on a work
     // order instead, so a short follow-up list is not read as "nothing owed".
     // The card is a summary surface: the way in is the Service Tickets page.
+    //
+    // It counts THIS ENTITY's open buildings across its work orders — it has
+    // never been about one person, and since 1.35 there is no such reading to
+    // be had: a building is never assigned to anybody, and everyone the work
+    // order is assigned to is equally responsible for every building on it.
+    // The title says so; no owner, count or filter is shown per building.
     var buildingsLine = '';
     if (vm.buildings && Number(vm.buildings.open) > 0) {
       var bo = Number(vm.buildings.open);
       var bw = Number(vm.buildings.workOrders);
       if (!isFinite(bw) || bw < 0) bw = 0;
-      buildingsLine = '<div class="p86-ecard-task-more">' +
+      buildingsLine = '<div class="p86-ecard-task-more" title="' +
+        esc('Buildings live on their work order. Everyone the work order is assigned to is responsible for every building on it.') + '">' +
         esc(bo + ' building' + (bo === 1 ? '' : 's') + ' open across ' +
             bw + ' work order' + (bw === 1 ? '' : 's')) + '</div>';
     }
@@ -404,6 +411,11 @@
    * only, since nothing else carries a work order. Its own narrow door, and
    * a strictly optional one: resolves to null (never rejects, never throws)
    * for any other type, an api.js too old to have the endpoint, or a refusal.
+   *
+   * GET /api/service-tickets/building-counts is an ENTITY count, not a
+   * person's: it asks the job or lead the card is about, through the normal
+   * per-parent access rule. 1.35 changed nothing here, and nothing may filter
+   * it by a person — a building has no assignee.
    */
   function loadBuildingCounts(entityType, entityId) {
     if (entityType !== 'job' && entityType !== 'lead') return Promise.resolve(null);
@@ -430,7 +442,8 @@
    *
    * Since 1.33 the callback also carries `buildings` — {open,workOrders} or
    * null — because work-order buildings are no longer tasks and would
-   * otherwise be invisible here. The key is ADDITIVE and optional: a caller
+   * otherwise be invisible here. It is the ENTITY's open count across its work
+   * orders, never one person's. The key is ADDITIVE and optional: a caller
    * that only reads .tasks/.more is unaffected.
    *
    * Fully defensive: any failure calls back with an empty list, because a

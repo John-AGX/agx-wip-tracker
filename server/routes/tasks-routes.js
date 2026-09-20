@@ -418,7 +418,20 @@ router.get('/', requireAuth, async (req, res) => {
     if (scopeFilter === 'org') where.push("t.scope = 'org'");
     else if (scopeFilter === 'personal') where.push("t.scope = 'personal'");
 
-    const assignee = String(req.query.assignee || '').trim();
+    // NO PER-BUILDING FILTER, ANYWHERE (1.35). `assignee` filters on the TASK
+    // row's own assignee, and a building on a work order has no owner of its
+    // own: responsibility sits on the record (service_tickets.assignee_user_id)
+    // and everyone on it is equally responsible for every building on its punch
+    // list. So in exactly the two cases above — the ones that let buildings
+    // onto this list — the filter is not applied at all. Answering
+    // `?service_ticket_id=X&assignee=me` with "the buildings that name me"
+    // would be a per-building owner filter wearing a general-purpose name, and
+    // it would read as authoritative while meaning nothing.
+    //
+    // Filtering by the WORK ORDER's assignee is a different, real question, and
+    // it is still answered — by GET /api/service-tickets/my-buildings, which
+    // matches the caller on the ticket and then returns its WHOLE punch list.
+    const assignee = skipBuildingRule ? '' : String(req.query.assignee || '').trim();
     if (assignee === 'me') {
       where.push('t.assignee_user_id = $' + (pn++));
       params.push(Number(req.user.id));
@@ -586,6 +599,18 @@ router.post('/', requireAuth, async (req, res) => {
     // default) stay assignable + org-viewable.
     const wantPersonal = String(body.scope) === 'personal';
 
+    // CREATING A BUILDING NEVER ACCEPTS AN ASSIGNEE (1.35). An org task with a
+    // service_ticket_id is a building on that work order's punch list, and a
+    // building is never assigned to one person — the work order's own Assigned
+    // to is the one that means anything, and everyone on it is equally
+    // responsible for the whole punch list. Refused BY NAME and before the
+    // assignee is even validated, rather than dropped: "created" with the
+    // assignee silently gone is a lie the caller would act on.
+    const assigneeSent = body.assignee_user_id != null && body.assignee_user_id !== '';
+    if (!wantPersonal && body.service_ticket_id && assigneeSent) {
+      return sendRefusal(res, subtaskDoor.assignVerdict());
+    }
+
     // Assignee applies to ORG tasks only; a personal to-do is for the creator.
     if (!wantPersonal && body.assignee_user_id != null && !(await assigneeOk(orgId, body.assignee_user_id))) {
       return res.status(400).json({ error: 'Invalid assignee' });
@@ -729,17 +754,41 @@ router.patch('/:id', requireAuth, async (req, res) => {
     const newTicketId = has('service_ticket_id') ? sentTicketId : oldTicketId;
     const linkChange = has('service_ticket_id') && sentTicketId !== oldTicketId;
     const onWorkOrder = !!(newTicketId || oldTicketId);
-    // Any status write and any reassignment on a building also runs under the
-    // ticket lock: the status so it is decided on the task row as it is under
-    // the lock, not as it was read above (A10 — a crew tick landing in between
-    // would otherwise be written over); the assignee because the assignee may
-    // finish a building (doneVerdict), so naming one is a ticket writer's call.
+    // Any status write on a building also runs under the ticket lock, so it is
+    // decided on the task row as it is under the lock and not as it was read
+    // above (A10 — a crew tick landing in between would otherwise be written
+    // over).
     const assignRaw = has('assignee_user_id') ? body.assignee_user_id : undefined;
     const assignTo = assignRaw === undefined ? undefined
       : ((assignRaw === '' || assignRaw == null) ? null : Number(assignRaw));
     const assignChange = assignTo !== undefined && (assignTo === null || Number.isInteger(assignTo)) &&
       Number(before.assignee_user_id) !== Number(assignTo);
     const statusChange = !!statusIn && statusIn !== before.status;
+
+    // A BUILDING IS NEVER ASSIGNED TO ANYBODY (1.35). Not by the office, not by
+    // a job editor, not by the person it used to name. This is no longer a
+    // permission question — the work order's own Assigned to is where
+    // responsibility lives, and everyone on that record is equally responsible
+    // for every building on it — so it is refused before the transaction
+    // rather than asked inside it.
+    //
+    // The test is where the row ENDS UP, not where it was: putting a plain task
+    // onto a work order and naming an assignee in the same PATCH would make an
+    // assigned building, and taking a building OFF one while assigning it is
+    // fine, because afterwards it is an ordinary task again. Clearing an
+    // assignee is refused too — a value an older release left on a building row
+    // is history nothing reads, and rewriting it is still writing the field.
+    //
+    // AND AN ARCHIVED BUILDING IS STILL A BUILDING. This deliberately does NOT
+    // ask about archived_at, unlike `throughDoor` below, where it means
+    // something else (an archived row has left its work order's punch list, so
+    // finishing it must not move the ticket). A rule stated as absolute cannot
+    // carry a silent exception for a row that is out of sight: an unarchive
+    // feature would inherit it, and until then the only thing the exception
+    // bought was a write nobody reads.
+    const endsUpABuilding = before.scope === 'org' && !!newTicketId;
+    if (assignChange && endsUpABuilding) return sendRefusal(res, subtaskDoor.assignVerdict());
+
     const throughDoor = before.scope === 'org' && !before.archived_at &&
       ((touchesDone && onWorkOrder) || linkChange || (onWorkOrder && (statusChange || assignChange)));
     // The door owns status and completed_at when done-ness changes on a task
@@ -892,13 +941,15 @@ router.patch('/:id', requireAuth, async (req, res) => {
       } else {
         // Not a link change, so newTicket is the ticket the task is on.
         if (touchesDone) {
+          // The WORK ORDER's assignee may finish its buildings (1.35), so the
+          // verdict is asked of the LOCKED ticket row, never of the task.
           const verdict = await subtaskDoor.doneVerdict(client, { user: req.user, orgId, ticket: newTicket, task: current });
           if (!verdict.ok) return { refusal: verdict };
         }
-        if (assignChange) {
-          const verdict = await subtaskDoor.assignVerdict(client, { user: req.user, orgId, ticket: newTicket });
-          if (!verdict.ok) return { refusal: verdict };
-        }
+        // No assignee arm here: an assignee change on a row that ends up a
+        // building was refused above, before this transaction opened, and
+        // taskShifted refuses the request outright if the row stopped being
+        // one under the lock.
       }
 
       let task = current;

@@ -160,3 +160,116 @@ describe('My Account prints the group heading', () => {
     expect(pane.querySelectorAll('.p86-pref-group')).toHaveLength(6);
   });
 });
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * THE work_order_digest ROW IS THE DIGEST'S WHOLE TRIGGER LIST.
+ *
+ * This is the row a person lands on in My Account → Notifications when they
+ * are deciding whether to keep the email, and it is the only place that says
+ * what the email can be about. So every section the digest can render must be
+ * named in it, in words that match what the email actually shows.
+ *
+ * 1.35 moved the first section off the building and onto the record — nobody
+ * is assigned an individual building, the work order is assigned and everyone
+ * on it is equally responsible for every building on its punch list. The row
+ * was left describing the 1.34 trigger ("a building on it assigned to you and
+ * still open"), a condition that can no longer fire, while the email's own
+ * heading said something else. So the first clause is now pinned to
+ * DIGEST_SECTIONS[0].label word for word: changing either side alone goes red.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('the work_order_digest description', () => {
+  const NOTIFY_TEXT = path.join(__dirname, '..', 'server', 'services', 'work-order-notify-text.js');
+
+  // DIGEST_SECTIONS is module-private (it is render order, not API), so its
+  // keys and labels are read out of the source rather than re-typed here.
+  const digestSections = () => {
+    const src = fs.readFileSync(NOTIFY_TEXT, 'utf8').replace(/\r\n/g, '\n');
+    const a = src.indexOf('const DIGEST_SECTIONS = Object.freeze([');
+    expect(a).toBeGreaterThan(-1);
+    const block = src.slice(a, src.indexOf(']);', a));
+    const out = [];
+    const re = /key: '([a-z_]+)',\s*label: '([^']+)'/g;
+    let m;
+    while ((m = re.exec(block))) out.push({ key: m[1], label: m[2] });
+    expect(out.length).toBeGreaterThan(1);
+    return out;
+  };
+
+  // What each section's trigger is CALLED in the settings sentence. Plain
+  // words, because the sentence is read by the person deciding whether to keep
+  // the email — not by a developer.
+  const PHRASES = {
+    your_buildings: 'a work order assigned to you with a building still open',
+    approvals: 'waiting for your approval',
+    flags: 'flagged problems waiting',
+    overdue: 'overdue',
+    unopened: 'scheduled today or tomorrow with the crew link not opened',
+    expiring: 'a crew link about to expire',
+    suggestions: 'suggestions',
+  };
+
+  const descOf = (key) => {
+    const row = events.NOTIFY_EVENTS.find((e) => e.key === key);
+    expect(row).toBeDefined();
+    return row.desc;
+  };
+
+  // The sentence and the heading are written for different places, so one is
+  // singular and article-ed and the other is a plural heading. Compare them on
+  // their content words: same words, same order, or red.
+  const shape = (s) => String(s).toLowerCase()
+    .replace(/\b(?:a|an|the)\b/g, ' ')
+    .replace(/[^a-z]+/g, ' ')
+    .split(/\s+/).filter(Boolean)
+    .map((w) => (w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w))
+    .join(' ');
+
+  const firstClause = (desc) => {
+    const at = desc.indexOf(':');
+    expect(at).toBeGreaterThan(-1);
+    return desc.slice(at + 1).split(',')[0].trim();
+  };
+
+  test('the phrase map covers exactly the sections the digest renders', () => {
+    expect(digestSections().map((s) => s.key).sort()).toEqual(Object.keys(PHRASES).sort());
+  });
+
+  test('every section the digest can hold is named in the settings row', () => {
+    const desc = descOf('work_order_digest');
+    for (const s of digestSections()) {
+      expect([s.key, desc]).toEqual([s.key, expect.stringContaining(PHRASES[s.key])]);
+    }
+  });
+
+  test('its first clause is the digest\'s own first heading, word for word', () => {
+    const head = digestSections()[0];
+    expect(head.key).toBe('your_buildings');
+    expect(shape(firstClause(descOf('work_order_digest')))).toBe(shape(head.label));
+    // Not vacuous: the 1.34 wording, which named a building’s own assignee,
+    // does not shape to this heading — which is the bug this pin closes.
+    expect(shape('a building on it assigned to you and still open')).not.toBe(shape(head.label));
+  });
+
+  test('the row never says a building belongs to a person', () => {
+    const OWNED = [/your\s+buildings?/i, /my\s+buildings?/i, /buildings?\s+(?:is|are)?\s*assigned/i];
+    expect(OWNED.filter((re) => re.test(descOf('work_order_digest')))).toEqual([]);
+    // Not vacuous: the heading 1.34 shipped with is caught by the same scan.
+    expect(OWNED.filter((re) => re.test('Buildings assigned to you (2)')).length).toBeGreaterThan(0);
+  });
+
+  test('MUTANT: drop the buildings clause and the row describes something the digest is not', () => {
+    const desc = descOf('work_order_digest').replace(PHRASES.your_buildings + ', ', '');
+    expect(desc).not.toContain(PHRASES.your_buildings);
+    const keys = digestSections().map((s) => s.key);
+    const named = keys.filter((k) => desc.indexOf(PHRASES[k]) !== -1);
+    expect(named).not.toContain('your_buildings');
+    expect(named).toHaveLength(keys.length - 1);
+  });
+
+  test('MUTANT: the 1.34 trigger put back fails the pin', () => {
+    const stale = descOf('work_order_digest')
+      .replace(PHRASES.your_buildings, 'a building on it assigned to you and still open');
+    expect(stale).not.toContain(PHRASES.your_buildings);
+    expect(shape(firstClause(stale))).not.toBe(shape(digestSections()[0].label));
+  });
+});

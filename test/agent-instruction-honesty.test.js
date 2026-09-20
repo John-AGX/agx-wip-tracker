@@ -887,6 +887,85 @@ describe('an instruction may not name a payload capability the grammar lacks', (
     expect(reachable.has('line_edits')).toBe(true);
   });
 
+  /* ─────────────────────────────────────────────────────────────────────────
+   * ONE LEVEL DOWN AGAIN: A FIELD INSIDE A PRINTED GRAMMAR.
+   *
+   * The ops-key guard above cannot see this one. `task_adds` IS a real ops key,
+   * so "task_adds: `[{title, due_date? (DATE), assignee_user_id?, priority?,
+   * notes?}]`" satisfied every test in this file while assignee_user_id had
+   * become a TERMINAL refusal (1.35 — a building on a work order is never
+   * assigned to one person; responsibility sits on the record and everyone on it
+   * is equally responsible for every building). The shape was reachable; the
+   * FIELD in it was not.
+   *
+   * It is the same defect and the expensive end of it: ticketRefusal stamps
+   * retryable:false, a terminal service_ticket refusal is sticky for the rest of
+   * the turn, and validateOps runs again at apply time — so the instruction did
+   * not merely mislead, it produced dead turns and unapprovable drafts.
+   *
+   * The property: where an instruction PRINTS a field grammar, the fields in it
+   * are exactly the ones the door takes. Both sides are read out of the running
+   * code — the door prints its whole accepted set when it refuses an unknown
+   * key — so neither side is a list typed here that can rot.
+   * ────────────────────────────────────────────────────────────────────────*/
+  // "task_adds: `[{title, due_date? (DATE), priority?, notes?}]`" -> the fields.
+  function grammarFields(text, label) {
+    const m = String(text).match(new RegExp(label + ': `\\[\\{([^}]*)\\}\\]`'));
+    if (!m) return null;
+    return m[1].split(',')
+      .map((s) => s.replace(/\(.*?\)/g, '').replace(/[?\s]/g, ''))
+      .filter(Boolean);
+  }
+
+  function ticketTaskDoorFields() {
+    try {
+      dispatcher.validateTarget({ entity_type: 'service_ticket', entity_id: 'st_1',
+        ops: { op: 'update', task_adds: [{ title: 'Building 7', not_a_real_key: 1 }] } }, 0);
+    } catch (e) {
+      if (e.detail && e.detail.code === 'unknown_field') return e.detail.expected.slice().sort();
+      throw e;
+    }
+    throw new Error('the ticket-task door accepted an unknown key');
+  }
+
+  test('every printed task_adds grammar is exactly what the door takes', () => {
+    const accepted = ticketTaskDoorFields();
+    const seen = [];
+    for (const surface of instructionSurfaces()) {
+      const fields = grammarFields(surface.text, 'task_adds');
+      if (!fields) continue;
+      seen.push(surface.name);
+      expect([surface.name, fields.slice().sort()]).toEqual([surface.name, accepted]);
+    }
+    // A guard that found no grammar would satisfy the loop above vacuously —
+    // and the surface the sentence was written on is named, not merely counted.
+    expect(seen).toContain('baseline:scribe');
+  });
+
+  test('the field this class was found on is refused BY NAME and TERMINALLY', () => {
+    const door = require('../server/services/service-ticket-subtask-door');
+    let err = null;
+    try {
+      dispatcher.validateTarget({ entity_type: 'service_ticket', entity_id: 'st_1',
+        ops: { op: 'update', task_adds: [{ title: 'Building 7', assignee_user_id: 9 }] } }, 0);
+    } catch (e) { err = e; }
+    expect(err).not.toBeNull();
+    expect(err.detail.code).toBe('building_not_assignable');
+    expect(err.detail.retryable).toBe(false);
+    expect(err.message).toContain(door.MSG.notAssignable);
+  });
+
+  test('the grammar detector is not vacuous — the shipped sentence is caught', () => {
+    const accepted = ticketTaskDoorFields();
+    const shipped = 'task_adds: `[{title, due_date? (DATE), assignee_user_id?, priority?, notes?}]` — child TASKS';
+    expect(grammarFields(shipped, 'task_adds')).toContain('assignee_user_id');
+    expect(grammarFields(shipped, 'task_adds').slice().sort()).not.toEqual(accepted);
+    // And it parses a true grammar correctly, so a green run means it looked.
+    expect(grammarFields('task_adds: `[{title, due_date? (DATE), priority?, notes?}]`', 'task_adds')
+      .slice().sort()).toEqual(accepted);
+    expect(grammarFields('no grammar here', 'task_adds')).toBeNull();
+  });
+
   test('the scan actually reaches the surfaces the lies were written on', () => {
     // A guard that scanned nothing would satisfy every assertion above.
     const names = instructionSurfaces().map((s) => s.name);

@@ -526,9 +526,24 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.36';
+const APP_VERSION = '1.37';
 
 const releases = [
+  {
+    version: '1.37',
+    date: '2026-09-20',
+    name: 'A building belongs to the work order, not to one person',
+    summary: 'Nobody is assigned an individual building any more. Whoever the work order is assigned to is responsible for every building on its punch list — so My work, the My Day strip and the morning digest list the work orders assigned to you that still have a building open, and setting an assignee on a building is refused everywhere, including from 86.',
+    changes: [
+      { type: 'improved', text: 'One rule, everywhere: a building on a work order’s punch list is never assigned to one person. The work order has an Assigned to — the one the office sets on the ticket — and everyone on it is equally responsible for every building on its punch list. There is no per-building owner, no per-building picker and no per-building filter anywhere in the app, and the office punch list now says so on the screen rather than leaving it to be worked out. The note directly below this one, for the release this corrects, is left exactly as it was written — it put the person on the individual building, because that is what shipped that morning. Nothing there was quietly rewritten; this row is the correction.' },
+      { type: 'fixed', text: 'Service Tickets → My work lists the work orders assigned to you. It was keyed on a column no screen has ever offered to set, so on an ordinary job it listed nothing at all, while the Assigned to the office really does set fed none of it. It now lists every work order assigned to you that still has a building open — including work orders on jobs you cannot otherwise open, which is still the point — with that work order’s whole punch list under it. The count beside a row is the work order’s own: “2 of 3 buildings open”, not a share of it.' },
+      { type: 'fixed', text: 'The Work orders strip on My Day is keyed the same way, and says so under the heading: assigned to you, and everyone assigned to a work order is responsible for every building on it. It had been answering nothing for the same reason My work was.' },
+      { type: 'fixed', text: 'The morning work-orders digest leads with “Work orders assigned to you with buildings still open”. It names the work orders assigned to you that still have a building open, how many are open on each and which one is due next, and it still reaches you whether or not you can open the job. Like the rest of the digest it carries no prices, it only turns up when there is something in it, and it can be turned off in My Account → Notifications under Work orders. It is the section the previous release added, renamed and re-keyed: the heading, and the settings row that switches it off, now name the work order rather than a person.' },
+      { type: 'fixed', text: 'Putting a name on a single building is refused instead of being quietly kept. Wherever it comes from — the job editor, a crew link, or 86 writing a punch list — the answer is the same sentence: a building on a work order is never assigned to one person, set the work order’s Assigned to instead, because everyone on it is equally responsible for every building on its punch list. 86 is refused as it writes, so nothing is saved and nothing half-lands. Taking a task off a work order and assigning it is still fine — it is an ordinary to-do again.' },
+      { type: 'fixed', text: 'The person a work order is assigned to can finish its buildings. A crew lead who cannot otherwise open the job can tick a building off the punch list and reopen one, and when somebody genuinely cannot, the reason now names the work order’s Assigned to rather than the building’s.' },
+      { type: 'fixed', text: 'Nothing in your data was rewritten. A name that ended up on a building row before this — nothing on any screen ever put one there on purpose — is left exactly where it is. It is simply never read again, so it cannot decide who sees what.' },
+    ],
+  },
   {
     version: '1.36',
     date: '2026-09-20',

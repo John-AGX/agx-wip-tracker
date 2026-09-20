@@ -308,6 +308,23 @@ describe('two organisations', () => {
     expect(out).not.toMatch(/Bob Beta|BETA LEAD SECRET/);
   });
 
+  test('no building carries an owner: the read cannot select one, so it cannot leak one', async () => {
+    // 1.35: responsibility sits on the work order, never on a building, so
+    // the punch list neither joins nor prints a per-building assignee. This
+    // replaces the org-predicate guard that used to protect that join — the
+    // column is no longer read at all, which is the stronger property.
+    const src = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'server', 'routes', 'ai-routes.js'), 'utf8');
+    const at = src.indexOf('readServiceTicketForAgent');
+    expect(at).toBeGreaterThan(-1);
+    const block = src.slice(at, src.indexOf('\nasync function', at + 1));
+    expect(block).not.toMatch(/ku\.id = k\.assignee_user_id/);
+    expect(block).not.toMatch(/k\.assignee_user_id/);
+    const out = await text(shipped, ALICE, { id: 'st_a5', depth: 'full' });
+    expect(out).toContain('[ ] Cross-pointer crew task — open  [t6]');
+    expect(out).not.toMatch(/Bob Beta/);
+  });
+
   test('children in another tenant that point at this ticket are not read', async () => {
     const out = await text(shipped, ALICE, { id: 'st_a1', depth: 'full' });
     expect(out).not.toMatch(/BETA TASK LEAK|BETA REVISION LEAK|beta_leak_event|Bob Beta|beta@outside/);
@@ -482,10 +499,12 @@ describe('every guard is load-bearing', () => {
       'LEFT JOIN users u ON u.id = t.assignee_user_id AND u.organization_id = t.organization_id\n',
       'LEFT JOIN users u ON u.id = t.assignee_user_id\n',
       /Assignee: Bob Beta/],
-    ['a child task\'s assignee',
-      'LEFT JOIN users ku ON ku.id = k.assignee_user_id AND ku.organization_id = k.organization_id\n',
-      'LEFT JOIN users ku ON ku.id = k.assignee_user_id\n',
-      /Cross-pointer crew task — open, Bob Beta/],
+    // A child task's assignee used to be joined and printed here, and needed
+    // its own org predicate to stop a foreign name riding a cross-pointer row.
+    // 1.35 removed the join instead: a building on a work order is assigned to
+    // nobody, so there is no name to leak. The rule is now pinned by
+    // 'no building carries an owner' below, which is the stronger statement —
+    // a read that cannot select the column cannot leak it.
     ['the participants',
       'LEFT JOIN users u ON u.id = p.user_id AND u.organization_id = p.organization_id\n',
       'LEFT JOIN users u ON u.id = p.user_id\n',

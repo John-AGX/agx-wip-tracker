@@ -12,14 +12,20 @@
 //     org's calendar day, scheduled today/tomorrow with no link vs an unopened
 //     link, links expiring within 3 days (not 4, not revoked), suggestions
 //     older than a day, flags still open;
-//   * your_buildings is the ONE section that is not gated on access: the
-//     assignee of an open building is told, on a job they cannot open and
-//     without being "on" the work order at all — done, archived, personal and
-//     unassigned rows are not buildings, and an inactive assignee is nobody;
+//   * your_buildings is keyed on the RECORD and is the ONE section that is not
+//     gated on access (1.35, the owner: "whoever is assigned to the ticket,
+//     task or work order is evenly responsible"): the person the WORK ORDER is
+//     assigned to is told how many of its buildings are still open and which is
+//     due next, on a job they cannot open — while a leftover assignee on a
+//     building row reaches nobody, because nothing assigns a building any more.
+//     Done, archived and personal rows are not buildings; an unassigned work
+//     order, an inactive assignee and one from another tenant are nobody;
 //   * attentionForUser counts work orders once across sections;
 //   * nothing from another organization reaches either org's people.
-// The participants org predicate is then removed from a copy and shown to leak,
-// and your_buildings is put through reaches() and shown to lose the crew lead.
+// The participants org predicate is then removed from a copy and shown to leak;
+// your_buildings is put through reaches() and shown to lose the crew lead it
+// exists for; and the 1.34 key (a building's own assignee) is put back and
+// shown to answer nothing for an ordinary work order.
 'use strict';
 
 const fs = require('fs');
@@ -100,7 +106,9 @@ function seed(settings) {
       ('st_sched1', 1, 'Crew tomorrow',       'j1', NULL, 'scheduled',     10, NULL, NULL, NULL, NULL, '${ymd(1)}', NULL, '2026-09-01 10:00:08'),
       ('st_seen',   1, 'Crew opened it',      'j1', NULL, 'open',          10, NULL, NULL, NULL, NULL, '${ymd(0)}', NULL, '2026-09-01 10:00:09'),
       ('st_later',  1, 'Crew in three days',  'j1', NULL, 'open',          10, NULL, NULL, NULL, NULL, '${ymd(3)}', NULL, '2026-09-01 10:00:10'),
-      ('st_exp',    1, 'Link expiring',       'j1', NULL, 'open',          10, NULL, NULL, NULL, NULL, NULL, NULL, '2026-09-01 10:00:11'),
+      -- Assigned to Olive, who runs no job and holds no grant: the crew lead
+      -- this section exists for. Every gated section still skips her.
+      ('st_exp',    1, 'Link expiring',       'j1', NULL, 'open',          10, 14,   NULL, NULL, NULL, NULL, NULL, '2026-09-01 10:00:11'),
       ('st_exp4',   1, 'Link fine for now',   'j1', NULL, 'open',          10, NULL, NULL, NULL, NULL, NULL, NULL, '2026-09-01 10:00:12'),
       ('st_sugg',   1, 'Suggestions waiting', 'j1', NULL, 'open',          10, 11,   NULL, NULL, NULL, NULL, NULL, '2026-09-01 10:00:13'),
       ('st_flag',   1, 'Flagged gate',        'j1', NULL, 'open',          10, 11,   NULL, NULL, '${ymd(-2)}', NULL, NULL, '2026-09-01 10:00:14'),
@@ -115,21 +123,25 @@ function seed(settings) {
       ('t3', 1, 'private', 'done', 'personal', 'st_over', NULL, NULL, NULL),
       ('t4', 1, 'gone', 'done', 'org', 'st_over', datetime('now', '-1 days'), NULL, NULL),
       ('t9', 2, 'RIVAL', 'done', 'org', 'st_over', NULL, NULL, NULL),
-      -- Olive runs no job and is on no work order: without your_buildings she is
-      -- told about none of these, and they are all hers.
+      -- BUILDINGS CARRYING A LEFTOVER assignee_user_id. Nothing has ever
+      -- offered to set it and since 1.35 nothing will, but old rows keep what
+      -- they hold (there is no backfill). Every one of these is on a work order
+      -- assigned to CARL, and Olive's name on the row must reach nobody.
       ('tb_flag',  1, 'Bldg F', 'open',        'org',      'st_flag', NULL, 14, '${ymd(-3)}'),
       ('tb_s1',    1, 'Bldg A', 'open',        'org',      'st_sugg', NULL, 14, '${ymd(2)}'),
       ('tb_s2',    1, 'Bldg B', 'in_progress', 'org',      'st_sugg', NULL, 14, '${ymd(5)}'),
-      ('tb_nodue', 1, 'Bldg G', 'open',        'org',      'st_exp',  NULL, 14, NULL),
-      -- Not buildings of hers: finished, archived, a private to-do that happens
-      -- to carry the ticket id, and one nobody is on the hook for.
+      -- The ordinary shape: a building nobody's name was ever put on, on the
+      -- work order Olive herself is assigned.
+      ('tb_nodue', 1, 'Bldg G', 'open',        'org',      'st_exp',  NULL, NULL, NULL),
+      -- Not buildings at all: finished, archived, and a private to-do that
+      -- happens to carry the ticket id.
       ('tb_done',  1, 'Bldg C', 'done',        'org',      'st_sugg', NULL, 14, '${ymd(1)}'),
       ('tb_arch',  1, 'Bldg D', 'open',        'org',      'st_sugg', datetime('now', '-1 days'), 14, '${ymd(1)}'),
       ('tb_priv',  1, 'my note','open',        'personal', 'st_sugg', NULL, 14, '${ymd(1)}'),
       ('tb_none',  1, 'Bldg E', 'open',        'org',      'st_sugg', NULL, NULL, '${ymd(1)}'),
       ('tb_gone',  1, 'Bldg H', 'open',        'org',      'st_sugg', NULL, 15, '${ymd(1)}'),
-      -- Another tenant's building, planted on an org-1 ticket id and an org-1
-      -- admin: only the organization predicate keeps it out.
+      -- Another tenant's building, planted on an org-1 ticket id: only the
+      -- organization predicate keeps it off an org-1 work order's punch list.
       ('tb_rival', 2, 'RIVAL BLDG', 'open',    'org',      'st_over', NULL, 12, '${ymd(1)}');
     INSERT INTO service_ticket_shares (id, organization_id, ticket_id, token_hash, scope, recipient_name, created_by, expires_at, opened_at, revoked_at, created_at) VALUES
       ('sh_s1',   1, 'st_sched1', 'h1', 'respond', 'Jose',  10, '2099-01-01', NULL, NULL, '2026-09-02 09:00:00'),
@@ -206,7 +218,7 @@ describe('sections per person', () => {
     const map = await A.attentionForOrg(eng.pool, { org: ORG1(), deps: DEPS });
     expect(ticketsIn(map.get(12), 'approvals')).toEqual(['st_orphan']);
     expect(ticketsIn(map.get(12), 'overdue')).toEqual([]);          // the org-2 participant row is not a relation
-    expect(ticketsIn(map.get(12), 'your_buildings')).toEqual([]);   // nor is the org-2 building planted on him
+    expect(ticketsIn(map.get(12), 'your_buildings')).toEqual([]);   // and he is assigned no work order
     expect(ticketsIn(map.get(14), 'approvals')).toEqual([]);          // on it, but can approve nothing
     expect(map.has(15)).toBe(false);                                  // inactive
   });
@@ -273,77 +285,150 @@ function mutantModule(anchor, replacement) {
   return require(p);
 }
 
-describe('your_buildings — the one section that is not gated on access', () => {
-  const olive = async () => (await A.attentionForOrg(eng.pool, { org: ORG1(), deps: DEPS })).get(14);
+/* ═══════════════════════════════════════════════════════════════════════════
+ * your_buildings — KEYED ON THE RECORD, AND NOT GATED ON ACCESS.
+ *
+ * THE OWNER, 2026-09-20: "i dont want assignments to individual buildings like
+ * that, whoever is assigned to the ticket, task or work order is evenly
+ * responsible."
+ *
+ * So the section answers one question: which WORK ORDERS ASSIGNED TO ME still
+ * have open buildings, how many, and which is due next. A building on a punch
+ * list is assigned to nobody — the leftover ids on tb_flag, tb_s1 and tb_s2
+ * are values old rows happen to hold, and must reach no one.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('your_buildings — the work orders assigned to you that still have open buildings', () => {
+  const org1 = async () => A.attentionForOrg(eng.pool, { org: ORG1(), deps: DEPS });
+  const carl = async () => (await org1()).get(11);
+  const olive = async () => (await org1()).get(14);
+  const rows = (entry) => entry.sections.your_buildings.map((it) => [it.ticket.id, it.count, it.nextDue]);
 
-  test('the assignee of an open building is told, on jobs she cannot open and work orders she is not on', async () => {
-    const o = await olive();
-    // Soonest due first, and the work order with no due date on any of her
-    // buildings goes last rather than to the top.
-    expect(ticketsIn(o, 'your_buildings')).toEqual(['st_flag', 'st_sugg', 'st_exp']);
-    expect(o.sections.your_buildings.map((it) => [it.count, it.nextDue])).toEqual([
-      [1, ymd(-3)], [2, ymd(2)], [1, null],
+  test('the work order’s own Assigned to is told, and the whole punch list is counted for them', async () => {
+    // Carl is assigned st_flag, st_over, st_sugg and st_wait. Soonest due
+    // first, and the work order whose open buildings carry no due date at all
+    // goes last rather than to the top; st_wait has no punch list, so it is
+    // not here at all.
+    expect(rows(await carl())).toEqual([
+      ['st_flag', 1, ymd(-3)],    // tb_flag — Olive's leftover id on it changes nothing
+      ['st_sugg', 4, ymd(1)],     // tb_s1, tb_s2, tb_none and tb_gone: ALL of them
+      ['st_over', 1, null],       // t2, the only live open org row on it
     ]);
-    // She learns where to go — and nothing priced.
-    expect(o.sections.your_buildings[0].jobLine).toBe('M1001 · Latitude');
-    expect(JSON.stringify(o)).not.toMatch(/24000|contractAmount|price|cost|amount/i);
+    // "Everyone on it is equally responsible for every building on it": the
+    // count is the work order's own, not a share of it — tb_none is on nobody's
+    // name and tb_gone is on an inactive user's, and both are still counted.
+    expect((await carl()).sections.your_buildings[1].count).toBe(4);
+    expect((await carl()).sections.your_buildings[0].jobLine).toBe('M1001 · Latitude');
+  });
 
-    // Olive holds no grant on j1 and is on none of these work orders, so every
-    // section that goes through reaches() stays empty. The new one did not
-    // widen the access rule; it bypasses it.
+  test('a leftover assignee on a building row reaches nobody; the record’s assignee reaches the crew lead', async () => {
+    // Olive's id sits on tb_flag, tb_s1 and tb_s2 — three open buildings on
+    // work orders assigned to Carl. Under 1.34 those three were her section.
+    // Now the only thing she is told about is st_exp, the WORK ORDER she is
+    // assigned, and its building carries nobody's name.
+    const o = await olive();
+    expect(rows(o)).toEqual([['st_exp', 1, null]]);
+    // She holds no grant on j1 and can open nothing, so every section that goes
+    // through reaches() stays empty — including st_exp's own expiring link.
+    // This section did not widen the access rule; it bypasses it.
     ['approvals', 'flags', 'overdue', 'unopened', 'expiring', 'suggestions'].forEach((k) => {
       expect([k, ticketsIn(o, k)]).toEqual([k, []]);
     });
+    // She learns the job number and where to go, and nothing priced.
+    expect(o.sections.your_buildings[0].jobLine).toBe('M1001 · Latitude');
+    expect(JSON.stringify(o)).not.toMatch(/24000|contractAmount|price|cost|amount/i);
 
     const c = await A.attentionForUser(eng.pool, { orgId: 1, userId: 14, deps: DEPS });
-    expect(c).toMatchObject({ your_buildings: 3, approvals: 0, overdue: 0, total: 3 });
+    expect(c).toMatchObject({ your_buildings: 1, approvals: 0, overdue: 0, expiring: 0, total: 1 });
   });
 
-  test('done, archived, personal, unassigned and an inactive assignee are not buildings of anyone’s', async () => {
-    // st_sugg carries five of Olive's rows; only tb_s1 and tb_s2 count.
-    const o = await olive();
-    const sugg = o.sections.your_buildings.find((it) => it.ticket.id === 'st_sugg');
-    expect(sugg.count).toBe(2);
-    // tb_gone is assigned to Ivan, who is inactive: nobody hears about it.
-    const map = await A.attentionForOrg(eng.pool, { org: ORG1(), deps: DEPS });
+  test('the open count is the punch list’s own arithmetic: open = total − done, and the overdue row agrees', async () => {
+    const c = await carl();
+    const over = c.sections.your_buildings.find((it) => it.ticket.id === 'st_over');
+    const overdue = c.sections.overdue.find((it) => it.ticket.id === 'st_over');
+    expect([overdue.done, overdue.total]).toEqual([1, 2]);
+    expect(over.count).toBe(overdue.total - overdue.done);
+  });
+
+  test('done, archived and personal rows are not buildings; finishing the last one drops the work order', async () => {
+    // st_sugg carries eight rows; tb_done (finished), tb_arch (archived) and
+    // tb_priv (a private to-do that happens to carry the ticket id) are not
+    // buildings, so the count is four.
+    expect((await carl()).sections.your_buildings[1]).toMatchObject({ count: 4 });
+    eng.db.exec("UPDATE tasks SET status = 'done' WHERE id IN ('tb_s1', 'tb_s2', 'tb_none', 'tb_gone')");
+    expect(rows(await carl())).toEqual([['st_flag', 1, ymd(-3)], ['st_over', 1, null]]);
+  });
+
+  test('nobody assigned, an inactive assignee, or one from another tenant: the work order is on nobody’s digest', async () => {
+    // st_sugg's four open buildings, with the Assigned to cleared.
+    eng.db.exec("UPDATE service_tickets SET assignee_user_id = NULL WHERE id = 'st_sugg'");
+    // st_flag assigned to Ivan, who is inactive, and st_over to the rival org's PM.
+    eng.db.exec("UPDATE service_tickets SET assignee_user_id = 15 WHERE id = 'st_flag'");
+    eng.db.exec("UPDATE service_tickets SET assignee_user_id = 51 WHERE id = 'st_over'");
+    const map = await org1();
+    expect(ticketsIn(map.get(11), 'your_buildings')).toEqual([]);
     expect(map.has(15)).toBe(false);
-    // Finish her last two open buildings on st_sugg and the work order drops off.
-    eng.db.exec("UPDATE tasks SET status = 'done' WHERE id IN ('tb_s1', 'tb_s2')");
-    expect(ticketsIn(await olive(), 'your_buildings')).toEqual(['st_flag', 'st_exp']);
+    expect(map.has(51)).toBe(false);
+    const all = JSON.stringify(Array.from(map.values()).map((e) => e.sections.your_buildings));
+    expect(all).not.toContain('st_sugg');
+    // Rita is told nothing either: st_over is org 1's row and her org's pass
+    // never reads it.
+    const two = await A.attentionForOrg(eng.pool, { org: ORG2(), deps: DEPS });
+    expect(ticketsIn(two.get(51), 'your_buildings')).toEqual([]);
   });
 
-  test('an approved or archived work order is not on it, and neither is another tenant’s building', async () => {
+  test('an approved or archived work order is not on it', async () => {
     // st_done is approved and st_arch archived: the ticket query never reads
-    // them, so a building on one cannot reach its assignee here either.
+    // them, so buildings moved onto them reach nobody here either.
     eng.db.exec("UPDATE tasks SET service_ticket_id = 'st_done' WHERE id = 'tb_flag'");
     eng.db.exec("UPDATE tasks SET service_ticket_id = 'st_arch' WHERE id = 'tb_nodue'");
-    const o = await olive();
-    expect(ticketsIn(o, 'your_buildings')).toEqual(['st_sugg']);
-    // tb_rival is org 2's, planted on org 1's st_over and on org 1's admin.
-    const map = await A.attentionForOrg(eng.pool, { org: ORG1(), deps: DEPS });
-    expect(ticketsIn(map.get(12), 'your_buildings')).toEqual([]);
+    eng.db.exec("UPDATE service_tickets SET assignee_user_id = 11 WHERE id IN ('st_done', 'st_arch')");
+    const map = await org1();
+    expect(ticketsIn(map.get(11), 'your_buildings')).toEqual(['st_sugg', 'st_over']);
+    expect(map.has(14)).toBe(false);
   });
 
-  test('MUTANT: put the new section through reaches() and the crew lead it exists for disappears', async () => {
+  test('MUTANT: key it back on the building’s own assignee (1.34) and an ordinary work order answers nothing', async () => {
+    // The 1.34 predicate, put back: `AND assignee_user_id IS NOT NULL`. Nothing
+    // has ever written that column on a building, so st_over — a perfectly
+    // ordinary work order whose building nobody's name is on — vanishes from
+    // the digest of the person it is assigned to, and st_sugg under-counts.
     const mod = mutantModule(
-      '      const person = people.get(positiveInt(row.user_id));\n' +
-      '      if (!person) return;   // inactive, or moved to another organization\n',
-      '      const person = people.get(positiveInt(row.user_id));\n' +
-      "      if (!person) return;\n      if (!reaches(person, ticket, 'read', jobs, grants)) return;\n"
+      "        WHERE organization_id = $1 AND service_ticket_id = ANY($2::text[]) AND archived_at IS NULL AND scope = 'org'",
+      "        WHERE organization_id = $1 AND service_ticket_id = ANY($2::text[]) AND archived_at IS NULL AND scope = 'org'\n          AND assignee_user_id IS NOT NULL"
+    );
+    const broken = (await mod.attentionForOrg(eng.pool, { org: ORG1(), deps: DEPS })).get(11);
+    expect(broken.sections.your_buildings.map((it) => [it.ticket.id, it.count]))
+      .toEqual([['st_flag', 1], ['st_sugg', 3]]);
+    // The real module tells him about all three, st_over included.
+    expect(rows(await carl()).map((r) => r[0])).toEqual(['st_flag', 'st_sugg', 'st_over']);
+  });
+
+  test('MUTANT: put the section through reaches() and the crew lead it exists for disappears', async () => {
+    const mod = mutantModule(
+      '      const owner = people.get(positiveInt(ticket.assignee_user_id));\n      if (owner) {\n',
+      '      const owner = people.get(positiveInt(ticket.assignee_user_id));\n' +
+      "      if (owner && reaches(owner, ticket, 'read', jobs, grants)) {\n"
     );
     const map = await mod.attentionForOrg(eng.pool, { org: ORG1(), deps: DEPS });
     expect(map.has(14)).toBe(false);
     // The real module still tells her.
-    expect(ticketsIn(await olive(), 'your_buildings').length).toBe(3);
+    expect(rows(await olive())).toEqual([['st_exp', 1, null]]);
   });
 
-  test('MUTANT: drop the organization predicate and another tenant’s building reaches an org-1 admin', async () => {
+  test('MUTANT: drop the organization predicate and another tenant’s building lands on an org-1 punch list', async () => {
     const mod = mutantModule(
-      '        WHERE k.organization_id = $1 AND k.service_ticket_id = ANY($2::text[])',
-      '        WHERE $1 IS NOT NULL AND k.service_ticket_id = ANY($2::text[])'
+      "        WHERE organization_id = $1 AND service_ticket_id = ANY($2::text[]) AND archived_at IS NULL AND scope = 'org'",
+      "        WHERE $1 IS NOT NULL AND service_ticket_id = ANY($2::text[]) AND archived_at IS NULL AND scope = 'org'"
     );
-    const map = await mod.attentionForOrg(eng.pool, { org: ORG1(), deps: DEPS });
-    expect(ticketsIn(map.get(12), 'your_buildings')).toEqual(['st_over']);
+    const broken = (await mod.attentionForOrg(eng.pool, { org: ORG1(), deps: DEPS })).get(11);
+    // tb_rival is org 2's, planted on org 1's st_over: Carl is told there are
+    // two buildings open on his work order and that one is due tomorrow.
+    expect(broken.sections.your_buildings.find((it) => it.ticket.id === 'st_over'))
+      .toMatchObject({ count: 2, nextDue: ymd(1) });
+    expect(broken.sections.overdue.find((it) => it.ticket.id === 'st_over')).toMatchObject({ done: 2, total: 4 });
+    // The real module counts only org 1's own row.
+    expect((await carl()).sections.your_buildings.find((it) => it.ticket.id === 'st_over'))
+      .toMatchObject({ count: 1, nextDue: null });
   });
 });
 

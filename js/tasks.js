@@ -126,6 +126,40 @@
     return '<span class="' + cls + '">' + esc(label) + '</span>';
   }
 
+  // ── A BUILDING ON A WORK ORDER IS ASSIGNED TO NOBODY (1.35) ────────
+  // Responsibility sits on the RECORD — service_tickets.assignee_user_id —
+  // and everyone on it is equally responsible for every building on its punch
+  // list. So the task detail screen, which since 1.33 is the ONLY way into a
+  // building (Service Tickets → My work and the My Day strip both call
+  // openDetail), shows no owner for one and offers no picker.
+  //
+  // It is not decoration. server/routes/tasks-routes.js refuses ANY write of
+  // assignee_user_id on a building with 409 building_not_assignable, and the
+  // whole PATCH dies with it — so a picker here would discard the notes,
+  // photo, due date or status the person actually came to change. Worse on a
+  // legacy row: a building still carrying an assignee who is not in _users
+  // (inactive, or users.list() failed) reads back as '', which sends null,
+  // which IS a change, so an ordinary save would 409 and write nothing.
+  //
+  // ONE SENTENCE, byte-for-byte the server's: MSG.notAssignable in
+  // server/services/service-ticket-subtask-door.js. The refusal a save WOULD
+  // earn is the explanation shown in place of the picker, so nobody meets two
+  // spellings of the same rule.
+  var BUILDING_RULE = 'A building on a work order is never assigned to one person. ' +
+    "Set the work order's Assigned to instead — everyone on it is equally responsible for every building on its punch list.";
+  // The short line that stands where the owner used to. It names the work
+  // order's Assigned to as the responsible one — the FIELD, not a person: this
+  // screen is opened by whoever the work order is assigned to, often on a job
+  // they cannot open at all, and the ticket read that would carry a name is a
+  // door they fail. A name nobody can fetch is worse than the rule itself.
+  var BUILDING_RESPONSIBLE = "The work order's Assigned to is responsible";
+  // A building is an ORG task carrying a work order's id. A personal to-do may
+  // hang off a ticket too (tasks-routes accepts one) and is NOT a building —
+  // the same test the server makes before it refuses.
+  function isWorkOrderBuilding(t) {
+    return !!t && t.scope === 'org' && t.service_ticket_id != null && t.service_ticket_id !== '';
+  }
+
   // ── Org-user cache (assignee picker source) ────────────────────────
   var _users = null;
   var _usersPromise = null;
@@ -178,6 +212,12 @@
       '.p86-task-linkchip{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 8px;border-radius:999px;background:var(--chip-bg,#f1f5f9);color:var(--muted,#475569);}' +
       '.p86-task-linkpick{display:flex;gap:8px;}' +
       '.p86-task-linkpick select{flex:1 1 0;min-width:0;}' +
+      // 1.35 — what stands where a building's owner and picker were.
+      '.p86-td-resp{display:inline-flex;align-items:center;gap:6px;}' +
+      '.p86-td-resp-field{flex:1 1 100%;flex-direction:column;align-items:flex-start;gap:3px;}' +
+      '.p86-td-resp-lbl{font-size:12px;font-weight:600;color:var(--muted,#71717a);}' +
+      '.p86-td-resp-who{font-size:12.5px;color:var(--text,#e9ecf5);}' +
+      '.p86-td-resp-note{font-size:11.5px;line-height:1.5;color:var(--text-dim,#8a8a9a);}' +
       // List
       '.p86-task-list{display:flex;flex-direction:column;gap:1px;}' +
       // Grouped sections — Overdue / Today / Upcoming / No due date / Completed.
@@ -515,6 +555,9 @@
 
   function renderEditor(task) {
     var checklist = Array.isArray(task.checklist) ? task.checklist : [];
+    // Decided ONCE, off the row the server just sent, and read by all three
+    // places a building differs: the owner line, the picker, and the save.
+    var _isBldg = isWorkOrderBuilding(task);
     function _lbl(arr, v) { for (var i = 0; i < arr.length; i++) { if (arr[i].v === v) return arr[i].label; } return v || ''; }
     var _clDone = checklist.filter(function (c) { return c && c.done; }).length;
     var _linkChip = task.entity_type ? esc(task.linked_label || (window.entityDisplayName && window.entityDisplayName(task.entity_type, task.entity_id)) || task.entity_type) : '';
@@ -543,7 +586,9 @@
               '</div>' +
               '<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:9px;font-size:12px;color:var(--text-dim,#888);">' +
                 '<span>&#x1F4C5; ' + (task.due_date ? esc((task.due_date || '').slice(0, 10)) : 'No due date') + '</span>' +
-                '<span>&#x1F464; ' + esc(task.assignee_name || 'Unassigned') + '</span>' +
+                (_isBldg
+                  ? '<span class="p86-td-resp" data-building-responsible title="' + escAttr(BUILDING_RULE) + '">&#x1F465; ' + esc(BUILDING_RESPONSIBLE) + '</span>'
+                  : '<span>&#x1F464; ' + esc(task.assignee_name || 'Unassigned') + '</span>') +
                 (task.created_at ? '<span>&#x1F552; Created ' + esc(String(task.created_at).slice(0, 10)) + '</span>' : '') +
               '</div>' +
             '</div>' +
@@ -615,8 +660,14 @@
           '<div class="p86-task-row-fields">' +
             '<label style="display:flex;flex-direction:column;gap:3px;font-size:12px;">Due' +
               '<input id="tdDue" type="date" value="' + escAttr((task.due_date || '').slice(0, 10)) + '" /></label>' +
-            '<label style="display:flex;flex-direction:column;gap:3px;font-size:12px;">Assignee' +
-              assigneeSelectHTML('tdAssignee', task.assignee_user_id) + '</label>' +
+            (_isBldg
+              ? '<div class="p86-td-resp p86-td-resp-field" data-building-responsible>' +
+                  '<span class="p86-td-resp-lbl">Responsible</span>' +
+                  '<span class="p86-td-resp-who">&#x1F465; ' + esc(BUILDING_RESPONSIBLE) + '</span>' +
+                  '<span class="p86-td-resp-note">' + esc(BUILDING_RULE) + '</span>' +
+                '</div>'
+              : '<label style="display:flex;flex-direction:column;gap:3px;font-size:12px;">Assignee' +
+                  assigneeSelectHTML('tdAssignee', task.assignee_user_id) + '</label>') +
           '</div>' +
           (task.entity_type ? '<div style="margin-top:10px;"><span class="p86-task-linkchip">Linked: ' + esc(task.linked_label || (window.entityDisplayName && window.entityDisplayName(task.entity_type, task.entity_id)) || task.entity_type) + '</span></div>' : '') +
           // Location — search an address (same Places autocomplete as the rest of
@@ -975,7 +1026,8 @@
     h.modal.querySelector('#tdSave').addEventListener('click', function () {
       var title = (h.modal.querySelector('#tdTitle').value || '').trim();
       if (!title) { h.modal.querySelector('#tdTitle').focus(); return; }
-      var asg = h.modal.querySelector('#tdAssignee').value;
+      // There is no picker on a building, so there is nothing to read.
+      var asgEl = h.modal.querySelector('#tdAssignee');
       var _lat = parseFloat(h.modal.querySelector('#tdLat').value);
       var _lng = parseFloat(h.modal.querySelector('#tdLng').value);
       var _hasPin = isFinite(_lat) && isFinite(_lng);
@@ -986,13 +1038,17 @@
         priority: h.modal.querySelector('#tdPriority').value,
         kind: h.modal.querySelector('#tdKind').value,
         due_date: h.modal.querySelector('#tdDue').value || null,
-        assignee_user_id: asg ? Number(asg) : null,
         checklist: clState.filter(function (c) { return (c.text || '').trim(); }),
         directions: h.modal.querySelector('#tdDirections').value || null,
         lat: _hasPin ? _lat : null,
         lng: _hasPin ? _lng : null,
         geo_accuracy: _hasPin ? (_geoAcc || null) : null
       };
+      // assignee_user_id IS ABSENT FROM A BUILDING'S PATCH — not null, absent.
+      // The server keys its refusal on the field being PRESENT, so sending the
+      // old value back, or null, is a write it refuses (409), and the title,
+      // notes, due date, status, pin and checklist beside it die with it.
+      if (!_isBldg) payload.assignee_user_id = (asgEl && asgEl.value) ? Number(asgEl.value) : null;
       var btn = h.modal.querySelector('#tdSave');
       btn.disabled = true; btn.textContent = 'Saving…';
       api().update(task.id, payload).then(function () {
@@ -1261,7 +1317,11 @@
       var dc = dueChip(t.due_date, done);
       if (dc) meta.push(dc);
       if (t.kind && t.kind !== 'todo') meta.push('<span>' + esc((KINDS.filter(function (k) { return k.v === t.kind; })[0] || {}).label || t.kind) + '</span>');
-      if (t.assignee_user_id) {
+      // Buildings are off every list since 1.33 (the server drops them unless
+      // asked by service_ticket_id or include_work_orders=1, and this list asks
+      // neither). The guard is what makes "no per-building owner anywhere" true
+      // by construction rather than by that door holding.
+      if (t.assignee_user_id && !isWorkOrderBuilding(t)) {
         var nm = t.assignee_name || userName(t.assignee_user_id);
         meta.push('<span class="p86-task-avatar" title="' + escAttr(nm) + '">' + esc(initialsOf(nm)) + '</span>');
       }
@@ -1289,7 +1349,7 @@
       var pm = priorityMeta(t.priority);
       var dc = dueChip(t.due_date, done);
       var whoCell = '<span class="p86-tg-dash">—</span>';
-      if (t.assignee_user_id) {
+      if (t.assignee_user_id && !isWorkOrderBuilding(t)) {   // same rule, columnar view
         var nm = t.assignee_name || userName(t.assignee_user_id);
         whoCell = '<span class="p86-task-avatar" title="' + escAttr(nm) + '">' + esc(initialsOf(nm)) + '</span>' +
                   '<span class="p86-tg-who-nm">' + esc(shortName(nm)) + '</span>';
@@ -1688,9 +1748,16 @@
     // from a building on a work order — and since 1.33 took buildings off
     // every task list, this is the first place people will come looking for
     // them. One quiet line, no rename, no change to what the tab lists.
+    // 1.35 added the second half: pointing at the work order is only half an
+    // answer if the reader still thinks one of those buildings is somebody’s.
+    // Nobody owns one — everyone the work order is assigned to is equally
+    // responsible for every building on it, which is the rule the server
+    // refuses writes with (MSG.notAssignable) said in a note’s voice.
     var punchNote = (kind === 'punch')
       ? '<div class="p86-punch-wo-note" style="font-size:12.5px;color:var(--text-dim,#8a8a9a);margin:2px 0 10px;">' +
-          'Buildings on a work order are on the work order &mdash; see Service Tickets &rarr; My work.' +
+          'Buildings on a work order are on the work order &mdash; see Service Tickets &rarr; My work. ' +
+          'No building is assigned to one person: everyone the work order is assigned to is equally ' +
+          'responsible for every building on its punch list.' +
         '</div>'
       : '';
     body.innerHTML = '<div id="teamBar"></div>' + punchNote + '<div id="teamList"></div>';

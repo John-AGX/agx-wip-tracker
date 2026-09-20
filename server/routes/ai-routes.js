@@ -8554,6 +8554,12 @@ const PAYLOAD_TOOLS = [
       // A work order on a job or a lead. Index form, for the same reason as
       // the attachment entry above: the field list, the child-task shape and
       // the refusals live in the Scribe baseline.
+      //
+      // 1.35: a task_adds entry — a BUILDING — takes no assignee_user_id. This
+      // file writes no task row itself; every 86 write goes through
+      // services/payload-dispatcher.js applyPayload, which refuses the key by
+      // name, so the rule is enforced in one place rather than restated here.
+      // Who is responsible is fields.assignee_user_id, the work order's own.
       'service_ticket {op,fields,task_adds} · ' +
       'deal_memory {note_adds,note_supersedes} · ' +
       'calendar_event {title,starts_at} = appointment · reminder {title,remind_at} = private nudge · ' +
@@ -9415,11 +9421,19 @@ async function readServiceTicketForAgent(id, depth, includes, ctx) {
   // and therefore the one `FROM tasks` in this file that deliberately carries
   // no notAWorkOrderBuildingSql. 1.33 took buildings off every general task
   // list; excluding them here would empty the work order of the work.
+  //
+  // AND IT ASKS FOR NO OWNER (1.35). The `LEFT JOIN users ku ON ku.id =
+  // k.assignee_user_id` that used to sit here turned a column a building
+  // inherited by being a task row into a name printed beside every line of the
+  // punch list — a per-building owner, on the one read where the work order's
+  // real Assigned to is already printed four lines above. Nothing sets
+  // tasks.assignee_user_id on a building and nothing else reads it, so the
+  // names it produced were whatever an older release happened to leave behind:
+  // stale on the rows that had one, and a silent "nobody" on the rest. The
+  // projection is gone with the join, so there is no column left to print.
   const kr = await pool.query(
-    `SELECT k.id, k.title, k.status, k.due_date, k.completed_at, k.archived_at,
-            ku.name AS assignee_name
+    `SELECT k.id, k.title, k.status, k.due_date, k.completed_at, k.archived_at
        FROM tasks k
-       LEFT JOIN users ku ON ku.id = k.assignee_user_id AND ku.organization_id = k.organization_id
       WHERE k.service_ticket_id = $1 AND k.organization_id = $2 AND k.archived_at IS NULL
         AND (k.scope = 'org' OR (k.scope = 'personal' AND k.owner_user_id = $3))
       ORDER BY k.created_at ASC
@@ -9500,13 +9514,17 @@ async function readServiceTicketForAgent(id, depth, includes, ctx) {
   }
 
   if (kr.rows.length) {
-    lines.push('\nTasks (' + kr.rows.length + '):');
+    // NO NAME PER LINE (1.35). The one Assigned to on this read is the work
+    // order's own, printed above; everyone on the record is equally responsible
+    // for every building here. The header says so once so a model reading a
+    // list of owner-less lines does not fill the gap with "unassigned".
+    lines.push('\nTasks (' + kr.rows.length + ') — everyone this work order is assigned to ' +
+      'is equally responsible for every one of them; a building is never assigned to one person:');
     kr.rows.forEach((k) => {
       const done = k.status === 'done' || k.status === 'complete' || !!k.completed_at;
       const kDue = dayOf(k.due_date);
       lines.push('  ' + (done ? '[x] ' : '[ ] ') + (short(k.title, 200) || '(untitled)') +
-        ' — ' + (k.status || 'open') + (kDue ? ', due ' + kDue : '') +
-        (k.assignee_name ? ', ' + short(k.assignee_name, 120) : '') + '  [' + k.id + ']');
+        ' — ' + (k.status || 'open') + (kDue ? ', due ' + kDue : '') + '  [' + k.id + ']');
     });
   }
 
@@ -11688,16 +11706,31 @@ async function execStaffTool(name, input, ctx) {
         // current as the last boot's backfill (see the header of
         // server/services/attachment-org-scope.js), so bare equality would
         // silently zero the completion-photo count on legacy rows.
+        // THE WORK ORDER'S OWN Assigned to RIDES ALONG (1.35). A building on a
+        // punch list is a task row, so this arm answers with one — but it has
+        // no owner of its own, and `au` below is the wrong person to print for
+        // it. The two joins added here read the RECORD's assignee, which is the
+        // one Assigned to that means anything, in the ticket's own org so a
+        // building can never name another tenant's user. Both are LEFT joins on
+        // a nullable column: an ordinary task simply carries nulls and prints
+        // exactly what it printed before.
         const r = await pool.query(
           `SELECT t.*,
                   au.name AS assignee_name,
                   cu.name AS created_by_name,
+                  st.title AS work_order_title,
+                  st.ticket_number AS work_order_number,
+                  stu.name AS work_order_assignee_name,
                   (SELECT COUNT(*)::int FROM attachments a
                      WHERE a.entity_type = 'task' AND a.entity_id = t.id
                        AND (a.organization_id = t.organization_id OR a.organization_id IS NULL)) AS photo_count
              FROM tasks t
              LEFT JOIN users au ON au.id = t.assignee_user_id
              LEFT JOIN users cu ON cu.id = t.created_by
+             LEFT JOIN service_tickets st ON st.id = t.service_ticket_id
+                                         AND st.organization_id = t.organization_id
+             LEFT JOIN users stu ON stu.id = st.assignee_user_id
+                                AND stu.organization_id = st.organization_id
             WHERE t.id = $1 AND t.organization_id = $2 AND t.archived_at IS NULL
               AND (t.scope = 'org' OR (t.scope = 'personal' AND t.owner_user_id = $3))`,
           [String(taskId), taskOrgId, Number((ctx && ctx.userId) || 0)]
@@ -11708,7 +11741,25 @@ async function execStaffTool(name, input, ctx) {
         lines.push('Task: ' + (t.title || '(untitled)') + '  [' + t.id + ']');
         lines.push('Status: ' + (t.status || 'open') + '  | Priority: ' + (t.priority || 'normal') + '  | Kind: ' + (t.kind || 'todo'));
         if (t.due_date) lines.push('Due: ' + fmtDay(t.due_date));
-        lines.push('Assignee: ' + (t.assignee_name || (t.assignee_user_id ? '#' + t.assignee_user_id : 'unassigned')));
+        // A BUILDING IS NEVER ASSIGNED TO ONE PERSON (1.35). This arm is the
+        // one general task read that still answers with a building, so it is
+        // also the one that used to print a per-building owner —
+        // tasks.assignee_user_id, a column a building inherited by being a task
+        // row, that no screen sets and that nothing else reads any more. Printed
+        // beside a building it read as authoritative and meant nothing, and a
+        // model relaying it told somebody they were not on the hook for a
+        // building that is just as much theirs as every other one on the list.
+        // What prints instead is the WORK ORDER's own Assigned to, in the same
+        // sentence the write doors refuse with, so the read and the refusal say
+        // one thing.
+        if (subtaskDoor.isWorkOrderSubtask(t)) {
+          lines.push('On work order: ' + (t.work_order_number ? t.work_order_number + ' ' : '') +
+            (t.work_order_title || '(untitled)') + '  [' + t.service_ticket_id + ']');
+          lines.push("Work order's Assigned to: " + (t.work_order_assignee_name || 'unassigned'));
+          lines.push(subtaskDoor.MSG.notAssignable);
+        } else {
+          lines.push('Assignee: ' + (t.assignee_name || (t.assignee_user_id ? '#' + t.assignee_user_id : 'unassigned')));
+        }
         if (t.created_by_name) lines.push('Created by: ' + t.created_by_name);
         if (t.entity_type && t.entity_id) {
           const label = await resolveTaskEntityLabel(taskOrgId, t.entity_type, t.entity_id);
@@ -11757,7 +11808,23 @@ async function execStaffTool(name, input, ctx) {
       const q = String((input && (input.q || input.filter)) || '').trim();
       if (q) { where.push('t.title ILIKE $' + (pn++)); params.push('%' + q + '%'); }
 
-      const assignee = String((input && input.assignee) || '').trim();
+      // NO PER-BUILDING FILTER, ANYWHERE (1.35) — the same sentence
+      // server/routes/tasks-routes.js' list door now says, for the same reason.
+      // `assignee` filters on the TASK ROW's own assignee, and a building on a
+      // work order has no owner of its own: responsibility sits on the record
+      // (service_tickets.assignee_user_id) and everyone on it is equally
+      // responsible for every building on its punch list. So in the ONE case
+      // that lets buildings onto this list — include_work_order_buildings — the
+      // filter is not applied at all. Answering
+      // `{include_work_order_buildings:'1', assignee:'me'}` with "the buildings
+      // that name me" would be a per-building owner filter wearing a
+      // general-purpose name: authoritative-looking and meaningless, and read
+      // out loud by a model as "these are the ones you're on the hook for".
+      //
+      // Filtering by the WORK ORDER's assignee is a different, real question,
+      // and it is still answered — GET /api/service-tickets/my-buildings
+      // matches the caller on the TICKET and returns its whole punch list.
+      const assignee = includeBuildings ? '' : String((input && input.assignee) || '').trim();
       const meId = ctx && ctx.userId;
       if (assignee === 'me' && meId) { where.push('t.assignee_user_id = $' + (pn++)); params.push(Number(meId)); }
       else if (assignee === 'unassigned') { where.push('t.assignee_user_id IS NULL'); }
@@ -11774,12 +11841,23 @@ async function execStaffTool(name, input, ctx) {
       if (input && input.due_after)  { where.push('t.due_date IS NOT NULL AND t.due_date >= $' + (pn++)); params.push(String(input.due_after)); }
 
       const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 30));
+      // `t.scope` and `t.service_ticket_id` are projected so the printer can
+      // ask subtaskDoor.isWorkOrderSubtask per row rather than re-deriving the
+      // rule, and the two work-order joins carry the RECORD's Assigned to — the
+      // only owner a building has. Nulls for every ordinary task, which is why
+      // the line below is unchanged for them.
       const sql =
         `SELECT t.id, t.title, t.status, t.priority, t.kind, t.due_date,
                 t.entity_type, t.entity_id, t.assignee_user_id,
-                au.name AS assignee_name
+                t.scope, t.service_ticket_id,
+                au.name AS assignee_name,
+                stu.name AS work_order_assignee_name
            FROM tasks t
            LEFT JOIN users au ON au.id = t.assignee_user_id
+           LEFT JOIN service_tickets st ON st.id = t.service_ticket_id
+                                       AND st.organization_id = t.organization_id
+           LEFT JOIN users stu ON stu.id = st.assignee_user_id
+                              AND stu.organization_id = st.organization_id
           WHERE ${where.join(' AND ')}
           ORDER BY (t.status = 'done') ASC,
                    t.due_date ASC NULLS LAST,
@@ -11795,7 +11873,13 @@ async function execStaffTool(name, input, ctx) {
           (t.priority && t.priority !== 'normal' ? ' · ' + t.priority : '') +
           (t.kind && t.kind !== 'todo' ? ' · ' + t.kind : '') +
           (t.due_date ? ' · due ' + fmtDay(t.due_date) : '') +
-          (t.assignee_name ? ' · @' + t.assignee_name : (t.assignee_user_id ? ' · @#' + t.assignee_user_id : ' · unassigned')) +
+          // A building names the WORK ORDER's Assigned to, never its own row's
+          // (1.35). Buildings only reach this list through
+          // include_work_order_buildings, and when they do they must not print
+          // an owner nobody set.
+          (subtaskDoor.isWorkOrderSubtask(t)
+            ? ' · work order @' + (t.work_order_assignee_name || 'unassigned')
+            : (t.assignee_name ? ' · @' + t.assignee_name : (t.assignee_user_id ? ' · @#' + t.assignee_user_id : ' · unassigned'))) +
           (t.entity_type && t.entity_id ? ' · on ' + t.entity_type + ' ' + t.entity_id : ''));
       }
       return out.join('\n');

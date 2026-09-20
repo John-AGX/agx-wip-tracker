@@ -278,9 +278,9 @@ describe('the mutation harness is not the thing being fooled', () => {
   });
   test('a multi-line anchor written with LF matches the CRLF file and the mutant behaves differently', async () => {
     const mut = mutate(
-      'const SERVICE_TICKET_TASK_KEYS = new Set([\'title\', \'notes\', \'priority\', \'due_date\', \'assignee_user_id\']);\n' +
-      '// A work order',
-      'const SERVICE_TICKET_TASK_KEYS = new Set([\'title\']);\n// A work order');
+      'const SERVICE_TICKET_TASK_KEYS = new Set([\'title\', \'notes\', \'priority\', \'due_date\']);\n' +
+      '// Keys on a task_adds entry',
+      'const SERVICE_TICKET_TASK_KEYS = new Set([\'title\']);\n// Keys on a task_adds entry');
     const t = [ticket({ title: 'T', job_id: 'j1' }, { ops: { fields: { title: 'T', job_id: 'j1' }, task_adds: [{ title: 'a', notes: 'n' }] } })];
     expect((await drive(REAL_MOD(), t, JOHN)).stage).toBe('applied');
     seedInto(eng);
@@ -697,18 +697,33 @@ describe('PAYLOAD_APPLY_CAP.service_ticket — the coarse half at the route', ()
  * ASSIGNEES — in this organization, or refused
  * ══════════════════════════════════════════════════════════════════════════*/
 describe('an assignee from another organization is refused', () => {
-  test('on the ticket and on a child task', async () => {
+  test('on the ticket — the ONE assignee a work order has', async () => {
     const onTicket = await drive(REAL_MOD(), [ticket({ title: 'x', job_id: 'j1', assignee_user_id: 20 })], JOHN);
     expect([onTicket.stage, onTicket.detail.code, onTicket.detail.retryable]).toEqual(['apply', 'assignee_not_in_org', false]);
-    const onTask = await drive(REAL_MOD(), [ticket({ title: 'x', job_id: 'j1' }, {
-      ops: { fields: { title: 'x', job_id: 'j1' }, task_adds: [{ title: 'a', assignee_user_id: 20 }] } })], JOHN);
-    expect(onTask.detail.field_path).toBe('service_ticket.ops.task_adds[0].assignee_user_id');
     expect(newTickets()).toHaveLength(0);
     expect(eng.count('SELECT 1 FROM tasks')).toBe(0);
 
     const inOrg = await drive(REAL_MOD(), [ticket({ title: 'x', job_id: 'j1', assignee_user_id: 11 })], JOHN);
     expect(inOrg.stage).toBe('applied');
     expect(newTickets()[0].assignee_user_id).toBe(11);
+  });
+
+  test('a child task has no assignee to be in or out of the org — the key is refused outright (1.35)', async () => {
+    // Before 1.35 this asked whether user 20 was in the org. The question does
+    // not arise any more: a BUILDING is never assigned to one person, in this
+    // org or any other, so the key is refused before the org is ever consulted.
+    for (const uid of [20, 11]) {
+      const r = await drive(REAL_MOD(), [ticket({ title: 'x', job_id: 'j1' }, {
+        ops: { fields: { title: 'x', job_id: 'j1' }, task_adds: [{ title: 'a', assignee_user_id: uid }] } })], JOHN);
+      expect([r.stage, r.detail.code, r.detail.retryable, r.detail.field_path])
+        .toEqual(['emit', 'building_not_assignable', false, 'service_ticket.ops.task_adds[0].assignee_user_id']);
+      // The SAME sentence the two REST doors and the task link say.
+      expect(r.message).toContain('A building on a work order is never assigned to one person.');
+      expect(r.message).toContain("Set the work order's Assigned to instead");
+      expect(r.message).toContain('Nothing was saved.');
+      expect(newTickets()).toHaveLength(0);
+      expect(eng.count('SELECT 1 FROM tasks')).toBe(0);
+    }
   });
 
   test('on UPDATE: a foreign assignee refuses the whole edit, non-retryably, with no timeline row', async () => {
@@ -1319,14 +1334,16 @@ describe('task_adds', () => {
   test('each task carries the ticket id AND the ticket\'s parent entity, scope org, stamped org and creator', async () => {
     const r = await drive(REAL_MOD(), [ticket({ title: 'Punch list', job_id: 'j1' }, {
       ops: { fields: { title: 'Punch list', job_id: 'j1' },
-        task_adds: [{ title: 'Caulk tub', due_date: '2026-09-20', priority: 'high' }, { title: 'Touch-up paint', assignee_user_id: 11 }] } })], JOHN);
+        task_adds: [{ title: 'Caulk tub', due_date: '2026-09-20', priority: 'high' }, { title: 'Touch-up paint', notes: 'two coats' }] } })], JOHN);
     expect(r.stage).toBe('applied');
     const id = newTickets()[0].id;
     const tasks = eng.all('SELECT * FROM tasks ORDER BY title');
+    // assignee_user_id is NULL on BOTH, always (1.35): a building is never
+    // assigned, so the column is not even in the INSERT.
     expect(tasks.map((t) => [t.title, t.entity_type, t.entity_id, t.service_ticket_id, t.scope, t.organization_id, t.created_by, t.assignee_user_id]))
       .toEqual([
         ['Caulk tub', 'job', 'j1', id, 'org', 1, 10, null],
-        ['Touch-up paint', 'job', 'j1', id, 'org', 1, 10, 11],
+        ['Touch-up paint', 'job', 'j1', id, 'org', 1, 10, null],
       ]);
     expect(tasks.find((t) => t.title === 'Caulk tub').due_date).toBe('2026-09-20');
 
@@ -1373,6 +1390,76 @@ describe('task_adds', () => {
     const mut = mutate('    .filter((t) => !(t && t.rolled_up))\n', '');
     const r = await drive(mut, [update('st_open', { task_adds: [{ title: 'a' }] })], JOHN);
     expect(r.res.apply_summary).toMatch(/; task task_\S+ \(create\)/);
+  });
+
+  /* ── 1.35: 86 CANNOT ASSIGN A BUILDING EITHER ───────────────────────────
+   *
+   * The owner: "i dont want assignments to individual buildings like that,
+   * whoever is assigned to the ticket, task or work order is evenly
+   * responsible." The REST doors refuse it; so must the door the Scribe
+   * writes through, or the rule has a back entrance with a model behind it.
+   */
+  test('the refusal is BY NAME, never the unknown-key answer — the model must not try a spelling variant', async () => {
+    const r = await drive(REAL_MOD(), [update('st_open', { task_adds: [{ title: 'a', assignee_user_id: 11 }] })], JOHN);
+    expect(r.detail.code).toBe('building_not_assignable');
+    expect(r.detail.code).not.toBe('unknown_field');
+    expect(r.message).not.toMatch(/unknown key/i);
+    // A key that really IS a typo still gets the unknown-key answer, so the
+    // two are told apart rather than merged.
+    const typo = await drive(REAL_MOD(), [update('st_open', { task_adds: [{ title: 'a', assinee: 11 }] })], JOHN);
+    expect(typo.detail.code).toBe('unknown_field');
+    expect(eng.count('SELECT 1 FROM tasks')).toBe(0);
+  });
+
+  test('the whole payload is refused: a good task beside a bad one writes nothing', async () => {
+    const r = await drive(REAL_MOD(), [update('st_open', {
+      task_adds: [{ title: 'fine' }, { title: 'bad', assignee_user_id: 11 }] })], JOHN);
+    expect(r.detail.field_path).toBe('service_ticket.ops.task_adds[1].assignee_user_id');
+    expect(eng.count('SELECT 1 FROM tasks')).toBe(0);
+    expect(eng.count("SELECT 1 FROM service_ticket_events WHERE kind = 'task_added'")).toBe(0);
+  });
+
+  test('MUTANT: put the key back in the read set and 86 mints an assigned building', async () => {
+    const mut = mutatePairs([
+      ["const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date']);",
+        "const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date', 'assignee_user_id']);"],
+      ['const SERVICE_TICKET_TASK_REFUSED_KEYS = {\n  assignee_user_id: subtaskDoor.MSG.notAssignable,\n};',
+        'const SERVICE_TICKET_TASK_REFUSED_KEYS = {};'],
+      ["    if (t.due_date != null && t.due_date !== '') { cols.push('due_date'); vals.push(String(t.due_date).trim()); names.push('due_date'); }",
+        "    if (t.due_date != null && t.due_date !== '') { cols.push('due_date'); vals.push(String(t.due_date).trim()); names.push('due_date'); }\n" +
+        "    if (t.assignee_user_id != null) { cols.push('assignee_user_id'); vals.push(Number(t.assignee_user_id)); names.push('assignee_user_id'); }"],
+    ]);
+    const r = await drive(mut, [update('st_open', { task_adds: [{ title: 'Touch-up paint', assignee_user_id: 11 }] })], JOHN);
+    expect(r.stage).toBe('applied');
+    expect(one('SELECT assignee_user_id FROM tasks').assignee_user_id).toBe(11);
+    // The shipped dispatcher refuses the same payload and writes no row.
+    seedInto(eng);
+    expect((await drive(REAL_MOD(), [update('st_open', { task_adds: [{ title: 'Touch-up paint', assignee_user_id: 11 }] })], JOHN)).detail.code)
+      .toBe('building_not_assignable');
+    expect(eng.count('SELECT 1 FROM tasks')).toBe(0);
+  });
+
+  test('a task payload cannot mint a building at all: fields.service_ticket_id is refused by name', async () => {
+    // dispatchTask always stamps an assignee_user_id, so a task target that
+    // could carry a service_ticket_id would be a second way to make an
+    // assigned building. The key is not in TASK_FIELDS and is refused by name.
+    for (const kind of ['task', 'todo']) {
+      const r = await drive(REAL_MOD(), [{ entity_type: kind, ops: { op: 'create',
+        fields: { title: 'Bldg 4', service_ticket_id: 'st_open' } } }], JOHN);
+      expect([r.stage, r.detail.code, r.detail.retryable])
+        .toEqual(['emit', 'building_not_assignable', false]);
+      expect(r.detail.field_path).toBe(kind + '.ops.fields.service_ticket_id');
+      expect(r.message).toContain('service_ticket.ops.task_adds');
+    }
+    expect(eng.count('SELECT 1 FROM tasks')).toBe(0);
+  });
+
+  test('CONTROL: an ordinary task target is still created, assigned, exactly as before', async () => {
+    const r = await drive(REAL_MOD(), [{ entity_type: 'task', ops: { op: 'create',
+      fields: { title: 'Order the trim', assignee_user_id: 11 } } }], JOHN);
+    expect(r.stage).toBe('applied');
+    const t = one('SELECT * FROM tasks');
+    expect([t.title, t.assignee_user_id, t.service_ticket_id]).toEqual(['Order the trim', 11, null]);
   });
 });
 

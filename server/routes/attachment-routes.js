@@ -522,23 +522,40 @@ async function workOrderTicketFor(req, entityType, entityId) {
 }
 
 // THE ONE EXCEPTION, and only on the WRITE half of a BUILDING.
-// services/service-ticket-subtask-door.js doneVerdict lets a building's
-// ASSIGNEE finish it without any right to edit the job, and finishing a
-// building means uploading (and fixing) its completion photo — so the ticket's
-// write rule alone would refuse a flow 1.29 ships. Nobody can hand themselves
-// this: assignVerdict lets only someone who can edit the parent decide who a
-// building is assigned to. It is an exception to WHO MAY WRITE, not to what may
-// happen to the proof — the photo guard still refuses to let the assignee take
-// the last completion photo off a building that is done, or any photo off an
-// approved or closed work order.
+// services/service-ticket-subtask-door.js doneVerdict lets the WORK ORDER's
+// ASSIGNEE finish its buildings without any right to edit the job, and
+// finishing a building means uploading (and fixing) its completion photo — so
+// the ticket's write rule alone would dead-end the flow the release exists for:
+// the crew lead on the record could tick the box but never supply the proof the
+// box demands. It is an exception to WHO MAY WRITE, not to what may happen to
+// the proof — the photo guard still refuses to let them take the last
+// completion photo off a building that is done, or any photo off an approved or
+// closed work order.
 //
-// The org predicate is the caller's proven organization, not the task's.
+// RESPONSIBILITY SITS ON THE RECORD (1.35). This used to read the BUILDING's
+// own assignee. A building is never assigned to anyone now — assignVerdict
+// refuses it from every door, and nothing writes tasks.assignee_user_id — so
+// that question had no answer left and the exception could never fire. The
+// question is the record's instead: whoever the work order is assigned to is
+// equally responsible for every building on its punch list, and that field can
+// only be written by someone who may edit the parent, so nobody can hand
+// themselves this. (The function keeps its name so it stays legible beside the
+// identical copy in services/payload-dispatcher.js; what it answers is "is the
+// caller the assignee of THIS BUILDING'S WORK ORDER".)
+//
+// The building is resolved to its work order exactly as the ticket rule
+// resolves it — task -> service_ticket_id -> ticket, org subtasks only — and
+// the org predicate on BOTH rows is the caller's proven organization, never the
+// stamp on the task or on the ticket.
 async function isBuildingAssignee(req, taskId) {
   const orgId = callerOrgId(req);
   const uid = req.user && req.user.id != null ? Number(req.user.id) : null;
   if (taskId == null || orgId == null || uid == null || !Number.isFinite(uid)) return false;
   const r = await pool.query(
-    'SELECT assignee_user_id FROM tasks WHERE id = $1 AND organization_id = $2',
+    `SELECT assignee_user_id FROM service_tickets
+       WHERE id = (SELECT service_ticket_id FROM tasks WHERE id = $1 AND organization_id = $2
+                     AND scope = 'org' AND service_ticket_id IS NOT NULL)
+         AND organization_id = $2`,
     [String(taskId), orgId]
   );
   const row = r.rows[0];
@@ -564,8 +581,9 @@ async function ticketParentOk(req, res, entityType, entityId, mode, notFoundBody
     mode,
   });
   if (verdict.ok === true) return true;
-  // The building's assignee, on the write half only. Asked AFTER the ticket
-  // rule, so it can only ever widen a refusal to an allow — never the reverse.
+  // The WORK ORDER's assignee, on the write half only, and only on one of its
+  // buildings. Asked AFTER the ticket rule, so it can only ever widen a refusal
+  // to an allow — never the reverse.
   if (mode === 'write' && wo.taskId != null && await isBuildingAssignee(req, wo.taskId)) return true;
   if (verdict.hidden) res.status(404).json(notFoundBody || { error: 'Not found' });
   else res.status(403).json(forbiddenBody || { error: 'Forbidden' });

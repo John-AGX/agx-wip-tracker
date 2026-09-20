@@ -23,21 +23,38 @@
 //   expiring     can read it; a live crew link expires within 3 days.
 //   suggestions  can edit it; crew suggestions pending for more than 24 hours.
 //   your_buildings
-//                is the ASSIGNEE of at least one live, open org building on it
-//                (tasks.assignee_user_id). How many are still open, and the
-//                soonest due date among them. Not gated on access — see below.
+//                THE WORK ORDER IS ASSIGNED TO THIS PERSON
+//                (service_tickets.assignee_user_id, the Assigned to the office
+//                sets from a real dropdown) and its punch list still has at
+//                least one live, open org building. How many are still open,
+//                and the soonest due date among them. Not gated on access —
+//                see below.
+//
+// RESPONSIBILITY SITS ON THE RECORD, NEVER ON A BUILDING (1.35, the owner:
+// "whoever is assigned to the ticket, task or work order is evenly
+// responsible"). A building is a row in `tasks` and so inherited
+// tasks.assignee_user_id by accident; no screen ever offered to set it, and
+// since 1.35 no door will. This section therefore reads that column on a
+// building NOWHERE: it asks the ticket who it is assigned to, and counts the
+// work order's WHOLE punch list, because everyone on the record is equally
+// responsible for every building on it. That is the same predicate
+// services/service-ticket-subtask-door.js myOpenBuildingSql spells for
+// GET /api/service-tickets/my-buildings, said here in one org-wide pass.
+//   A value left on an old building row is not read and not cleared: there is
+//   no backfill anywhere in 1.35.
 //
 // THE ONE SECTION THAT IS NOT GATED ON ACCESS. Every section above is filtered
 // through reaches(), which is services/service-ticket-access.js listVisibility.
-// your_buildings deliberately is not, and must never be. A building is assigned
-// to a PERSON, and services/service-ticket-subtask-door.js doneVerdict lets that
-// person finish it on a job they cannot otherwise open. Since 1.33 buildings are
-// off every task list (the owner's rule: a service ticket is not a task), so
-// this section — and GET /api/service-tickets/my-buildings, the same rule on the
-// page — is the only place that person is TOLD about work assigned to them. Put
-// it through listVisibility and a crew lead is shown nothing, which is the exact
-// failure it exists to prevent. Nor is membership of `related` / relationIds
-// asked: being the assignee of a building is the whole claim.
+// your_buildings deliberately is not, and must never be. The work order's
+// assignee may be a crew lead with no grant on the job, and
+// services/service-ticket-subtask-door.js doneVerdict lets exactly that person
+// tick its buildings off. Since 1.33 buildings are off every task list (the
+// owner's other rule: a service ticket is not a task), so this section — and
+// GET /api/service-tickets/my-buildings, the same rule on the page — is the
+// only place they are TOLD about the punch list they are on the hook for. Put
+// it through listVisibility and that crew lead is shown nothing, which is the
+// exact failure it exists to prevent. Nor is membership of `related` /
+// relationIds asked: being the work order's assignee is the whole claim.
 //   A deliberate widening, named out loud: the recipient learns the job's number
 //   and title (jobLine) and the work order's title for a job they may not be
 //   able to open. That is necessary — they have to know where to go — and it is
@@ -190,7 +207,7 @@ async function attentionForOrg(db, opts) {
   const jobIds = Array.from(new Set(tickets.filter(function (row) { return row.job_id; }).map(function (row) { return String(row.job_id); })));
   const leadIds = Array.from(new Set(tickets.filter(function (row) { return row.lead_id; }).map(function (row) { return String(row.lead_id); })));
 
-  const [shares, pending, tallies, jobRows, grantRows, leadRows, participants, users, myBuildings] = await Promise.all([
+  const [shares, pending, tallies, jobRows, grantRows, leadRows, participants, users] = await Promise.all([
     db.query(
       `SELECT id, ticket_id, created_by, recipient_name, scope, opened_at, revoked_at, expires_at,
               CASE WHEN revoked_at IS NULL AND expires_at > NOW() THEN 1 ELSE 0 END AS live
@@ -205,9 +222,19 @@ async function attentionForOrg(db, opts) {
         GROUP BY ticket_id`,
       [orgId]
     ),
+    // THE WORK ORDER'S OWN PUNCH LIST, read once for both readers of it: the
+    // done/total tally the overdue row shows, and the open count and soonest
+    // due date your_buildings shows. One statement, so "1 of 3 buildings done"
+    // and "2 buildings still open" can never disagree about the same work
+    // order. A building is a live org task on the ticket: `scope = 'org'`
+    // leaves a private to-do that happens to carry a ticket id to its owner,
+    // exactly as services/service-ticket-subtask-door.js draws the line.
+    // NO ASSIGNEE COLUMN IS READ — see "RESPONSIBILITY SITS ON THE RECORD".
     db.query(
       `SELECT service_ticket_id AS ticket_id, COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE status = 'done')::int AS done
+              COUNT(*) FILTER (WHERE status = 'done')::int AS done,
+              COUNT(*) FILTER (WHERE status <> 'done')::int AS open_n,
+              CAST(MIN(due_date) FILTER (WHERE status <> 'done') AS TEXT) AS next_due
          FROM tasks
         WHERE organization_id = $1 AND service_ticket_id = ANY($2::text[]) AND archived_at IS NULL AND scope = 'org'
         GROUP BY service_ticket_id`,
@@ -243,22 +270,6 @@ async function attentionForOrg(db, opts) {
         ORDER BY id ASC`,
       [orgId]
     ),
-    // OPEN BUILDINGS PER ASSIGNEE. The per-ticket tally above cannot answer
-    // this — it has no assignee column — so your_buildings has its own group.
-    // A building is a live org task on the ticket: `scope = 'org'` leaves a
-    // private to-do that happens to carry a ticket id to its owner, exactly as
-    // services/service-ticket-subtask-door.js draws the line.
-    db.query(
-      `SELECT k.service_ticket_id AS ticket_id, k.assignee_user_id AS user_id,
-              COUNT(*)::int AS open_n,
-              CAST(MIN(k.due_date) AS TEXT) AS next_due
-         FROM tasks k
-        WHERE k.organization_id = $1 AND k.service_ticket_id = ANY($2::text[])
-          AND k.archived_at IS NULL AND k.scope = 'org'
-          AND k.status <> 'done' AND k.assignee_user_id IS NOT NULL
-        GROUP BY k.service_ticket_id, k.assignee_user_id`,
-      [orgId, ids]
-    ),
   ]);
 
   let flags = new Map();
@@ -272,12 +283,17 @@ async function attentionForOrg(db, opts) {
   }
 
   const sharesByTicket = groupBy(shares.rows, 'ticket_id');
-  const myBuildingsByTicket = groupBy(myBuildings.rows, 'ticket_id');
   const participantsByTicket = groupBy(participants.rows, 'ticket_id');
   const pendingByTicket = new Map(pending.rows.map(function (r) { return [String(r.ticket_id), Number(r.n) || 0]; }));
   const tallyByTicket = new Map(tallies.rows.map(function (r) {
-    return [String(r.ticket_id), { total: Number(r.total) || 0, done: Number(r.done) || 0 }];
+    return [String(r.ticket_id), {
+      total: Number(r.total) || 0,
+      done: Number(r.done) || 0,
+      open: Number(r.open_n) || 0,
+      nextDue: dayText(r.next_due),
+    }];
   }));
+  const NO_PUNCH_LIST = Object.freeze({ total: 0, done: 0, open: 0, nextDue: null });
   const jobs = new Map(jobRows.rows.map(function (r) { return [String(r.id), r]; }));
   const leads = new Map(leadRows.rows.map(function (r) { return [String(r.id), r]; }));
   const grants = new Map(grantRows.rows.map(function (r) { return [String(r.job_id) + '|' + Number(r.user_id), r.access_level]; }));
@@ -329,6 +345,7 @@ async function attentionForOrg(db, opts) {
     const readers = related.filter(function (p) { return reaches(p, ticket, 'read', jobs, grants); });
     const writers = related.filter(function (p) { return reaches(p, ticket, 'write', jobs, grants); });
     const status = ticket.status;
+    const punch = tallyByTicket.get(id) || NO_PUNCH_LIST;
 
     if (status === 'work_complete' && truthy(ticket.waited_a_day)) {
       const approvers = writers.length
@@ -354,9 +371,8 @@ async function attentionForOrg(db, opts) {
 
     const due = dayText(ticket.due_iso);
     if (ACTIVE_STATUSES.indexOf(status) >= 0 && due && due < today) {
-      const tally = tallyByTicket.get(id) || { total: 0, done: 0 };
       readers.forEach(function (p) {
-        add(p, 'overdue', { ticket: ticket, jobLine: jobLine, dueDate: due, done: tally.done, total: tally.total });
+        add(p, 'overdue', { ticket: ticket, jobLine: jobLine, dueDate: due, done: punch.done, total: punch.total });
       });
     }
 
@@ -390,21 +406,28 @@ async function attentionForOrg(db, opts) {
       });
     }
 
-    // BUILDINGS ASSIGNED TO SOMEONE. Not `readers`, not `writers`, not even
-    // `related`: the assignee is told, whether or not they can open the job.
-    // reaches() is NEVER asked here — see "THE ONE SECTION THAT IS NOT GATED ON
-    // ACCESS" in the header. `add` still honours the `only` (userIds) filter, so
-    // the page's own count is unaffected. No status filter: the ticket query
-    // already keeps only open, scheduled, in_progress and work_complete.
-    (myBuildingsByTicket.get(id) || []).forEach(function (row) {
-      const person = people.get(positiveInt(row.user_id));
-      if (!person) return;   // inactive, or moved to another organization
-      add(person, 'your_buildings', {
-        ticket: ticket, jobLine: jobLine,
-        count: Number(row.open_n) || 0,
-        nextDue: dayText(row.next_due),
-      });
-    });
+    // THE PUNCH LIST OF A WORK ORDER ASSIGNED TO SOMEBODY. The recipient is the
+    // TICKET's own assignee, and the count is the work order's whole open punch
+    // list — never one person's share of it, because there are no shares: the
+    // person the record is assigned to is responsible for every building on it.
+    // Not `readers`, not `writers`, not even `related`: reaches() is NEVER
+    // asked here — see "THE ONE SECTION THAT IS NOT GATED ON ACCESS" in the
+    // header. `add` still honours the `only` (userIds) filter, so the page's
+    // own count is unaffected. No status filter: the ticket query already keeps
+    // only open, scheduled, in_progress and work_complete.
+    if (punch.open > 0) {
+      // Nobody assigned, inactive, or moved to another organization: nobody is
+      // told. `people` holds this org's active users alone, so an assignee id
+      // from another tenant finds nothing here.
+      const owner = people.get(positiveInt(ticket.assignee_user_id));
+      if (owner) {
+        add(owner, 'your_buildings', {
+          ticket: ticket, jobLine: jobLine,
+          count: punch.open,
+          nextDue: punch.nextDue,
+        });
+      }
+    }
   });
 
   out.forEach(function (entry, id) {

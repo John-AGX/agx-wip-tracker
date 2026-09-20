@@ -35,25 +35,38 @@
 //   * "Today" comes from the server in the user's zone, never this browser's
 //     clock, so days late cannot be off by one at night.
 //
-// ── "My work" (1.33) — the one view that is NOT this door ─────────────────
+// ── "My work" (1.33, re-keyed in 1.35) — the view that is NOT this door ───
 // 1.33 took buildings off every task list: a building on a work order is not a
-// to-do. The replacement for the person a building is assigned to lives here,
-// as the FIRST view pill, and it reads a different endpoint:
+// to-do. 1.35 settled who is responsible for one, and the answer is that NO
+// ONE is, personally. A building is never assigned to anybody. Responsibility
+// sits on the RECORD — the work order's own Assigned to, which the office
+// sets from a real dropdown — and everyone on that record is equally
+// responsible for every building on its punch list.
+//
+// So this view is "the work orders assigned to ME that still have a building
+// open". It is the FIRST view pill, and it reads a different endpoint:
 // GET /api/service-tickets/my-buildings.
 //
 // It has to. Everything above is gated by access.listVisibility — the job
-// access rule — and a crew lead is deliberately allowed to finish a building
-// on a job they cannot otherwise open. A view built on ?board=1 would show
-// that person nothing, which is the exact failure this release exists to
-// avoid. So My work is a CLIENT-ONLY view with no counterpart in
-// server/services/service-ticket-board.js VIEWS, its own narrow
-// assignee-based door, and its own row whitelist (MY_WORK_ROW_KEYS).
+// access rule — and the person a work order is assigned to is deliberately
+// allowed to finish a building on a job they cannot otherwise open. A view
+// built on ?board=1 would show that person nothing, which is the exact
+// failure this release exists to avoid. So My work is a CLIENT-ONLY view with
+// no counterpart in server/services/service-ticket-board.js VIEWS, its own
+// narrow record-keyed door, and its own row whitelist (MY_WORK_ROW_KEYS).
+//
+// The door's my_buildings_open / my_buildings_total / my_next_due KEPT THEIR
+// NAMES in 1.35 and changed their meaning: they describe the WORK ORDER's own
+// punch list, not one person's share of it — there is no such share. Nothing
+// on this page may say "your buildings", and nothing here renders a
+// per-building owner, picker, label or filter.
 //
 // Because that door is not gated on job access, a row here can name a job the
 // caller cannot open. Its title is therefore plain text unless this browser
 // has actually loaded the job, and the affordance is the buildings under the
-// row: each one opens window.p86Tasks.openDetail(id), which is how the
-// assignee still ticks it off (GET/PATCH /api/tasks/:id stay open to them).
+// row: each one opens window.p86Tasks.openDetail(id), which is how anyone the
+// work order is assigned to ticks it off (GET/PATCH /api/tasks/:id stay open
+// to them).
 (function () {
   'use strict';
 
@@ -80,11 +93,11 @@
   // file: it reads my-buildings, not ?board=1, and has no entry in the
   // server's board VIEWS on purpose.
   var VIEWS = [
-    { id: 'my_work', label: 'My work', attention: true, tip: 'Work orders with a building open and assigned to you — including jobs you cannot otherwise open', empty: 'No buildings are assigned to you right now.' },
+    { id: 'my_work', label: 'My work', attention: true, tip: 'Work orders assigned to you that still have a building open — including jobs you cannot otherwise open. Everyone assigned to a work order is responsible for every building on it.', empty: 'No work order assigned to you has a building open right now.' },
     { id: 'my_approvals', label: 'My approvals', attention: true, tip: 'Work complete and waiting for you: jobs you run, or tickets you raised, are assigned or sent the crew link for', empty: 'Nothing is waiting for your approval.' },
     { id: 'overdue', label: 'Overdue', attention: true, tip: "Past the due date and the crew isn't finished", empty: 'Nothing is overdue.' },
     { id: 'due_week', label: 'Due this week', tip: 'Due today or in the next 6 days, crew not finished', empty: 'Nothing is due in the next 7 days.' },
-    { id: 'mine', label: 'Assigned to me', tip: 'Assigned to you and not closed or cancelled', empty: 'No open tickets are assigned to you.' },
+    { id: 'mine', label: 'Assigned to me', tip: 'Assigned to you and not closed or cancelled — every one, not only the ones with a building still open', empty: 'No open tickets are assigned to you.' },
     { id: 'unassigned', label: 'Unassigned', tip: 'Not finished and nobody is assigned', empty: 'Every unfinished ticket has an assignee.' },
     { id: 'no_link', label: 'No link sent', tip: 'Open, scheduled or in progress with no working crew link', empty: 'Every ticket in the field has a working crew link.' },
     { id: 'flagged', label: 'Flagged', attention: true, tip: "A crew reported a problem the office hasn't resolved", empty: 'No open problems reported by crews.' },
@@ -131,19 +144,28 @@
   // GET /api/service-tickets/my-buildings answers with, and nothing else.
   // Anything the server ever adds to that body is dropped here too, which is
   // what keeps a price off this page even if one ever reaches the wire.
+  // my_buildings_open / my_buildings_total / my_next_due are the WORK ORDER's
+  // own open count, live count and next due date — 1.35 kept the names and
+  // changed the meaning. They are never "mine": a building has no owner.
   var MY_WORK_ROW_KEYS = [
     'id', 'ticket_number', 'title', 'status', 'priority', 'scheduled_for', 'due_date',
     'street_address', 'city', 'job_id', 'lead_id', 'job_number', 'job_title', 'lead_title',
     'my_buildings_open', 'my_buildings_total', 'my_next_due', 'is_overdue', 'buildings'
   ];
-  // And inside `buildings`, the caller's own rows: oldest first, max 25.
+  // And inside `buildings`, the work order's whole punch list: oldest first,
+  // max 25. There is no assignee on a building row and never will be.
   var BUILDING_KEYS = ['id', 'title', 'status', 'due_date', 'completed_at'];
   // The column header, and the one My work uses instead. My work has no crew
-  // badges (the door does not send them) and no ticket assignee — the person
-  // it is about is the caller.
+  // badges (the door does not send them) and no ticket assignee column — every
+  // row on it is already assigned to the caller.
   var COLS = ['', 'Ticket', 'Status', 'Scheduled', 'Due', 'Assignee', 'Buildings', 'Crew'];
-  var MY_WORK_COLS = ['', 'Ticket', 'Status', 'Scheduled', 'Due', 'Where', 'Your buildings', ''];
-  var MY_WORK_NOTE = "Ordered by due date. Filters and search don't apply to My work.";
+  var MY_WORK_COLS = ['', 'Ticket', 'Status', 'Scheduled', 'Due', 'Where', 'Buildings open', ''];
+  // What the view is, and then what it does not do. The first sentence is the
+  // rule on screen: the work order is yours, its buildings belong to everyone
+  // on it.
+  var MY_WORK_NOTE = "Work orders assigned to you with a building still open. " +
+    "Everyone assigned to a work order is equally responsible for every building on it. " +
+    "Ordered by due date. Filters and search don't apply to My work.";
 
   function byId(list, id) {
     if (typeof id !== 'string') return null;
@@ -535,6 +557,10 @@
   // already loaded here (the same test openRow makes before handing the row
   // to the job's tab); otherwise the title is plain text and the buildings
   // under it are the affordance.
+  //
+  // A row is a WORK ORDER assigned to the caller. The buildings under it are
+  // the work order's whole punch list — shared, unowned, and shown to every
+  // person the record is assigned to in exactly the same words.
   function myWorkHref(r) {
     return r.job_id && loadedJob(r.job_id) ? hrefFor(r) : '';
   }
@@ -547,17 +573,20 @@
     return street || city || '—';
   }
 
-  // Each of the caller's buildings, as a button. Clicking one opens the task
-  // editor on it — the only route left to a building for someone who cannot
-  // open its job, and the reason the removal did not strand anybody.
+  // The work order's punch list, one button per building. Clicking one opens
+  // the task editor on it — the only route left to a building for someone who
+  // cannot open its job, and the reason the removal did not strand anybody.
+  // Every person the work order is assigned to sees the same list: no owner,
+  // no "yours", no picker.
   function buildingsHTML(r) {
     var list = Array.isArray(r.buildings) ? r.buildings : [];
     if (!list.length) return '';
     var next = fmtDate(r.my_next_due);
-    var lead = 'Your buildings' + (next ? ' · next due ' + next : '');
+    var lead = 'Punch list' + (next ? ' · next due ' + next : '');
     // p86-wob-c-crew is borrowed for its layout only (wrap, 4px gap) — this
     // strip sits OUTSIDE the row, and the page adds no stylesheet of its own.
-    return '<div class="p86-wob-mw-bldgs p86-wob-c-crew">' +
+    return '<div class="p86-wob-mw-bldgs p86-wob-c-crew"' +
+      ' title="' + esc("Everyone this work order is assigned to is responsible for every building on it.") + '">' +
       '<span class="p86-wob-dim">' + esc(lead) + '</span>' +
       list.map(function (b) {
         var done = b.status === 'done';
@@ -591,9 +620,9 @@
       head +
       leadCellsHTML(r, title, parent, status, due) +
       '<span class="p86-wob-cell p86-wob-c-assignee"><span class="p86-wob-k">Where</span>' + esc(whereText(r)) + '</span>' +
-      '<span class="p86-wob-cell p86-wob-c-bldg"><span class="p86-wob-k">Your buildings</span>' +
+      '<span class="p86-wob-cell p86-wob-c-bldg"><span class="p86-wob-k">Buildings open</span>' +
         '<span class="p86-wob-bldg-d">' + esc(open + '/' + tot) + '</span>' +
-        '<span class="p86-wob-bldg-m">' + esc(open + ' of ' + tot + ' ' + plural(tot, 'building', 'buildings')) + '</span>' +
+        '<span class="p86-wob-bldg-m">' + esc(open + ' of ' + tot + ' ' + plural(tot, 'building', 'buildings') + ' open') + '</span>' +
       '</span>' +
       '<span class="p86-wob-cell p86-wob-c-crew"><span class="p86-wob-k">Crew</span></span>' +
       (href ? '</a>' : '</div>') +
@@ -855,11 +884,12 @@
     return null;
   }
 
-  // THE CREW LEAD'S WAY IN, and the reason 1.33's removal stranded nobody.
-  // Buildings are off every task list now, so this button is the route to the
-  // one the caller is assigned — on a job they may not be able to open at
+  // THE WAY IN, and the reason 1.33's removal stranded nobody. Buildings are
+  // off every task list now, so this button is the route to one on a work
+  // order assigned to the caller — on a job they may not be able to open at
   // all. js/tasks.js openDetail reads GET /api/tasks/:id and saves through
-  // PATCH /api/tasks/:id, both of which stay open to the assignee.
+  // PATCH /api/tasks/:id, both of which stay open to the person the WORK
+  // ORDER is assigned to (1.35: the building itself is assigned to nobody).
   // The guard is load-bearing: js/tasks.js is not on every screen this page
   // can be reached from, and a missing editor must be a sentence, not a throw.
   function openBuilding(id) {

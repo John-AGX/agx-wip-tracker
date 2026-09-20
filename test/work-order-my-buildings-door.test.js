@@ -1,28 +1,47 @@
-// THE BUILDING PREDICATE AND THE ASSIGNEE-BASED "MY BUILDINGS" DOOR (1.33).
+// THE BUILDING PREDICATE AND THE RECORD-BASED "MY BUILDINGS" DOOR (1.33/1.35).
 //
-// The owner's rule for this release: "service tickets are not to be confused
-// with tasks, they are two different things; the subtasks in a service ticket
+// The owner's rule for 1.33: "service tickets are not to be confused with
+// tasks, they are two different things; the subtasks in a service ticket
 // shouldn't show up on any task lists separately." From 1.33 the buildings on
 // a work order's punch list are subtracted from every task list.
 //
-// Removing them is only safe because of what is pinned here. A building's
-// ASSIGNEE may be someone who cannot open its job at all — services/
-// service-ticket-subtask-door.js doneVerdict deliberately lets that person
-// finish a building — so the replacement read cannot be gated on the job
-// access rule (services/service-ticket-access.js listVisibility) that the
-// Service Tickets board runs through. It is gated on assignment and nothing
-// else, and that is the whole of what this file exists to prove:
+// The owner's rule for 1.35, which overrides every earlier answer on WHOSE
+// they are: "i dont want assignments to individual buildings like that,
+// whoever is assigned to the ticket, task or work order is evenly
+// responsible." So a BUILDING is never assigned to anybody. The door keys on
+// the WORK ORDER's own Assigned to (service_tickets.assignee_user_id, the one
+// the office sets from a real dropdown), and everyone on that record is
+// equally responsible for every building on it. Keying on the building's own
+// tasks.assignee_user_id — a column a building has only because it is a task
+// row, which no screen has ever offered to set — is what made this door answer
+// nothing at all on a normal job.
 //
-//   1. THE HEADLINE. Carl Crew, who cannot open job j1, gets his work orders
-//      back from GET /api/service-tickets/my-buildings — and the board,
-//      driven in the same file against the same rows, shows him none of them.
-//   2. Assignment is the only key: not assigned, done, archived and a
-//      personal to-do carrying the ticket id are all absent.
+// Removing buildings from the task lists is only safe because of what is
+// pinned here. A work order's ASSIGNEE may be someone who cannot open its job
+// at all — services/service-ticket-subtask-door.js doneVerdict deliberately
+// lets that person finish its buildings — so this read cannot be gated on the
+// job access rule (services/service-ticket-access.js listVisibility) that the
+// Service Tickets board runs through. It is gated on the RECORD's assignment
+// and nothing else, and that is the whole of what this file exists to prove:
+//
+//   1. THE HEADLINE. Carl Crew, who cannot open job j1, gets the work orders
+//      ASSIGNED TO HIM back from GET /api/service-tickets/my-buildings — and
+//      the board, driven in the same file against the same rows, shows him
+//      none of them. Four of the five name nobody on any building, which is
+//      what every real work order looks like.
+//   2. The RECORD is the only key: a building carrying my user id on someone
+//      else's work order is not mine, and a work order of mine whose buildings
+//      are done, archived or only a personal to-do is absent.
 //   3. Two orgs. Nothing crosses, not even a building in org 2 whose
 //      service_ticket_id names an org-1 ticket.
 //   4. Only the active statuses.
 //   5. THE PROJECTION is an exact key set (MY_BUILDING_ROW_KEYS), not a
-//      subset, and no money and no office text reaches a crew surface.
+//      subset, and no money and no office text reaches a crew surface. The
+//      three my_* counts are the WORK ORDER's buildings, not "mine".
+//   5b. THE CAP: at most 25 buildings travel inline, and they are the OPEN
+//      ones. A punch list worked front to back has its FINISHED buildings
+//      oldest, so a cap in creation order sent a person 25 done rows and
+//      none of the work still waiting.
 //   6. Paging and count_only.
 //   7. ROUTE ORDER: both new routes are declared above '/:id', driven by URL
 //      through the real Express router rather than by picking a layer.
@@ -107,27 +126,33 @@ function seed() {
       ('l1', 'Maple St reroof', 1),
       ('l2', 'Converted lead', 1);
 
+    -- assignee_user_id on the TICKET is the whole key from 1.35. Carl (20) is
+    -- on the five active ones he should get back plus the five that must be
+    -- excluded for a reason that is NOT whose they are (all done, archived
+    -- building, personal to-do only, shadowed id, archived work order) and the
+    -- four inactive statuses. Wendy (10) is on the three that are hers.
+    -- st_rival starts on NOBODY so the tenancy test can hand it over itself.
     INSERT INTO service_tickets
-      (id, organization_id, title, job_id, lead_id, status, checklist, created_by,
+      (id, organization_id, title, job_id, lead_id, status, checklist, created_by, assignee_user_id,
        due_date, scheduled_for, street_address, city, archived_at, created_at, ticket_number) VALUES
-      ('st_ip',     1, 'Latitude punch list', 'j1', NULL, 'in_progress',   '[]', 10, '2999-01-01', NULL,         '1200 Latitude Way', 'Apopka', NULL, '2026-09-11 10:00:00', 'WO-1001'),
-      ('st_sched',  1, 'Scheduled list',      'j1', NULL, 'scheduled',     '[]', 10, NULL,         '2999-02-02', '1210 Latitude Way', 'Apopka', NULL, '2026-09-12 10:00:00', 'WO-1002'),
-      ('st_wc',     1, 'Waiting on approval', 'j1', NULL, 'work_complete', '[]', 10, NULL,         NULL,         '1220 Latitude Way', 'Apopka', NULL, '2026-09-09 10:00:00', 'WO-1003'),
-      ('st_op',     1, 'Overdue list',        'j1', NULL, 'open',          '[]', 10, '2000-01-01', NULL,         '1230 Latitude Way', 'Apopka', NULL, '2026-09-08 10:00:00', 'WO-1004'),
-      ('st_proj',   1, 'Projection list',     'j1', NULL, 'in_progress',   '[]', 10, NULL,         NULL,         '1240 Latitude Way', 'Apopka', NULL, '2026-09-10 10:00:00', 'WO-1005'),
-      ('st_done',   1, 'All finished',        'j1', NULL, 'in_progress',   '[]', 10, NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-07 10:00:00', 'WO-1006'),
-      ('st_arch',   1, 'Archived building',   'j1', NULL, 'in_progress',   '[]', 10, NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-06 10:00:00', 'WO-1007'),
-      ('st_pers',   1, 'Private to-do only',  'j1', NULL, 'in_progress',   '[]', 10, NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-05 10:00:00', 'WO-1008'),
-      ('st_x',      1, 'Shadowed id',         'j1', NULL, 'in_progress',   '[]', 10, NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-04 10:00:00', 'WO-1009'),
-      ('st_j2',     1, 'On Carls own job',    'j2', NULL, 'in_progress',   '[]', 10, NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-03 10:00:00', 'WO-1010'),
-      ('st_conv',   1, 'Converted lead list', 'j1', 'l2', 'in_progress',   '[]', 10, NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-02 10:00:00', 'WO-1011'),
-      ('st_lead',   1, 'Lead only list',      NULL, 'l1', 'in_progress',   '[]', 10, NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-01 10:00:00', 'WO-1012'),
-      ('st_closed', 1, 'Closed list',         'j1', NULL, 'closed',        '[]', 10, NULL,         NULL,         NULL,                NULL,     NULL, '2026-08-31 10:00:00', 'WO-1013'),
-      ('st_cancel', 1, 'Cancelled list',      'j1', NULL, 'cancelled',     '[]', 10, NULL,         NULL,         NULL,                NULL,     NULL, '2026-08-30 10:00:00', 'WO-1014'),
-      ('st_draft',  1, 'Draft list',          'j1', NULL, 'draft',         '[]', 10, NULL,         NULL,         NULL,                NULL,     NULL, '2026-08-29 10:00:00', 'WO-1015'),
-      ('st_appr',   1, 'Approved list',       'j1', NULL, 'approved',      '[]', 10, NULL,         NULL,         NULL,                NULL,     NULL, '2026-08-28 10:00:00', 'WO-1016'),
-      ('st_farch',  1, 'Archived work order', 'j1', NULL, 'in_progress',   '[]', 10, NULL,         NULL,         NULL,                NULL, '2026-09-01 00:00:00', '2026-08-27 10:00:00', 'WO-1017'),
-      ('st_rival',  2, 'RIVAL list',          'j9', NULL, 'in_progress',   '[]', 50, NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-11 10:00:00', 'WO-9001');
+      ('st_ip',     1, 'Latitude punch list', 'j1', NULL, 'in_progress',   '[]', 10, 20,   '2999-01-01', NULL,         '1200 Latitude Way', 'Apopka', NULL, '2026-09-11 10:00:00', 'WO-1001'),
+      ('st_sched',  1, 'Scheduled list',      'j1', NULL, 'scheduled',     '[]', 10, 20,   NULL,         '2999-02-02', '1210 Latitude Way', 'Apopka', NULL, '2026-09-12 10:00:00', 'WO-1002'),
+      ('st_wc',     1, 'Waiting on approval', 'j1', NULL, 'work_complete', '[]', 10, 20,   NULL,         NULL,         '1220 Latitude Way', 'Apopka', NULL, '2026-09-09 10:00:00', 'WO-1003'),
+      ('st_op',     1, 'Overdue list',        'j1', NULL, 'open',          '[]', 10, 20,   '2000-01-01', NULL,         '1230 Latitude Way', 'Apopka', NULL, '2026-09-08 10:00:00', 'WO-1004'),
+      ('st_proj',   1, 'Projection list',     'j1', NULL, 'in_progress',   '[]', 10, 20,   NULL,         NULL,         '1240 Latitude Way', 'Apopka', NULL, '2026-09-10 10:00:00', 'WO-1005'),
+      ('st_done',   1, 'All finished',        'j1', NULL, 'in_progress',   '[]', 10, 20,   NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-07 10:00:00', 'WO-1006'),
+      ('st_arch',   1, 'Archived building',   'j1', NULL, 'in_progress',   '[]', 10, 20,   NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-06 10:00:00', 'WO-1007'),
+      ('st_pers',   1, 'Private to-do only',  'j1', NULL, 'in_progress',   '[]', 10, 20,   NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-05 10:00:00', 'WO-1008'),
+      ('st_x',      1, 'Shadowed id',         'j1', NULL, 'in_progress',   '[]', 10, 20,   NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-04 10:00:00', 'WO-1009'),
+      ('st_j2',     1, 'On Carls own job',    'j2', NULL, 'in_progress',   '[]', 10, 10,   NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-03 10:00:00', 'WO-1010'),
+      ('st_conv',   1, 'Converted lead list', 'j1', 'l2', 'in_progress',   '[]', 10, 10,   NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-02 10:00:00', 'WO-1011'),
+      ('st_lead',   1, 'Lead only list',      NULL, 'l1', 'in_progress',   '[]', 10, 10,   NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-01 10:00:00', 'WO-1012'),
+      ('st_closed', 1, 'Closed list',         'j1', NULL, 'closed',        '[]', 10, 20,   NULL,         NULL,         NULL,                NULL,     NULL, '2026-08-31 10:00:00', 'WO-1013'),
+      ('st_cancel', 1, 'Cancelled list',      'j1', NULL, 'cancelled',     '[]', 10, 20,   NULL,         NULL,         NULL,                NULL,     NULL, '2026-08-30 10:00:00', 'WO-1014'),
+      ('st_draft',  1, 'Draft list',          'j1', NULL, 'draft',         '[]', 10, 20,   NULL,         NULL,         NULL,                NULL,     NULL, '2026-08-29 10:00:00', 'WO-1015'),
+      ('st_appr',   1, 'Approved list',       'j1', NULL, 'approved',      '[]', 10, 20,   NULL,         NULL,         NULL,                NULL,     NULL, '2026-08-28 10:00:00', 'WO-1016'),
+      ('st_farch',  1, 'Archived work order', 'j1', NULL, 'in_progress',   '[]', 10, 20,   NULL,         NULL,         NULL,                NULL, '2026-09-01 00:00:00', '2026-08-27 10:00:00', 'WO-1017'),
+      ('st_rival',  2, 'RIVAL list',          'j9', NULL, 'in_progress',   '[]', 50, NULL, NULL,         NULL,         NULL,                NULL,     NULL, '2026-09-11 10:00:00', 'WO-9001');
 
     UPDATE service_tickets SET
       internal_notes = 'OFFICE ONLY INTERNAL_ONLY_MARK quoted $4,250.00 to the GC',
@@ -139,22 +164,30 @@ function seed() {
       guest_log      = '[{"note":"GUEST_MARK"}]'
      WHERE id = 'st_proj';
 
+    -- assignee_user_id ON A BUILDING IS DEAD DATA FROM 1.35. It is seeded
+    -- on purpose, and in three shapes, because nothing may read it:
+    --   * k1/k4 carry Carl's id, left over from an older release — his
+    --     st_ip comes back because the TICKET is his, not because of these;
+    --   * s1/w1/op1/pr1 carry NOBODY, which is what every building on a real
+    --     job looks like — those work orders must still come back;
+    --   * c1 carries Carl's id on a work order that is WENDY's — and that
+    --     work order must NOT come back for Carl.
     INSERT INTO tasks
       (id, organization_id, title, status, scope, owner_user_id, assignee_user_id,
        service_ticket_id, entity_type, entity_id, due_date, archived_at, created_at) VALUES
-      ('k1',    1, 'Bldg 1 - Side A',  'open', 'org',      NULL, 20, 'st_ip',     'job',  'j1', '2026-12-01', NULL, '2026-09-11 10:00:00'),
-      ('k4',    1, 'Bldg 2 - finished','done', 'org',      NULL, 20, 'st_ip',     'job',  'j1', '2020-01-01', NULL, '2026-09-11 10:01:00'),
-      ('k3',    1, 'Bldg 3 - Wendys',  'open', 'org',      NULL, 10, 'st_ip',     'job',  'j1', NULL,         NULL, '2026-09-11 10:02:00'),
-      ('s1',    1, 'Bldg 4',           'open', 'org',      NULL, 20, 'st_sched',  'job',  'j1', NULL,         NULL, '2026-09-12 10:00:00'),
-      ('w1',    1, 'Bldg 5',           'open', 'org',      NULL, 20, 'st_wc',     'job',  'j1', NULL,         NULL, '2026-09-09 10:00:00'),
-      ('op1',   1, 'Bldg 6',           'open', 'org',      NULL, 20, 'st_op',     'job',  'j1', NULL,         NULL, '2026-09-08 10:00:00'),
-      ('pr1',   1, 'Bldg 7',           'open', 'org',      NULL, 20, 'st_proj',   'job',  'j1', NULL,         NULL, '2026-09-10 10:00:00'),
-      ('d1',    1, 'Bldg 8',           'done', 'org',      NULL, 20, 'st_done',   'job',  'j1', NULL,         NULL, '2026-09-07 10:00:00'),
-      ('ar1',   1, 'Bldg 9',           'open', 'org',      NULL, 20, 'st_arch',   'job',  'j1', NULL, '2026-09-08 00:00:00', '2026-09-06 10:00:00'),
-      ('p1',    1, 'My own reminder',  'open', 'personal',   20, 20, 'st_pers',   'job',  'j1', NULL,         NULL, '2026-09-05 10:00:00'),
-      ('q1',    1, 'Bldg 10',          'open', 'org',      NULL, 10, 'st_j2',     'job',  'j2', NULL,         NULL, '2026-09-03 10:00:00'),
-      ('c1',    1, 'Bldg 11',          'open', 'org',      NULL, 10, 'st_conv',   'job',  'j1', NULL,         NULL, '2026-09-02 10:00:00'),
-      ('lb1',   1, 'Bldg 12',          'open', 'org',      NULL, 10, 'st_lead',   'lead', 'l1', NULL,         NULL, '2026-09-01 10:00:00'),
+      ('k1',    1, 'Bldg 1 - Side A',  'open', 'org',      NULL, 20,   'st_ip',     'job',  'j1', '2026-12-01', NULL, '2026-09-11 10:00:00'),
+      ('k4',    1, 'Bldg 2 - finished','done', 'org',      NULL, 20,   'st_ip',     'job',  'j1', '2020-01-01', NULL, '2026-09-11 10:01:00'),
+      ('k3',    1, 'Bldg 3 - Wendys',  'open', 'org',      NULL, 10,   'st_ip',     'job',  'j1', NULL,         NULL, '2026-09-11 10:02:00'),
+      ('s1',    1, 'Bldg 4',           'open', 'org',      NULL, NULL, 'st_sched',  'job',  'j1', NULL,         NULL, '2026-09-12 10:00:00'),
+      ('w1',    1, 'Bldg 5',           'open', 'org',      NULL, NULL, 'st_wc',     'job',  'j1', NULL,         NULL, '2026-09-09 10:00:00'),
+      ('op1',   1, 'Bldg 6',           'open', 'org',      NULL, NULL, 'st_op',     'job',  'j1', NULL,         NULL, '2026-09-08 10:00:00'),
+      ('pr1',   1, 'Bldg 7',           'open', 'org',      NULL, NULL, 'st_proj',   'job',  'j1', NULL,         NULL, '2026-09-10 10:00:00'),
+      ('d1',    1, 'Bldg 8',           'done', 'org',      NULL, 20,   'st_done',   'job',  'j1', NULL,         NULL, '2026-09-07 10:00:00'),
+      ('ar1',   1, 'Bldg 9',           'open', 'org',      NULL, 20,   'st_arch',   'job',  'j1', NULL, '2026-09-08 00:00:00', '2026-09-06 10:00:00'),
+      ('p1',    1, 'My own reminder',  'open', 'personal',   20, 20,   'st_pers',   'job',  'j1', NULL,         NULL, '2026-09-05 10:00:00'),
+      ('q1',    1, 'Bldg 10',          'open', 'org',      NULL, NULL, 'st_j2',     'job',  'j2', NULL,         NULL, '2026-09-03 10:00:00'),
+      ('c1',    1, 'Bldg 11',          'open', 'org',      NULL, 20,   'st_conv',   'job',  'j1', NULL,         NULL, '2026-09-02 10:00:00'),
+      ('lb1',   1, 'Bldg 12',          'open', 'org',      NULL, NULL, 'st_lead',   'lead', 'l1', NULL,         NULL, '2026-09-01 10:00:00'),
       ('cl1',   1, 'Bldg 13',          'open', 'org',      NULL, 20, 'st_closed', 'job',  'j1', NULL,         NULL, '2026-08-31 10:00:00'),
       ('cn1',   1, 'Bldg 14',          'open', 'org',      NULL, 20, 'st_cancel', 'job',  'j1', NULL,         NULL, '2026-08-30 10:00:00'),
       ('dr1',   1, 'Bldg 15',          'open', 'org',      NULL, 20, 'st_draft',  'job',  'j1', NULL,         NULL, '2026-08-29 10:00:00'),
@@ -269,7 +302,8 @@ const ids = (res) => (res.body && res.body.tickets ? res.body.tickets.map((t) =>
 const sorted = (res) => ids(res).slice().sort();
 const rowOf = (res, id) => res.body.tickets.find((t) => t.id === id);
 
-// Carl is the assignee of a live, open, org building on exactly these.
+// The work orders ASSIGNED TO CARL that still have an open org building.
+// Four of the five name nobody at all on any building.
 const CARLS = ['st_ip', 'st_op', 'st_proj', 'st_sched', 'st_wc'];
 
 // ── mutant(): one rule removed from a copy of the shipped source ──────────
@@ -326,24 +360,50 @@ describe('the mutation harness', () => {
  * 1. THE HEADLINE — and the counterfactual in the same file
  * ═════════════════════════════════════════════════════════════════════════ */
 describe('the person who cannot open the job still reaches the work assigned to them', () => {
-  test('Carl Crew, with no grant on j1, gets his work order and his building', async () => {
+  test('Carl Crew, with no grant on j1, gets his work orders and their whole punch lists', async () => {
     const r = await mine(null, CREW);
     expect(r.statusCode).toBe(200);
     expect(sorted(r)).toEqual(CARLS);
 
+    // THE COUNTS ARE THE WORK ORDER'S, NOT "MINE" (1.35). st_ip holds k1
+    // (open, carrying Carl's stale id), k3 (open, carrying Wendy's) and k4
+    // (done) — he is responsible for all three because the RECORD is his.
     const row = rowOf(r, 'st_ip');
-    expect(row.my_buildings_open).toBe(1);   // k1 open; k3 is Wendy's, k4 is done
-    expect(row.my_buildings_total).toBe(2);  // k1 + k4, both his
+    expect(row.my_buildings_open).toBe(2);   // k1 + k3; k4 is done
+    expect(row.my_buildings_total).toBe(3);  // k1 + k3 + k4
     expect(row.my_next_due).toBe('2026-12-01');
+    // OPEN FIRST, done last, created_at inside each group (section 5b): the
+    // 25 slots are for work that is still waiting, and k4 is finished.
     expect(row.buildings).toEqual([
       { id: 'k1', title: 'Bldg 1 - Side A', status: 'open', due_date: '2026-12-01', completed_at: null },
+      { id: 'k3', title: 'Bldg 3 - Wendys', status: 'open', due_date: null, completed_at: null },
       { id: 'k4', title: 'Bldg 2 - finished', status: 'done', due_date: '2020-01-01', completed_at: null },
     ]);
     expect(r.body.total).toBe(5);
-    expect(r.body.buildings_open).toBe(5);
+    expect(r.body.buildings_open).toBe(6);   // 2 on st_ip + one each on the other four
     expect(r.body.has_more).toBe(false);
     expect(r.body.next_offset).toBe(null);
     expect(r.body.today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  test('THE 1.35 HEADLINE: four of his five name NOBODY on any building', async () => {
+    // This is what a real work order looks like — tasks.assignee_user_id is a
+    // column no screen ever offered to set. Under the 1.34 rule these four
+    // answered nothing at all; under the record rule they are all his.
+    const bare = eng.all(
+      "SELECT DISTINCT service_ticket_id AS id FROM tasks" +
+      " WHERE organization_id = 1 AND assignee_user_id IS NULL AND scope = 'org'" +
+      '   AND service_ticket_id IS NOT NULL' +
+      "   AND archived_at IS NULL AND status <> 'done' ORDER BY id"
+    ).map((x) => x.id);
+    expect(bare).toEqual(['st_j2', 'st_lead', 'st_op', 'st_proj', 'st_sched', 'st_wc']);
+    const got = ids(await mine(null, CREW));
+    for (const id of ['st_op', 'st_proj', 'st_sched', 'st_wc']) expect(got).toContain(id);
+    // And clearing the last building id that names anyone on st_ip costs him
+    // nothing: the record is what makes it his.
+    eng.db.exec("UPDATE tasks SET assignee_user_id = NULL WHERE service_ticket_id = 'st_ip'");
+    expect(sorted(await mine(null, CREW))).toEqual(CARLS);
+    expect(rowOf(await mine(null, CREW), 'st_ip').my_buildings_open).toBe(2);
   });
 
   test('THE COUNTERFACTUAL: the Service Tickets board shows him none of them', async () => {
@@ -361,35 +421,55 @@ describe('the person who cannot open the job still reaches the work assigned to 
 
   test('the wide caller sees their own assignments by the same rule, not everything', async () => {
     // Wendy can open every job, but my-buildings is ASSIGNMENT, not access:
-    // she gets only the tickets where a live open org building is hers.
-    expect(sorted(await mine(null, WIDE))).toEqual(['st_conv', 'st_ip', 'st_j2', 'st_lead']);
+    // she gets only the work orders the office put HER name on. st_ip is
+    // Carl's record even though its k3 carries her user id.
+    expect(sorted(await mine(null, WIDE))).toEqual(['st_conv', 'st_j2', 'st_lead']);
   });
 
-  test('a caller with no ticket capability at all still gets their own buildings', async () => {
+  test('a caller with no ticket capability at all still gets their own work orders', async () => {
     // Nora holds nothing, so she is assigned nothing and gets an honest empty
     // answer — not a 403, and not someone else's list.
     const r = await mine(null, NOBODY);
     expect([r.statusCode, r.body.tickets, r.body.total, r.body.buildings_open]).toEqual([200, [], 0, 0]);
+    // Put her on one and she has it, with no capability and no job access.
+    eng.db.exec("UPDATE service_tickets SET assignee_user_id = 40 WHERE id = 'st_op'");
+    const after = await mine(null, NOBODY);
+    expect([ids(after), after.body.buildings_open]).toEqual([['st_op'], 1]);
   });
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * 2. ASSIGNMENT IS THE ONLY KEY
+ * 2. THE RECORD IS THE ONLY KEY
  * ═════════════════════════════════════════════════════════════════════════ */
-describe('what does not count as a building of mine', () => {
-  test('a work order on a job I CAN see, where no building is mine, does not come back', async () => {
+describe('what does not count as a work order of mine', () => {
+  test('THE 1.35 REGRESSION TEST: a building carrying my id on SOMEONE ELSE\'S work order is not mine', async () => {
+    // c1 on st_conv carries Carl's user id — the dead field an older release
+    // could write. st_conv is assigned to WENDY, so it is hers and not his.
+    expect(eng.all("SELECT assignee_user_id AS a FROM tasks WHERE id = 'c1'")[0].a).toBe(20);
+    expect(ids(await mine(null, CREW))).not.toContain('st_conv');
+    expect(ids(await mine(null, WIDE))).toContain('st_conv');
+    // Nothing about it is hidden from him by accident either — the whole
+    // punch list of a record he IS on reaches him (the headline above).
+  });
+
+  test('a work order on a job I CAN see, that is not assigned to me, does not come back', async () => {
     // Carl owns j2, so listVisibility shows him st_j2 (the board test above
-    // proves it). Its only building is Wendy's, so this door does not.
+    // proves it). The office put Wendy on it, so this door does not.
     expect(ids(await mine(null, CREW))).not.toContain('st_j2');
     expect(ids(await boardOf(CREW, { view: 'all' }))).toContain('st_j2');
   });
 
-  test('a work order whose only building of mine is done does not come back', async () => {
+  test('a work order of mine whose only building is done does not come back', async () => {
     expect(ids(await mine(null, CREW))).not.toContain('st_done');
   });
 
-  test('a work order whose only building of mine is archived does not come back', async () => {
+  test('a work order of mine whose only building is archived does not come back', async () => {
     expect(ids(await mine(null, CREW))).not.toContain('st_arch');
+  });
+
+  test('a work order assigned to NOBODY reaches nobody', async () => {
+    eng.db.exec("UPDATE service_tickets SET assignee_user_id = NULL WHERE id = 'st_ip'");
+    for (const who of [CREW, WIDE, NOBODY]) expect(ids(await mine(null, who))).not.toContain('st_ip');
   });
 
   test('a personal to-do carrying a ticket id is not a building', async () => {
@@ -403,7 +483,7 @@ describe('what does not count as a building of mine', () => {
     expect(JSON.stringify((await mine(null, CREW)).body)).not.toContain('Order the latch');
   });
 
-  test('an archived work order does not come back even with an open building of mine', async () => {
+  test('an archived work order of mine does not come back even with an open building', async () => {
     expect(ids(await mine(null, CREW))).not.toContain('st_farch');
   });
 });
@@ -420,14 +500,26 @@ describe('two organizations', () => {
     expect(r.body.tickets).toEqual([]);
     expect(r.body.total).toBe(0);
     expect(r.body.buildings_open).toBe(0);
-    // And the door is not simply broken for him: his own org's building works.
-    eng.db.exec("UPDATE tasks SET assignee_user_id = 50 WHERE id = 'rb1'");
+    // And the door is not simply broken for him: his own org's record works.
+    eng.db.exec("UPDATE service_tickets SET assignee_user_id = 50 WHERE id = 'st_rival'");
     expect(sorted(await mine(null, RIVAL))).toEqual(['st_rival']);
+  });
+
+  test('an org-1 work order assigned to an org-2 user id reaches nobody', async () => {
+    // The org predicate is on the TICKET, so naming a foreign user id on one
+    // of our records is simply a record nobody in either tenant can reach.
+    eng.db.exec("UPDATE service_tickets SET assignee_user_id = 50 WHERE id = 'st_ip'");
+    expect(ids(await mine(null, RIVAL))).not.toContain('st_ip');
+    expect(ids(await mine(null, CREW))).not.toContain('st_ip');
+    expect(JSON.stringify((await mine(null, RIVAL)).body)).not.toContain('Latitude');
   });
 
   test('a building in org 2 whose service_ticket_id names an org-1 ticket never leaks in', async () => {
     // x2 lives in org 2, is assigned to Carl's user id and points at st_x,
-    // which is an org-1 work order with no org-1 buildings at all.
+    // which is an org-1 work order (ASSIGNED TO CARL) with no org-1 buildings
+    // at all. Both halves must hold: the ticket is his, and it still gets no
+    // open building out of another tenant's rows.
+    expect(eng.all("SELECT assignee_user_id AS a FROM service_tickets WHERE id = 'st_x'")[0].a).toBe(20);
     expect(ids(await mine(null, CREW))).not.toContain('st_x');
     expect(JSON.stringify((await mine(null, CREW)).body)).not.toContain('RIVAL');
     expect(JSON.stringify((await mine(null, WIDE)).body)).not.toContain('RIVAL');
@@ -483,6 +575,24 @@ describe('what a work order may carry to someone who is only a building assignee
     expect(raw.materials).toContain('MATERIAL_MARK');
   });
 
+  test('the three my_* counts are the WORK ORDER\'s buildings, not the caller\'s', async () => {
+    const row = rowOf(await mine(null, CREW), 'st_ip');
+    const all = eng.all(
+      "SELECT id, status, assignee_user_id AS a FROM tasks WHERE service_ticket_id = 'st_ip'" +
+      " AND organization_id = 1 AND archived_at IS NULL AND scope = 'org' ORDER BY created_at");
+    // Three buildings, naming three different things — Carl, Wendy, Carl.
+    expect(all.map((t) => t.a)).toEqual([20, 20, 10]);
+    expect(row.my_buildings_total).toBe(all.length);
+    expect(row.my_buildings_open).toBe(all.filter((t) => t.status !== 'done').length);
+    // The whole live punch list travels, ordered open first (section 5b) —
+    // `all` is in creation order, so it is compared as a set as well.
+    expect(row.buildings.map((b) => b.id)).toEqual(['k1', 'k3', 'k4']);
+    expect(row.buildings.map((b) => b.id).slice().sort()).toEqual(all.map((t) => t.id).slice().sort());
+    // Hand every one of them to Wendy and NOTHING about Carl's row moves.
+    eng.db.exec("UPDATE tasks SET assignee_user_id = 10 WHERE service_ticket_id = 'st_ip'");
+    expect(rowOf(await mine(null, CREW), 'st_ip')).toEqual(row);
+  });
+
   test('the deliberate widening: the job number, job title, address and ticket title DO travel', async () => {
     // Carl cannot open j1 at all. He is told where to go and nothing else.
     const row = rowOf(await mine(null, CREW), 'st_ip');
@@ -518,9 +628,132 @@ describe('what a work order may carry to someone who is only a building assignee
     }
   });
 
-  test('a ticket with no buildings of mine on the page never appears, so buildings is never empty', async () => {
+  test('a ticket with no open building never appears, so buildings is never empty', async () => {
     const r = await mine(null, CREW);
     for (const row of r.body.tickets) expect(row.buildings.length).toBeGreaterThan(0);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 5b. THE 25-BUILDING CAP TAKES THE OPEN ONES
+ *
+ * The inline punch list used to be filtered to the caller's own buildings, so
+ * the cap almost never bit. From 1.35 it is the work order's WHOLE punch list,
+ * and an apartment community's is long — so WHICH 25 travel is now a decision
+ * with a person on the other end of it. A punch list worked front to back has
+ * its finished buildings oldest, and a cap in creation order therefore sent
+ * exactly the 25 rows that are of no use: js/my-day.js drops done rows before
+ * it renders, so the strip showed "4 buildings open" over nothing to tap, and
+ * these rows are the only way into the work for someone who cannot open the
+ * job at all.
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+// server/routes/service-ticket-routes.js MY_BUILDINGS_PER_TICKET. Not exported
+// — the test below reads the shipped source so this number cannot drift away
+// from the one the route enforces.
+const CAP = 25;
+
+// A punch list of any shape on a work order that is CARL's, replacing whatever
+// the seed put there. created_at ascends with the array, so `Array(26).fill
+// ('done').concat(['open', ...])` is the real-world shape: the finished ones
+// are the oldest. Nothing is assigned to anybody — a building never is (1.35).
+function seedPunchList(ticketId, statuses) {
+  if (statuses.length > 58) throw new Error('seedPunchList: minutes would collide');
+  const values = statuses.map(function (status, i) {
+    const seq = String(i + 1).padStart(2, '0');
+    return "('big" + seq + "', 1, 'Bldg " + seq + "', '" + status + "', 'org', NULL, NULL, '" +
+      ticketId + "', 'job', 'j1', NULL, NULL, '2026-01-01 00:" + seq + ":00')";
+  }).join(',');
+  eng.db.exec("DELETE FROM tasks WHERE organization_id = 1 AND service_ticket_id = '" + ticketId + "'");
+  eng.db.exec(
+    'INSERT INTO tasks (id, organization_id, title, status, scope, owner_user_id, assignee_user_id,' +
+    ' service_ticket_id, entity_type, entity_id, due_date, archived_at, created_at) VALUES ' + values);
+  return statuses.map(function (status, i) {
+    return { id: 'big' + String(i + 1).padStart(2, '0'), status };
+  });
+}
+
+const openOf = (row) => row.buildings.filter((b) => b.status !== 'done');
+
+describe('which 25 buildings travel', () => {
+  test('the cap these tests assume is the one the route ships', () => {
+    expect(fs.readFileSync(TICKET_ROUTES, 'utf8')).toContain('const MY_BUILDINGS_PER_TICKET = ' + CAP + ';');
+  });
+
+  test('THE REGRESSION: 26 finished buildings ahead of 4 open ones do not eat the 25 slots', async () => {
+    const seeded = seedPunchList('st_ip', Array(26).fill('done')
+      .concat(['open', 'open', 'in_progress', 'blocked']));
+    const openIds = seeded.filter((b) => b.status !== 'done').map((b) => b.id);
+    expect(openIds).toEqual(['big27', 'big28', 'big29', 'big30']);
+
+    const row = rowOf(await mine(null, CREW), 'st_ip');
+    expect(row.my_buildings_total).toBe(30);
+    expect(row.my_buildings_open).toBe(4);
+    expect(row.buildings.length).toBe(CAP);
+    // Every open building the count promises is here, first, in creation order.
+    expect(row.buildings.slice(0, 4).map((b) => b.id)).toEqual(openIds);
+    expect(openOf(row).map((b) => b.id)).toEqual(openIds);
+    // What the cap dropped is finished work: the 21 oldest done rows stayed,
+    // the other five went, and not one open row was spent on.
+    expect(row.buildings.slice(4).every((b) => b.status === 'done')).toBe(true);
+    expect(row.buildings.slice(4).map((b) => b.id)).toEqual(seeded.slice(0, CAP - 4).map((b) => b.id));
+    // THE SURFACE: js/my-day.js drops done rows before it renders, so this is
+    // exactly what the strip has to offer — four rows, not an empty card.
+    expect(openOf(row).length).toBe(row.my_buildings_open);
+    // The four that are not done are all live work, not just status 'open'.
+    expect(openOf(row).map((b) => b.status)).toEqual(['open', 'open', 'in_progress', 'blocked']);
+  });
+
+  test('more open buildings than the cap: all 25 slots are open, and the finished ones wait', async () => {
+    seedPunchList('st_ip', Array(30).fill('open').concat(Array(5).fill('done')));
+    const row = rowOf(await mine(null, CREW), 'st_ip');
+    expect(row.my_buildings_total).toBe(35);
+    expect(row.my_buildings_open).toBe(30);
+    expect(row.buildings.length).toBe(CAP);
+    expect(row.buildings.every((b) => b.status !== 'done')).toBe(true);
+    // The honest relationship between the number and the list: min(open, cap)
+    // open rows travel, and a done row never takes a slot an open one wanted.
+    expect(openOf(row).length).toBe(Math.min(row.my_buildings_open, CAP));
+    expect(row.buildings.map((b) => b.id)).toEqual(
+      Array.from({ length: CAP }, (_v, i) => 'big' + String(i + 1).padStart(2, '0')));
+  });
+
+  test('inside each group the order is unchanged — created_at, oldest first', async () => {
+    seedPunchList('st_ip', ['open', 'done', 'open', 'done', 'open']);
+    const row = rowOf(await mine(null, CREW), 'st_ip');
+    expect(row.buildings.map((b) => b.id)).toEqual(['big01', 'big03', 'big05', 'big02', 'big04']);
+    expect(row.buildings.length).toBeLessThan(CAP);   // nothing is dropped below the cap
+  });
+
+  test('the badge counts the punch list, the list is capped — and no card is left with nothing to tap', async () => {
+    seedPunchList('st_ip', Array(30).fill('open'));
+    const r = await mine(null, CREW);
+    expect(r.body.buildings_open).toBe(34);            // 30 on st_ip + one each on four
+    const shown = r.body.tickets.reduce((n, t) => n + openOf(t).length, 0);
+    expect(shown).toBe(29);                            // st_ip's 30 capped to 25
+    expect(r.body.buildings_open).toBeGreaterThanOrEqual(shown);
+    // count_only answers the same number the full body does.
+    expect((await mine(null, CREW, { count_only: '1' })).body.buildings_open).toBe(r.body.buildings_open);
+    // THE INVARIANT THE STRIP NEEDS: a row that claims open buildings always
+    // hands over at least one, whatever the cap did.
+    for (const t of r.body.tickets) {
+      expect(t.my_buildings_open).toBeGreaterThan(0);
+      expect(openOf(t).length).toBeGreaterThan(0);
+      expect(openOf(t).length).toBe(Math.min(t.my_buildings_open, CAP));
+    }
+  });
+
+  test('the cap is applied by the STATEMENT, so a long punch list never travels', async () => {
+    seedPunchList('st_ip', Array(40).fill('done').concat(Array(6).fill('open')));
+    const before = eng.log.length;
+    await mine(null, CREW);
+    const kids = eng.log.slice(before).filter((e) => /service_ticket_id = ANY/.test(e.sql));
+    expect(kids.length).toBe(1);
+    // 46 live buildings on st_ip and one on each of the other four work
+    // orders: 25 + 4 rows come back, not 50.
+    expect(eng.count("SELECT 1 FROM tasks WHERE organization_id = 1 AND service_ticket_id = 'st_ip'")).toBe(46);
+    expect(kids[0].rowCount).toBe(CAP + 4);
+    expect(kids[0].sql).toContain('organization_id = $1');
   });
 });
 
@@ -534,7 +767,7 @@ describe('paging', () => {
     expect(p0.body.has_more).toBe(true);
     expect(p0.body.next_offset).toBe(1);
     expect(p0.body.total).toBe(5);
-    expect(p0.body.buildings_open).toBe(5);
+    expect(p0.body.buildings_open).toBe(6);
 
     const p1 = await mine(null, CREW, { limit: '1', offset: '1' });
     expect(ids(p1)).toEqual(['st_ip']);
@@ -559,8 +792,18 @@ describe('paging', () => {
   test('count_only=1 answers the two numbers and nothing else', async () => {
     const r = await mine(null, CREW, { count_only: '1' });
     expect(r.statusCode).toBe(200);
-    expect(r.body).toEqual({ total: 5, buildings_open: 5 });
+    expect(r.body).toEqual({ total: 5, buildings_open: 6 });
     expect(Object.prototype.hasOwnProperty.call(r.body, 'tickets')).toBe(false);
+
+    // THE BADGE MUST NOT LIE (1.35). Both counts mean the same thing the rows
+    // do: the badge number is the sum of the per-row open counts, and the
+    // total is how many rows there are.
+    const full = await mine(null, CREW);
+    expect(r.body.total).toBe(full.body.tickets.length);
+    expect(r.body.buildings_open)
+      .toBe(full.body.tickets.reduce((n, t) => n + t.my_buildings_open, 0));
+    expect(r.body.buildings_open)
+      .toBe(full.body.tickets.reduce((n, t) => n + t.buildings.filter((b) => b.status !== 'done').length, 0));
   });
 
   test('count_only runs neither the rows statement nor the buildings statement', async () => {
@@ -687,18 +930,35 @@ describe('building-counts', () => {
  * 9. MUTANTS
  * ═════════════════════════════════════════════════════════════════════════ */
 describe('each rule, removed, makes a named assertion above go red', () => {
-  test('(a) without `wob.assignee_user_id = $n`, Carl gets work orders he is not assigned', async () => {
+  test('(a) without `t.assignee_user_id = $n`, Carl gets work orders that are not his', async () => {
     const mut = doorMutant([[
-      "    ' AND wob.assignee_user_id = ' + me + ')';",
-      "    ' AND ' + me + ' IS NOT NULL)';",
+      "  return '(' + t + '.assignee_user_id = ' + me +\n",
+      "  return '(' + me + ' IS NOT NULL' +\n",
     ]]);
     const got = ids(await mine(mut, CREW));
-    expect(got).toContain('st_j2');    // Wendy's building, on Carl's own job
-    expect(got).toContain('st_conv');  // Wendy's building, on a job he cannot open
+    expect(got).toContain('st_j2');    // Wendy's record, on Carl's own job
+    expect(got).toContain('st_conv');  // Wendy's record, on a job he cannot open
     expect(got).toContain('st_lead');
     // The shipped door does not.
     const shipped = ids(await mine(null, CREW));
     for (const id of ['st_j2', 'st_conv', 'st_lead']) expect(shipped).not.toContain(id);
+  });
+
+  test('(a2) THE 1.34 RULE PUT BACK: keyed on the BUILDING, Carl loses four of his five', async () => {
+    // The mutant is exactly what shipped in 1.34 — the EXISTS arm keyed on the
+    // building's own assignee instead of the record's. s1/w1/op1/pr1 name
+    // nobody, which is what every real work order looks like, so the door
+    // answers almost nothing; and st_conv, which is Wendy's, comes back to
+    // Carl because its c1 still carries his id. Both halves are the bug.
+    const mut = doorMutant([[
+      "  return '(' + t + '.assignee_user_id = ' + me +\n    ' AND EXISTS (SELECT 1 FROM tasks wob' +",
+      "  return 'EXISTS (SELECT 1 FROM tasks wob' +",
+    ], [
+      "    \" AND wob.status <> 'done'))\";",
+      "    \" AND wob.status <> 'done'\" + ' AND wob.assignee_user_id = ' + me + ')';",
+    ]]);
+    expect(sorted(await mine(mut, CREW))).toEqual(['st_conv', 'st_ip']);
+    expect(sorted(await mine(null, CREW))).toEqual(CARLS);
   });
 
   test("(b) without `wob.scope = 'org'`, a private to-do drags its work order in", async () => {
@@ -723,11 +983,12 @@ describe('each rule, removed, makes a named assertion above go red', () => {
     ]]);
     const got = await mine(mut, CREW);
     // The gate returns exactly the wrong set: the one work order he can SEE
-    // and has no building on, and none of the five he is assigned by name.
+    // and was not put on, and none of the five that are his by name.
     expect(ids(got)).toEqual(['st_j2']);
     for (const id of CARLS) expect(ids(got)).not.toContain(id);
-    // And it hands him no building at all to open.
-    expect(got.body.tickets.every((t) => t.buildings.length === 0)).toBe(true);
+    // So every building he is actually responsible for is out of reach.
+    const reachable = got.body.tickets.reduce((acc, t) => acc.concat(t.buildings.map((b) => b.id)), []);
+    for (const id of ['k1', 'k3', 's1', 'w1', 'op1', 'pr1']) expect(reachable).not.toContain(id);
     expect(sorted(await mine(null, CREW))).toEqual(CARLS);
   });
 
@@ -757,12 +1018,50 @@ describe('each rule, removed, makes a named assertion above go red', () => {
       '                WHERE bo.service_ticket_id = t.id AND bo.organization_id = t.organization_id\n',
       '                WHERE bo.service_ticket_id = t.id\n',
     ]]);
-    // r2 is an org-2 task on st_ip. It is not Carl's, so use the wide caller
-    // whose own st_ip count is unaffected — the point is the count moves.
+    // r2 is an ORG-2 open task whose service_ticket_id names org 1's st_ip.
+    // The count no longer asks whose the building is, so the org predicate is
+    // the ONLY thing keeping another tenant's row out of this number.
     const shipped = rowOf(await mine(null, CREW), 'st_ip').my_buildings_open;
-    eng.db.exec("UPDATE tasks SET assignee_user_id = 20 WHERE id = 'r2'");
-    expect(rowOf(await mine(mut, CREW), 'st_ip').my_buildings_open).toBe(shipped + 1);
+    expect(shipped).toBe(2);
+    expect(rowOf(await mine(mut, CREW), 'st_ip').my_buildings_open).toBe(3);
     expect(rowOf(await mine(null, CREW), 'st_ip').my_buildings_open).toBe(shipped);
+  });
+
+  test('(f) THE CAP RULE REMOVED: ranked by creation order alone, all 25 slots are finished work', async () => {
+    const mut = routesMutant([[
+      "ORDER BY (status = 'done'), created_at ASC, id ASC) AS rn",
+      'ORDER BY created_at ASC, id ASC) AS rn',
+    ]]);
+    seedPunchList('st_ip', Array(26).fill('done')
+      .concat(['open', 'open', 'in_progress', 'blocked']));
+
+    const bad = rowOf(await mine(mut, CREW), 'st_ip');
+    // The work order is still his and the badge still says four are open...
+    expect(bad.my_buildings_open).toBe(4);
+    expect(bad.buildings.length).toBe(CAP);
+    // ...and every row handed over is already done, so the My Day strip (which
+    // drops done rows before it renders) shows that card with nothing to tap.
+    expect(bad.buildings.every((b) => b.status === 'done')).toBe(true);
+    expect(openOf(bad)).toEqual([]);
+
+    // The shipped route, same rows, same caller.
+    const good = rowOf(await mine(null, CREW), 'st_ip');
+    expect(openOf(good).map((b) => b.id)).toEqual(['big27', 'big28', 'big29', 'big30']);
+  });
+
+  test('(g) without the org predicate inside the ranked subquery, another tenant building is listed', async () => {
+    // The cap moved this list into a subquery, so the tenant predicate moved
+    // with it. r2 is an ORG-2 open task whose service_ticket_id names org 1's
+    // st_ip — the only thing keeping it off a crew surface is that line.
+    const mut = routesMutant([[
+      'WHERE organization_id = $1 AND service_ticket_id = ANY($2::text[])',
+      'WHERE service_ticket_id = ANY($2::text[])',
+    ]]);
+    const leaked = rowOf(await mine(mut, CREW), 'st_ip');
+    expect(leaked.buildings.map((b) => b.title)).toContain('RIVAL on our id');
+    const shipped = rowOf(await mine(null, CREW), 'st_ip');
+    expect(JSON.stringify(shipped.buildings)).not.toContain('RIVAL');
+    expect(shipped.buildings.map((b) => b.id)).toEqual(['k1', 'k3', 'k4']);
   });
 });
 
@@ -795,12 +1094,43 @@ describe('notAWorkOrderBuildingSql and myOpenBuildingSql', () => {
     expect(door.notAWorkOrderBuildingSql('t')).not.toContain('archived_at');
   });
 
-  test('myOpenBuildingSql is the exact EXISTS the door documents', () => {
+  test('myOpenBuildingSql is the exact predicate the door documents', () => {
     expect(door.myOpenBuildingSql('t', '$2')).toBe(
-      'EXISTS (SELECT 1 FROM tasks wob WHERE wob.service_ticket_id = t.id' +
+      '(t.assignee_user_id = $2 AND EXISTS (SELECT 1 FROM tasks wob' +
+      ' WHERE wob.service_ticket_id = t.id' +
       ' AND wob.organization_id = t.organization_id AND wob.archived_at IS NULL' +
-      " AND wob.scope = 'org' AND wob.status <> 'done' AND wob.assignee_user_id = $2)"
+      " AND wob.scope = 'org' AND wob.status <> 'done'))"
     );
+    // The alias is the TICKET's, both halves of it.
+    expect(door.myOpenBuildingSql('s', '$7')).toBe(
+      '(s.assignee_user_id = $7 AND EXISTS (SELECT 1 FROM tasks wob' +
+      ' WHERE wob.service_ticket_id = s.id' +
+      ' AND wob.organization_id = s.organization_id AND wob.archived_at IS NULL' +
+      " AND wob.scope = 'org' AND wob.status <> 'done'))"
+    );
+  });
+
+  test('THE 1.35 RULE IN ONE ASSERTION: the caller is matched on the RECORD, never on a building', () => {
+    const sql = door.myOpenBuildingSql('t', '$2');
+    // The $n appears exactly once, and it is on the ticket alias.
+    expect(sql.split('$2').length - 1).toBe(1);
+    expect(sql).toContain('t.assignee_user_id = $2');
+    // No arm of the EXISTS asks who a building belongs to.
+    expect(sql).not.toContain('wob.assignee_user_id');
+    expect(sql.slice(sql.indexOf('EXISTS'))).not.toContain('assignee');
+  });
+
+  test('the predicate is EXECUTED both ways round on the real rows', () => {
+    // st_ip is Carl's record; its k3 is Wendy's row. He matches, she does not.
+    // The $n is swapped for the literal id here only because node:sqlite binds
+    // by '?', not by '$1' — the shipped route passes it as a real parameter.
+    const run = (uid) => eng.all(
+      'SELECT t.id FROM service_tickets t WHERE t.organization_id = 1 AND ' +
+      door.myOpenBuildingSql('t', '$1').split('$1').join(String(uid)) +
+      " AND t.id IN ('st_ip','st_conv') ORDER BY t.id"
+    ).map((r) => r.id);
+    expect(run(20)).toEqual(['st_ip']);     // his record, whoever the buildings name
+    expect(run(10)).toEqual(['st_conv']);   // hers, though its building names him
   });
 
   test('both refuse an alias that is not an identifier, and a user that is not a $n parameter', () => {
