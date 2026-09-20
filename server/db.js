@@ -1496,6 +1496,11 @@ async function initSchema() {
     -- A purchase order's Buildertrend id, on the same terms.
     ALTER TABLE job_purchase_orders ADD COLUMN IF NOT EXISTS bt_po_id TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_job_purchase_orders_bt_po_id ON job_purchase_orders(bt_po_id) WHERE bt_po_id IS NOT NULL;
+    -- A vendor bill's Buildertrend id (services/clickr/bill-match.js rung 0), on
+    -- the same terms again: a bill row can carry a NULL organization_id, so this
+    -- one is unique outright and every sync read reaches the row through its job.
+    ALTER TABLE job_vendor_bills ADD COLUMN IF NOT EXISTS bt_bill_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_job_vendor_bills_bt_bill_id ON job_vendor_bills(bt_bill_id) WHERE bt_bill_id IS NOT NULL;
     -- Buildertrend reconcile archive (services/clickr/reconcile-merge.js): a merged
     -- duplicate or a P86-only record set aside for review. NULL = live. Archived
     -- leads and clients are left out of their list routes and the map; an archived

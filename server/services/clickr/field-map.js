@@ -105,6 +105,70 @@ const DATASETS = {
       'builderVarianceCodes', 'ownerVarianceCodes', 'attachedFileCount', 'commentCount', 'rfiCount',
     ],
   },
+  // Bills — Buildertrend's accounts payable, 103 records. UNLIKE every dataset
+  // above, these keys were NOT taken from a full pull: CLICKR_API_KEY lives only
+  // on the deployed server, so not one bill record could be read from here. They
+  // are the labels of ONE record's detail panel in the Clickr UI (2026-09-19),
+  // converted to the camelCase this registry already uses. Every one is a CLAIM.
+  //
+  // describeMapping() is how the claim is settled, and it settles it without
+  // echoing a single value: a key declared here that no record carries lands in
+  // missingKeys, and the key the records really use lands in unexpectedKeys. Read
+  // that diagnostic on the live Bills tab after this deploys and correct the list
+  // from it. Until then a wrong name reads as ABSENT — never as a wrong value,
+  // because readBill() below reads each key exactly as named, with no candidate
+  // list and no fallback (see the header of this file).
+  //
+  // 'payTo' is the least certain of them. Clickr's LIST view shows a "Pay to"
+  // column holding the vendor company name; its underlying key was never seen on
+  // a record. It is declared under the label's own camelCase like every other key
+  // here. If it is wrong, the vendor reads as absent, no P86 sub is ever filled
+  // from it, and BOTH halves of the diagnostic name it.
+  //
+  // 'builderId' has no entry on purpose: the panel's "Builder ID" is Clickr's own
+  // builderId, one of IGNORED_KEYS, carried by every record of every dataset and
+  // never read. Declaring it would only make it look like a field this sync uses.
+  bills: {
+    key: 'bills',
+    label: 'Bills',
+    noun: 'bill',
+    datasetId: '6aad3e1bc17fdb4c2d317bef',
+    // jobName, deliberately, and not the bill's own number.
+    //
+    // WHY: bill-match matches a bill ONLY inside the P86 job its Buildertrend job
+    // is linked to. A record with no job is refused whatever else it carries, so a
+    // dataset that lost its job column is a dataset that classifies nothing —
+    // exactly the condition this 95% guard exists to catch. Both job-scoped Clickr
+    // datasets above (91 purchase orders, 53 change orders) carried jobName on
+    // every record of a full pull, so a bills dataset that does not is a renamed
+    // dataset, not a real one.
+    //
+    //   NOT billNumber — it is the VENDOR'S invoice number, typed by a person and
+    //     routinely absent on a bill that came out of accounting or straight off a
+    //     purchase order. Six blanks in 103 records would refuse the WHOLE dataset
+    //     and print a refusal where 103 rows belong — a confident wrong answer of
+    //     the opposite kind. As the rung-1 match key a blank one costs that row its
+    //     rung; it must not cost the tab.
+    //   NOT billId — it is the idKey. A required key that is the id asks only
+    //     "did Clickr send ids", which fetchDataset already dedupes on and reports,
+    //     and it would sit at 100% with every business field renamed underneath it.
+    //   NOT jobId — the real matching key, but an opaque number. usableName screens
+    //     through isBtBlank, a TEXT blankness test, so a numeric id can never read
+    //     blank and the guard would pass vacuously. jobName is its human twin: it
+    //     moves when the job columns are renamed, and it is what the row shows.
+    //   NOT title — blank at least as often as billNumber, with none of its match
+    //     value.
+    requiredKey: 'jobName',
+    idKey: 'billId',
+    keys: [
+      'billId', 'billNumber', 'title', 'jobId', 'jobName', 'documentType', 'source',
+      'amount', 'amountPaid', 'remainingBalance', 'paymentStatus', 'payTo',
+      'invoiceDate', 'dueDate', 'createdDate', 'createdBy', 'createdById',
+      'relatedPurchaseOrderIds', 'costCodes',
+      'lienWaiverStatus', 'lienWaiverStatusText', 'isSubRequested',
+      'isOriginatedFromAccounting', 'attachedFileCount', 'commentCount', 'isDuplicated', 'isDeleted',
+    ],
+  },
 };
 
 function isPlainObject(v) {
@@ -261,11 +325,62 @@ function readPurchaseOrder(rec) {
   };
 }
 
+// A Buildertrend bill. Every key is read EXACTLY as declared in the registry and
+// never through a fallback, and every one of them may simply be ABSENT: this
+// mapping came from a detail panel rather than a pull, so a name that turns out
+// to be wrong has to read as null here — never crash the read, never read as a
+// wrong value — and show itself in describeMapping instead.
+function readBill(rec) {
+  const r = isPlainObject(rec) ? rec : {};
+  return {
+    btId: scalarText(r.billId),
+    billNumber: scalarText(r.billNumber),
+    title: scalarText(r.title),
+    jobId: scalarText(r.jobId),
+    jobName: scalarText(r.jobName),
+    documentType: scalarText(r.documentType),
+    source: scalarText(r.source),
+    // Buildertrend's payment word, read through scalarText so a NUMERIC code
+    // arrives as its own digits rather than as null. bill-match maps only the
+    // words it knows and holds anything else back NAMING it, so an unexpected
+    // code lands on the page instead of disappearing into a null.
+    paymentStatusText: scalarText(r.paymentStatus),
+    // Money keeps its native shape (a number, a string or {value, scale});
+    // bt-match's parseMoney reads all three and bill-match never proposes it.
+    amount: r.amount === undefined ? null : r.amount,
+    amountPaid: r.amountPaid === undefined ? null : r.amountPaid,
+    remainingBalance: r.remainingBalance === undefined ? null : r.remainingBalance,
+    // UNCERTAIN KEY — see the note on the registry entry.
+    vendorName: scalarText(r.payTo),
+    invoiceDate: scalarText(r.invoiceDate),
+    dueDate: scalarText(r.dueDate),
+    createdDate: scalarText(r.createdDate),
+    // DEDUPED, and deduped through the SAME normalization both readers apply.
+    // bill-match's resolvePo and sync-apply's createBill each do .map(norm) —
+    // trim plus collapse inner whitespace — and then branch on length > 1, so a
+    // Set over the raw strings would still let ['884', ' 884 '] read as two
+    // purchase orders and refuse a link it can make. One purchase order named
+    // twice is ONE purchase order; two DIFFERENT ids still refuse.
+    relatedPurchaseOrderIds: Array.isArray(r.relatedPurchaseOrderIds)
+      ? [...new Set(r.relatedPurchaseOrderIds
+        .map(scalarText)
+        .map((x) => (x == null ? '' : x.trim().replace(/\s+/g, ' ')))
+        .filter((x) => x !== ''))] : [],
+    costCodes: Array.isArray(r.costCodes) ? r.costCodes.map(scalarText).filter((x) => x != null && x.trim() !== '') : [],
+    lienWaiverStatusText: scalarText(r.lienWaiverStatusText),
+    isSubRequested: r.isSubRequested === true,
+    isOriginatedFromAccounting: r.isOriginatedFromAccounting === true,
+    isDuplicated: r.isDuplicated === true,
+    isDeleted: r.isDeleted === true,
+  };
+}
+
 function readRecord(kind, rec) {
   if (kind === 'jobs') return readJob(rec);
   if (kind === 'clients') return readClient(rec);
   if (kind === 'changeOrders') return readChangeOrder(rec);
   if (kind === 'purchaseOrders') return readPurchaseOrder(rec);
+  if (kind === 'bills') return readBill(rec);
   return readLead(rec);
 }
 
@@ -319,4 +434,4 @@ function describeMapping(kind, records) {
   };
 }
 
-module.exports = { DATASETS, REQUIRED_SHARE, readRecord, readJob, readLead, readChangeOrder, readPurchaseOrder, describeMapping, customField, isPlainObject };
+module.exports = { DATASETS, REQUIRED_SHARE, readRecord, readJob, readLead, readChangeOrder, readPurchaseOrder, readBill, describeMapping, customField, isPlainObject };

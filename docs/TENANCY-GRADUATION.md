@@ -192,7 +192,21 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**551** occurrences of `organization_id IS NULL` across `server/`.
+**554** occurrences of `organization_id IS NULL` across `server/`.
+
+551 → 554: the Buildertrend BILLS sync, on exactly the terms the change-order
+and purchase-order sync already took (see below). Three statements:
+`services/clickr/sync-preview.js` readP86's `job_vendor_bills` read, and
+`sync-apply.js` `lockedBill` and `nextBillNumber`. The first two reach
+`job_vendor_bills` through `jobs.organization_id = $n` (strict) and carry the
+arm on the BILL's own column, whose older rows can be NULL — skipping one would
+read its Buildertrend twin as "new" and create a duplicate PAYABLE. The third is
+P86's own org-wide `BILL-####` sequence, copied predicate-for-predicate from
+`routes/bill-routes.js` `nextBillNumber` so the sync and the bill form cannot
+mint the same number. A bill stamped with another organization stays excluded,
+and `job_vendor_bills` is already classified (parent `jobs`, own column,
+`orphanable: false`) in `services/org-table-classification.js`, so this adds no
+new table to items 1-8.
 
 518 → 551: the client merge (`services/client-merge.js` and the
 `POST /api/clients/merge` route that calls it). Thirty-three statements, and

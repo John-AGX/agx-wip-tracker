@@ -30,7 +30,12 @@
 // PO page does on every save: the SAME grant (services/po-sub-access.js), run
 // after the purchase-order transaction commits on the PO row re-read from the
 // database, never for a draft, a PO without a sub, a foreign sub, or a write
-// that failed. Estimates and crew-side data are never written.
+// that failed. BILLS (bill-match.js) move forward in payment status only
+// (open -> approved -> paid, never back, and 'void' is off that ladder entirely),
+// take their purchase order only through the bt_po_id a P86 purchase order
+// already carries, and take their AMOUNT and their BILL NUMBER only as held-back
+// items a person ticked by name — never as a correction and never in safe mode.
+// Estimates and crew-side data are never written.
 //
 // MODES
 //   rows — the given Buildertrend ids: link + the ticked fields (every correction
@@ -55,9 +60,11 @@ const reconcile = require('./reconcile-merge');
 const jobFin = require('../job-financials');
 const coMatch = require('./co-match');
 const poMatch = require('./po-match');
+const billMatch = require('./bill-match');
 const coMoney = require('../money/change-order-totals');
 const { coNumberKey } = require('../job-financials');
 const { grantSubAccessForPO } = require('../po-sub-access');
+const { overbillVerdict } = require('../money/overbill');
 
 const ACTION_PARAM = 'buildertrend-apply';
 const MAX_ROWS = 200;
@@ -94,7 +101,14 @@ const CLIENT_COLUMNS = { email: 'email', phone: 'phone', cell: 'cell', street: '
 const CO_FIELDS = { title: 1, price: 1, cost: 1, status: 1 };
 const PO_FIELDS = { status: 1, title: 1, costCode: 1, scheduledCompletion: 1, sub: 1, cost: 1 };
 const PO_DATA_KEYS = { title: 'title', costCode: 'costCode', scheduledCompletion: 'scheduledCompletion' };
-const DATASET_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders'];
+// A bill's writable CORRECTIONS. 'amount' and 'billNumber' are deliberately
+// ABSENT: the matcher only ever emits them as held-back items, and leaving them
+// out of this table is the second lock — writable() could not apply either one
+// even if a correction of that name ever appeared on a row. Do not add them.
+const BILL_FIELDS = { status: 1, description: 1, billDate: 1, dueDate: 1, po: 1, sub: 1 };
+const BILL_DATA_KEYS = { description: 'description' };
+const BILL_DATE_COLUMNS = { billDate: 'bill_date', dueDate: 'due_date' };
+const DATASET_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills'];
 
 function isSafeCorrection(kind, c) {
   return kind === 'jobs' && c.field === 'startDate' && c.kind === 'fill';
@@ -108,6 +122,7 @@ function writable(kind, row, mode, fields) {
     ? Object.assign({ contractPrice: 1 }, JOB_FIELD_KEYS)
     : kind === 'changeOrders' ? CO_FIELDS
     : kind === 'purchaseOrders' ? PO_FIELDS
+    : kind === 'bills' ? BILL_FIELDS
     : kind === 'clients' ? CLIENT_COLUMNS
     : Object.assign({ salesperson: 1, client: 1 }, LEAD_FIELD_COLUMNS);
   const pick = fields ? new Set(fields) : null;
@@ -130,6 +145,11 @@ function pickedHeldBack(kind, row, mode, fields) {
   // offer, which is never proposed and never automatic.
   if (kind === 'purchaseOrders') return (row.heldBack || []).filter((h) => h.applicable === true
     && (h.field === 'cost' || h.field === 'close') && fields.indexOf(h.field) !== -1);
+  // A BILL's money and its match key. Both reach a write ONLY through here, so
+  // both are out of safe mode and out of an "apply everything" press that names
+  // no fields at all — the same guard, for the same reason, as 'close' above.
+  if (kind === 'bills') return (row.heldBack || []).filter((h) => h.applicable === true
+    && (h.field === 'amount' || h.field === 'billNumber') && fields.indexOf(h.field) !== -1);
   const allowed = kind === 'jobs' ? { jobNumber: 1 } : kind === 'clients' ? CLIENT_COLUMNS : LEAD_REVENUE_COLUMNS;
   const pick = new Set(fields);
   return (row.heldBack || []).filter((h) => h.applicable === true && allowed[h.field] && pick.has(h.field));
@@ -615,6 +635,248 @@ async function createPurchaseOrder(db, orgId, row, user) {
   return { created: id, notes };
 }
 
+// ── bills ────────────────────────────────────────────────────────────────
+// Org-scoped exactly as lockedPurchaseOrder is: through the bill's JOB, whose
+// organization and Buildertrend id must both be the caller's, plus the bill's
+// own column with the same tolerance arm the preview read uses.
+async function lockedBill(db, orgId, billId, btJobId) {
+  await db.query('SELECT id FROM job_vendor_bills WHERE id = $1 FOR UPDATE', [billId]);
+  const cur = await db.query(
+    'SELECT b.id, b.job_id, b.status, b.bill_number, b.amount, b.bill_date, b.due_date, b.data, b.po_id, b.sub_id, b.bt_bill_id '
+    + 'FROM job_vendor_bills b JOIN jobs j ON j.id = b.job_id '
+    + 'WHERE b.id = $1 AND j.organization_id = $2 AND j.bt_job_id = $3 AND j.bt_archived_at IS NULL AND (b.organization_id = $2 OR b.organization_id IS NULL)',
+    [billId, orgId, btJobId]);
+  return cur.rows[0] || null;
+}
+
+async function billLinkedElsewhere(db, orgId, btId, exceptId) {
+  const taken = await db.query(
+    'SELECT b.id FROM job_vendor_bills b JOIN jobs j ON j.id = b.job_id WHERE j.organization_id = $1 AND b.bt_bill_id = $2 AND b.id <> $3',
+    [orgId, btId, exceptId || '']);
+  return taken.rows.length > 0;
+}
+
+// A purchase order on THIS bill's job, in this organization. The only door from
+// a proposal's purchase-order id to a real one.
+async function poOfJob(db, orgId, poId, jobId) {
+  const r = await db.query(
+    'SELECT po.id, po.sub_id FROM job_purchase_orders po JOIN jobs j ON j.id = po.job_id '
+    + 'WHERE po.id = $1 AND po.job_id = $2 AND j.organization_id = $3', [String(poId), jobId, orgId]);
+  return r.rows[0] || null;
+}
+
+// Another bill on the same job already carrying this vendor invoice number.
+async function billNumberTakenOnJob(db, jobId, number, exceptId) {
+  const r = await db.query('SELECT id, bill_number FROM job_vendor_bills WHERE job_id = $1 AND id <> $2', [jobId, exceptId || '']);
+  const k = billMatch.billNumberKey(number);
+  return !!k && r.rows.some((x) => billMatch.billNumberKey(x.bill_number) === k);
+}
+
+// P86's own org-wide BILL-#### sequence (routes/bill-routes.js nextBillNumber),
+// run on THIS transaction's client so a bulk create cannot mint the same number
+// twice. Same predicate as the route, tolerance arm included.
+async function nextBillNumber(db, orgId) {
+  const { rows } = await db.query(
+    "SELECT bill_number FROM job_vendor_bills WHERE (organization_id = $1 OR organization_id IS NULL) AND bill_number LIKE 'BILL-%'", [orgId]);
+  let maxN = 0;
+  for (const r of rows) {
+    const m = /^BILL-(\d+)$/.exec(String(r.bill_number || ''));
+    if (m) { const n = parseInt(m[1], 10); if (n > maxN) maxN = n; }
+  }
+  return 'BILL-' + String(maxN + 1).padStart(4, '0');
+}
+
+// A DATE column back out as its written calendar day, so a Date from pg and a
+// string from the test engine both come back as 'YYYY-MM-DD' and neither shifts.
+const dayOrNull = (v) => (billMatch.dayKey(v) || null);
+
+async function applyBill(db, orgId, row, mode, fields) {
+  const btId = norm(row.bt.btId);
+  const bill = await lockedBill(db, orgId, row.p86.id, norm(row.bt.jobId));
+  if (!bill) return { skipped: 'The P86 bill is no longer on the job linked to this Buildertrend job.' };
+  const linkedTo = norm(bill.bt_bill_id);
+  if (linkedTo && linkedTo !== btId) return { skipped: 'This P86 bill is already linked to a different Buildertrend bill.' };
+  if (await billLinkedElsewhere(db, orgId, btId, bill.id)) return { skipped: 'Another P86 bill is already linked to this Buildertrend bill.' };
+
+  let data = parseData(bill.data);
+  let poId = bill.po_id || null;
+  let subId = bill.sub_id || null;
+  let billNumber = bill.bill_number;
+  let amount = Number(bill.amount) || 0;
+  let status = bill.status;
+  let billDate = dayOrNull(bill.bill_date);
+  let dueDate = dayOrNull(bill.due_date);
+  const applied = [];
+  const stale = [];
+  let move = null;
+  // VOID is a P86 decision to discard the payable. Re-checked against the LOCKED
+  // row rather than the preview, which may be minutes old: nothing but the link
+  // itself is written on one.
+  const voided = bill.status === 'void';
+
+  for (const c of writable('bills', row, mode, fields)) {
+    if (c.field === 'status') { move = c; continue; }
+    if (voided) { stale.push((c.label || c.field) + ' — the bill is void in P86'); continue; }
+    if (BILL_DATA_KEYS[c.field]) {
+      if (norm(data[BILL_DATA_KEYS[c.field]]) !== norm(c.from)) { stale.push(c.label || c.field); continue; }
+      data = Object.assign({}, data, { [BILL_DATA_KEYS[c.field]]: c.to });
+      applied.push({ field: c.field, from: c.from, to: c.to });
+    } else if (BILL_DATE_COLUMNS[c.field]) {
+      const now = c.field === 'billDate' ? billDate : dueDate;
+      if (billMatch.dayKey(now) !== billMatch.dayKey(c.from)) { stale.push(c.label || c.field); continue; }
+      const next = billMatch.dayKey(c.to) || null;
+      if (c.field === 'billDate') billDate = next; else dueDate = next;
+      applied.push({ field: c.field, from: c.from, to: c.to });
+    } else if (c.field === 'po') {
+      if (poId) { stale.push('Purchase order — P86 has one now'); continue; }
+      const po = await poOfJob(db, orgId, c.value, bill.job_id);
+      if (!po) { stale.push('Purchase order — not a purchase order on this job'); continue; }
+      poId = po.id;
+      applied.push({ field: 'po', from: '', to: c.to });
+    } else if (c.field === 'sub') {
+      if (subId) { stale.push('Vendor — P86 has one now'); continue; }
+      const sub = await subOfOrg(db, orgId, c.value);
+      if (!sub) { stale.push('Vendor — not a sub of this organization'); continue; }
+      subId = sub.id;
+      applied.push({ field: 'sub', from: '', to: sub.name });
+    }
+  }
+
+  // THE MONEY AND THE MATCH KEY — only what the request named by field.
+  for (const h of pickedHeldBack('bills', row, mode, fields)) {
+    if (voided) { stale.push((h.label || h.field) + ' — the bill is void in P86'); continue; }
+    if (h.field === 'amount') {
+      // Re-checked against the LOCKED row. apply() re-reads P86 and re-runs the
+      // matcher, so in the ordinary case h.p86Value IS the locked row's amount:
+      // this is the guard for the window between that read and this FOR UPDATE,
+      // and for a bill that became paid inside it. A single-connection test
+      // harness cannot drive that window (test/clickr-bills.test.js says so),
+      // so the mutation that bites here is one that changes WHICH figure is
+      // compared. Never delete the comparison because it looks unreachable.
+      if (bill.status === 'paid') { stale.push('Amount — the bill is paid in P86'); continue; }
+      if (!moneyEq(amount, h.p86Value) || !Number.isFinite(h.value) || h.value < 0) { stale.push(h.label || h.field); continue; }
+      amount = Math.round(h.value * 100) / 100;
+      applied.push({ field: 'amount', from: h.p86, to: h.bt });
+    } else if (h.field === 'billNumber') {
+      if (norm(billNumber) !== norm(h.p86Value)) { stale.push(h.label || h.field); continue; }
+      const next = norm(h.value).slice(0, 60);
+      if (!next) { stale.push(h.label || h.field); continue; }
+      if (await billNumberTakenOnJob(db, bill.job_id, next, bill.id)) {
+        stale.push('Bill number — another P86 bill on this job already uses ' + next); continue;
+      }
+      billNumber = next;
+      applied.push({ field: 'billNumber', from: h.p86, to: next });
+    }
+  }
+
+  if (move) {
+    if (voided) stale.push('Status — the bill is void in P86');
+    else if (billMatch.RANK[move.value] == null || billMatch.RANK[bill.status] == null || billMatch.RANK[move.value] <= billMatch.RANK[bill.status]) {
+      stale.push('Status — P86 is no longer behind Buildertrend');
+    } else {
+      status = move.value;
+      applied.push({ field: 'status', from: bill.status, to: status });
+    }
+  }
+
+  // Buildertrend's OWN payment word, beside the P86 status and never as one.
+  const nextBt = withBtStatus(data, btStatusText(row.bt.paymentStatusText));
+  if (nextBt) data = nextBt;
+  const wasLinked = linkedTo === btId;
+  if (!applied.length && wasLinked && !nextBt) return { unchanged: true, stale };
+  // approved_at is stamped the way P86's own status route stamps it, but ONLY
+  // when THIS write moved the status onto approved or paid ($12). Keying it off
+  // the status the row ends with instead would back-fill a date onto every bill
+  // P86 already had approved or paid with that column empty - a date nobody
+  // approved anything on, written by a press that promises to move no status.
+  // approved_by is NOT stamped: a sync never names a person as having approved a
+  // payable. data.paidAt is not written either - this sync does not know the
+  // payment date and would be inventing one.
+  const stampApproval = applied.some((x) => x.field === 'status' && (x.to === 'approved' || x.to === 'paid')) ? 1 : 0;
+  await db.query(
+    `UPDATE job_vendor_bills SET data = $1::jsonb, po_id = $2, sub_id = $3, status = $4, bill_number = $5, amount = $6,
+       bill_date = $7, due_date = $8, bt_bill_id = $9,
+       approved_at = CASE WHEN $12 = 1 AND approved_at IS NULL THEN NOW() ELSE approved_at END, updated_at = NOW()
+     WHERE id = $10 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $11)`,
+    [JSON.stringify(data), poId, subId, status, billNumber, amount, billDate, dueDate, btId, bill.id, orgId, stampApproval]);
+  return { applied, linked: !wasLinked, stale, btStatus: !!nextBt };
+}
+
+async function createBill(db, orgId, row, user) {
+  const bt = row.bt;
+  const btId = norm(bt.btId);
+  const job = await db.query('SELECT id FROM jobs WHERE organization_id = $1 AND bt_job_id = $2 AND bt_archived_at IS NULL', [orgId, norm(bt.jobId)]);
+  if (job.rows.length !== 1) return { skipped: 'Its Buildertrend job is not linked to a P86 job.' };
+  const jobId = job.rows[0].id;
+  if (await billLinkedElsewhere(db, orgId, btId, null)) return { skipped: 'A P86 bill is already linked to this Buildertrend bill.' };
+  const m = match.parseMoney(bt.amount);
+  if (m.kind === 'unparsed' || m.kind === 'range') return { skipped: 'Buildertrend’s amount on this bill is not readable money, so it is not created.' };
+  const amount = m.kind === 'value' ? m.value : 0;
+  if (amount < 0) return { skipped: 'Buildertrend’s amount on this bill is negative; P86 does not record a negative payable, so it is not created.' };
+  const notes = [];
+
+  let number = match.isBtBlank(bt.billNumber) ? '' : norm(bt.billNumber).slice(0, 60);
+  if (number) {
+    if (await billNumberTakenOnJob(db, jobId, number, null)) {
+      return { skipped: 'P86 already has a bill numbered ' + number + ' on this job.' };
+    }
+  } else {
+    number = await nextBillNumber(db, orgId);
+    notes.push('Buildertrend sent no vendor invoice number, so P86 assigned ' + number + '.');
+  }
+
+  // THE PURCHASE ORDER — only through the bt_po_id a P86 purchase order already
+  // carries, only on this bill's own job, never a guess.
+  const poIds = (bt.relatedPurchaseOrderIds || []).map(norm).filter(Boolean);
+  let poId = null;
+  let poSubId = null;
+  if (poIds.length > 1) {
+    notes.push('Buildertrend names ' + poIds.length + ' purchase orders on this bill; a P86 bill belongs to exactly one, so none is set. Set it in P86.');
+  } else if (poIds.length === 1) {
+    const hit = await db.query(
+      'SELECT po.id, po.sub_id FROM job_purchase_orders po JOIN jobs j ON j.id = po.job_id '
+      + 'WHERE po.bt_po_id = $1 AND po.job_id = $2 AND j.organization_id = $3', [poIds[0], jobId, orgId]);
+    if (hit.rows.length === 1) { poId = hit.rows[0].id; poSubId = hit.rows[0].sub_id || null; }
+    else notes.push('Buildertrend purchase order ' + poIds[0] + ' is not on this P86 job yet, so no purchase order is set. Import it on the Purchase orders tab, then set it in P86.');
+  }
+
+  const rs = poMatch.resolveSub((await db.query("SELECT id, name FROM subs WHERE organization_id = $1 AND COALESCE(status, 'active') <> 'closed'", [orgId])).rows, bt.vendorName);
+  if (rs.why) notes.push(rs.why);
+  // The vendor P86's own create route would end up with: the named sub, else the
+  // purchase order's (routes/bill-routes.js inherits it the same way).
+  const subId = rs.sub ? rs.sub.id : poSubId;
+  if (!rs.sub && poSubId) notes.push('The vendor was inherited from the linked purchase order, as P86’s own bill form does.');
+
+  const status = billMatch.btBillStatus(bt.paymentStatusText) || 'open';
+  const data = { description: match.isBtBlank(bt.title) ? '' : norm(bt.title), lienWaiver: 'none', lines: [] };
+  const btWord = btStatusText(bt.paymentStatusText);
+  if (btWord) data.btStatus = btWord;
+  if (!rs.sub && !poSubId && !match.isBtBlank(bt.vendorName)) data.vendorName = norm(bt.vendorName);
+
+  // OVER-BILLING is reported, not silently swallowed and not used to hide the
+  // link. The bill exists in Buildertrend against that purchase order; leaving
+  // po_id blank to dodge the guard would hide the overage instead of showing it,
+  // and P86's own guard is an "are you sure" for a person typing a new bill —
+  // this create is a person pressing Create on a record that already exists.
+  if (poId && amount > 0) {
+    const sib = await db.query(
+      "SELECT COALESCE(SUM(amount), 0) AS billed FROM job_vendor_bills WHERE po_id = $1 AND status <> 'void'", [poId]);
+    const po = await db.query('SELECT data FROM job_purchase_orders WHERE id = $1', [poId]);
+    const total = po.rows.length ? poMatch.poTotal(parseData(po.rows[0].data)) : 0;
+    const over = overbillVerdict(total, Number(sib.rows[0] && sib.rows[0].billed) || 0, amount);
+    if (over) notes.push('This bill takes the linked purchase order past its committed total in P86. It is created with the link so the overage is visible; settle it in P86.');
+  }
+
+  const id = genId('bill_');
+  await db.query(
+    'INSERT INTO job_vendor_bills (id, job_id, organization_id, owner_id, po_id, sub_id, status, bill_number, amount, bill_date, due_date, data, approved_at, approved_by, bt_bill_id) '
+    + "VALUES ($1, $2, (SELECT organization_id FROM jobs WHERE id = $2), $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, "
+    + "CASE WHEN $6 IN ('approved', 'paid') THEN NOW() ELSE NULL END, NULL, $12)",
+    [id, jobId, user && user.id != null ? user.id : null, poId, subId, status, number, amount,
+      match.dateKey(bt.invoiceDate) || null, match.dateKey(bt.dueDate) || null, JSON.stringify(data), btId]);
+  return { created: id, notes };
+}
+
 // ── leads ────────────────────────────────────────────────────────────────
 async function applyLead(db, orgId, row, mode, fields) {
   const btId = norm(row.bt.btId);
@@ -909,6 +1171,7 @@ async function createRecords(org, kind, rows, input, deps) {
       const r = kind === 'jobs' ? await createJob(client, org.id, row, deps.user)
         : kind === 'changeOrders' ? await createChangeOrder(client, org.id, row, deps.user)
         : kind === 'purchaseOrders' ? await createPurchaseOrder(client, org.id, row, deps.user)
+        : kind === 'bills' ? await createBill(client, org.id, row, deps.user)
         : kind === 'clients' ? await createClient(client, org.id, row)
         : await createLead(client, org.id, row, deps.user);
       await client.query('COMMIT');
@@ -955,7 +1218,7 @@ async function linkRecord(org, kind, rows, input, deps) {
   const skip = (reason) => ({ status: 200, body: { dataset: kind, mode: 'link', counts: { linked: 0, skipped: 1 }, results: [Object.assign(base, { outcome: 'skipped', reason })] } });
   if (row.class === 'matched' || row.class === 'conflict') return skip('This Buildertrend record already has a confident P86 match.');
   if (listed.indexOf(String(input.p86Id)) === -1) return skip('That P86 record is not one of the candidates listed for this Buildertrend record.');
-  if (kind === 'changeOrders' || kind === 'purchaseOrders') return linkDetail(kind, org, row, input, deps, base, skip);
+  if (kind === 'changeOrders' || kind === 'purchaseOrders' || kind === 'bills') return linkDetail(kind, org, row, input, deps, base, skip);
   const [table, col] = LINK_TABLE[kind];
   const client = await deps.pool.connect();
   try {
@@ -984,23 +1247,31 @@ async function linkRecord(org, kind, rows, input, deps) {
   return { status: 200, body: { dataset: kind, mode: 'link', counts: { linked: 1 }, results: [Object.assign(base, { outcome: 'linked', linked: true })] } };
 }
 
-// A change order or purchase order is linked only on the P86 job its
-// Buildertrend job is linked to.
+// A change order, purchase order or bill is linked only on the P86 job its
+// Buildertrend job is linked to. The link writes the Buildertrend id and
+// NOTHING else — no money, no status.
+const DETAIL_NOUN = { changeOrders: 'change order', purchaseOrders: 'purchase order', bills: 'bill' };
 async function linkDetail(kind, org, row, input, deps, base, skip) {
   const co = kind === 'changeOrders';
-  const noun = co ? 'change order' : 'purchase order';
+  const bill = kind === 'bills';
+  const noun = DETAIL_NOUN[kind];
   const client = await deps.pool.connect();
   try {
     await client.query('BEGIN');
     const rec = co ? await lockedChangeOrder(client, org.id, input.p86Id, norm(row.bt.jobId))
+      : bill ? await lockedBill(client, org.id, input.p86Id, norm(row.bt.jobId))
       : await lockedPurchaseOrder(client, org.id, input.p86Id, norm(row.bt.jobId));
     if (!rec || !row.job || rec.job_id !== row.job.id) { await client.query('ROLLBACK'); return skip('That P86 ' + noun + ' is not on the job linked to this Buildertrend job.'); }
-    const current = norm(co ? rec.bt_co_id : rec.bt_po_id);
+    const current = norm(co ? rec.bt_co_id : bill ? rec.bt_bill_id : rec.bt_po_id);
     if (current && current !== base.btId) { await client.query('ROLLBACK'); return skip('That P86 ' + noun + ' is already linked to a different Buildertrend ' + noun + '.'); }
-    if (co ? await coLinkedElsewhere(client, org.id, base.btId, rec.id) : await poLinkedElsewhere(client, org.id, base.btId, rec.id)) {
+    const elsewhere = co ? await coLinkedElsewhere(client, org.id, base.btId, rec.id)
+      : bill ? await billLinkedElsewhere(client, org.id, base.btId, rec.id)
+      : await poLinkedElsewhere(client, org.id, base.btId, rec.id);
+    if (elsewhere) {
       await client.query('ROLLBACK'); return skip('Another P86 ' + noun + ' is already linked to this Buildertrend ' + noun + '.');
     }
     if (co) await client.query('UPDATE job_change_orders SET bt_co_id = $1 WHERE id = $2 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)', [base.btId, rec.id, org.id]);
+    else if (bill) await client.query('UPDATE job_vendor_bills SET bt_bill_id = $1, updated_at = NOW() WHERE id = $2 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)', [base.btId, rec.id, org.id]);
     else await client.query('UPDATE job_purchase_orders SET bt_po_id = $1 WHERE id = $2 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)', [base.btId, rec.id, org.id]);
     // A linked change order learns Buildertrend's current word for it (C2).
     const nextCoBt = co ? withBtStatus(parseData(rec.data), btStatusText(row.bt.statusText)) : null;
@@ -1072,6 +1343,7 @@ async function apply(org, input, deps) {
       const r = kind === 'jobs' ? await applyJob(client, org.id, row, mode, input.fields)
         : kind === 'changeOrders' ? await applyChangeOrder(client, org.id, row, mode, input.fields)
         : kind === 'purchaseOrders' ? await applyPurchaseOrder(client, org.id, row, mode, input.fields)
+        : kind === 'bills' ? await applyBill(client, org.id, row, mode, input.fields)
         : kind === 'clients' ? await applyClient(client, org.id, row, mode, input.fields)
         : await applyLead(client, org.id, row, mode, input.fields);
       await client.query('COMMIT');
@@ -1115,7 +1387,7 @@ async function apply(org, input, deps) {
 function parseInput(body) {
   const b = body || {};
   const dataset = b.dataset;
-  if (DATASET_KINDS.indexOf(dataset) === -1) return { error: 'dataset must be "jobs", "leads", "clients", "changeOrders" or "purchaseOrders".' };
+  if (DATASET_KINDS.indexOf(dataset) === -1) return { error: 'dataset must be "jobs", "leads", "clients", "changeOrders", "purchaseOrders" or "bills".' };
   if (b.mode === 'link') {
     const btId = (typeof b.btId === 'string' || typeof b.btId === 'number') ? String(b.btId).trim() : '';
     const p86Id = (typeof b.p86Id === 'string' || typeof b.p86Id === 'number') ? String(b.p86Id).trim() : '';
@@ -1264,7 +1536,7 @@ async function handle(req, res, deps) {
     if (out.status === 200) {
       auditLog(req, {
         action: input.mode === 'create' ? 'buildertrend.create' : input.mode === 'link' ? 'buildertrend.link' : 'buildertrend.apply',
-        targetType: input.dataset === 'jobs' ? 'job' : input.dataset === 'clients' ? 'client' : input.dataset === 'changeOrders' ? 'change_order' : input.dataset === 'purchaseOrders' ? 'purchase_order' : 'lead',
+        targetType: input.dataset === 'jobs' ? 'job' : input.dataset === 'clients' ? 'client' : input.dataset === 'changeOrders' ? 'change_order' : input.dataset === 'purchaseOrders' ? 'purchase_order' : input.dataset === 'bills' ? 'bill' : 'lead',
         targetId: input.mode === 'safe' ? 'safe updates' : input.mode === 'create' && !input.btIds.length ? 'bulk create' : String(input.btIds.length) + ' records',
         organizationId: org.id,
         detail: { mode: input.mode, counts: out.body.counts,

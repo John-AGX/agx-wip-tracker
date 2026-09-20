@@ -94,6 +94,24 @@ const SNAPSHOT_FIELDS = {
     ['sub', 'Sub/vendor', 'subName', 'text'],
     ['estCompleteDate', 'Est. completion', 'estCompleteDate', 'day'],
   ],
+  // Bills. What a person would call a change on a payable: the number, the job,
+  // the money, the payment word, the vendor and the two dates. NOT the
+  // bookkeeping (createdBy, counts, ids), NOT isDeleted/isDuplicated (those turn
+  // the row into a refusal, which is louder than a "changed" mark), and NOT the
+  // related purchase order ids — an array does not normalize to a scalar here,
+  // and a bill moving between purchase orders shows as a held-back item anyway.
+  bills: [
+    ['billNumber', 'Bill number', 'billNumber', 'text'],
+    ['title', 'Title', 'title', 'text'],
+    ['job', 'Job', 'jobName', 'text'],
+    ['status', 'Payment status', 'paymentStatusText', 'text'],
+    ['amount', 'Amount', 'amount', 'money'],
+    ['amountPaid', 'Amount paid', 'amountPaid', 'money'],
+    ['remainingBalance', 'Remaining balance', 'remainingBalance', 'money'],
+    ['vendor', 'Pay to', 'vendorName', 'text'],
+    ['invoiceDate', 'Invoice date', 'invoiceDate', 'day'],
+    ['dueDate', 'Due date', 'dueDate', 'day'],
+  ],
 };
 
 const FIRST_TIME_NOTE = 'Buildertrend records are remembered from this refresh on — the next refresh marks what is new or changed.';
@@ -179,6 +197,7 @@ function snapshotLabel(dataset, snap, btId) {
   let label = '';
   if (dataset === 'changeOrders') label = [s.coNumber, s.title].filter(Boolean).join(' ') + (s.job ? ' (' + s.job + ')' : '');
   else if (dataset === 'purchaseOrders') label = [s.poNumber, s.title].filter(Boolean).join(' ') + (s.job ? ' (' + s.job + ')' : '');
+  else if (dataset === 'bills') label = [s.billNumber, s.title].filter(Boolean).join(' ') + (s.job ? ' (' + s.job + ')' : '');
   else if (dataset === 'leads') label = s.title || '';
   else label = s.name || '';
   label = String(label).trim();

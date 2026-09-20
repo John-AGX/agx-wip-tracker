@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.32';
+const APP_VERSION = '1.33';
 
 const releases = [
+  {
+    version: '1.33',
+    date: '2026-09-20',
+    name: 'Buildertrend bills',
+    summary: 'The Buildertrend preview has a Bills tab. A bill Buildertrend holds against a job can be linked to the matching Project 86 bill or created here, attached to the right purchase order by its Buildertrend id — and no figure moves until you tick it.',
+    changes: [
+      { type: 'new', text: 'Bills are the sixth Buildertrend dataset the preview reads, after jobs, leads, clients, change orders and purchase orders. Each Buildertrend bill is matched to a Project 86 bill first by a Buildertrend id already saved on it, then by its job and bill number. A bill whose Buildertrend job has not been linked to a Project 86 job yet is shown as waiting on its job rather than as a problem, and two Project 86 bills that could both be the row are refused rather than guessed between.' },
+      { type: 'new', text: 'A bill is attached to its purchase order by identity, not by guesswork. Buildertrend tells us which purchase orders a bill relates to, and Project 86 purchase orders already carry their Buildertrend id, so the link is exact. If Buildertrend names more than one purchase order, or names one that has not been imported, or one that belongs to a different job, no link is set and the note says which — and a bill already attached to a different purchase order is never moved off it.' },
+      { type: 'new', text: 'Money on a bill is always held back. An amount, an amount paid or a remaining balance that differs from Buildertrend is shown for you to tick, never applied by “Link confident matches”, and unticked by default. Buildertrend’s payment status maps to open and paid only; nothing maps to approved, because approved in Project 86 means somebody here said the invoice is good to pay, and no payment status says that. Partially Paid, Pending Payment and any word Project 86 has no term for are held back naming themselves rather than being guessed at.' },
+      { type: 'improved', text: 'New and changed bills are marked since your last refresh, like every other dataset, and a bill Buildertrend has deleted or flagged as a duplicate is never created.' },
+    ],
+  },
   {
     version: '1.32',
     date: '2026-09-19',

@@ -66,28 +66,34 @@
     leads: { f: 'all', scope: 'all', q: '', shown: PAGE },
     clients: { f: 'all', scope: 'all', q: '', shown: PAGE },
     changeOrders: { f: 'all', scope: 'all', q: '', shown: PAGE },
-    purchaseOrders: { f: 'all', scope: 'all', q: '', shown: PAGE }
+    purchaseOrders: { f: 'all', scope: 'all', q: '', shown: PAGE },
+    bills: { f: 'all', scope: 'all', q: '', shown: PAGE }
   };
   // Apply (server/services/clickr/sync-apply.js). The server re-reads both
   // sides and re-matches; the page only says which Buildertrend ids to act on.
   var APPLY_ENDPOINT = '/api/admin/organizations/me?action=buildertrend-apply';
   var _applying = null;          // 'jobs:safe' | 'jobs:<btId>' | ...
-  var _applyNote = { jobs: null, leads: null, clients: null, changeOrders: null, purchaseOrders: null };   // { ok, text }
+  var _applyNote = { jobs: null, leads: null, clients: null, changeOrders: null, purchaseOrders: null, bills: null };   // { ok, text }
   // What a person ticked, per row: _picks['jobs:<btId>'][field] = true/false.
   // Corrections start ticked; held-back items a person may apply start unticked.
   var _picks = {};
-  var TABS = [['jobs', 'Jobs'], ['leads', 'Leads'], ['clients', 'Clients'], ['changeOrders', 'Change orders'], ['purchaseOrders', 'Purchase orders'], ['archive', 'Archive']];
+  var TABS = [['jobs', 'Jobs'], ['leads', 'Leads'], ['clients', 'Clients'], ['changeOrders', 'Change orders'], ['purchaseOrders', 'Purchase orders'], ['bills', 'Bills'], ['archive', 'Archive']];
   var ARCHIVE_ENDPOINT = '/api/admin/organizations/me?view=buildertrend-archive';
   var _archive = null;       // [{ kind, id, label, reason, mergedInto, archivedAt, attached, deletable }]
   var _archiveErr = null;
   var _archiveNote = null;
-  var NOUN = { jobs: 'job', leads: 'lead', clients: 'client', changeOrders: 'change order', purchaseOrders: 'purchase order' };
+  var NOUN = { jobs: 'job', leads: 'lead', clients: 'client', changeOrders: 'change order', purchaseOrders: 'purchase order', bills: 'bill' };
   var _tab = 'jobs';
-  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'jobs' || _savedTab === 'leads' || _savedTab === 'clients' || _savedTab === 'changeOrders' || _savedTab === 'purchaseOrders' || _savedTab === 'archive') _tab = _savedTab; } catch (e) { /* storage blocked */ }
+  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'jobs' || _savedTab === 'leads' || _savedTab === 'clients' || _savedTab === 'changeOrders' || _savedTab === 'purchaseOrders' || _savedTab === 'bills' || _savedTab === 'archive') _tab = _savedTab; } catch (e) { /* storage blocked */ }
+
+  // The three datasets that hang off a linked JOB rather than standing alone.
+  // Their P86 side is reviewed in P86, never archived from here, and their
+  // "refused" bucket is mostly "its job is not linked yet".
+  var DETAIL_KINDS = { changeOrders: 1, purchaseOrders: 1, bills: 1 };
 
   // A change order is "refused" mostly because its job is not linked yet.
   function labelFor(ds, k) {
-    if (ds && (ds.key === 'changeOrders' || ds.key === 'purchaseOrders') && k === 'refused') return 'Waiting on its job';
+    if (ds && DETAIL_KINDS[ds.key] && k === 'refused') return 'Waiting on its job';
     return LABEL[k];
   }
 
@@ -275,7 +281,7 @@
     return (ds.rows || []).filter(function (r) {
       if (!inScope(ds, ui, r) || !passesFilter(r, ui.f)) return false;
       if (!q) return true;
-      var hay = [r.bt.raw, r.bt.contactName, r.bt.email, r.bt.street, r.bt.city, r.bt.jobName, r.job && r.job.label, r.p86 && r.p86.title, r.p86 && r.p86.jobNumber, r.p86 && r.p86.coNumber, r.p86 && r.p86.poNumber, r.p86 && r.p86.subName, r.bt.subName, r.p86 && r.p86.email].join(' ').toLowerCase();
+      var hay = [r.bt.raw, r.bt.contactName, r.bt.email, r.bt.street, r.bt.city, r.bt.jobName, r.job && r.job.label, r.p86 && r.p86.title, r.p86 && r.p86.jobNumber, r.p86 && r.p86.coNumber, r.p86 && r.p86.poNumber, r.p86 && r.p86.billNumber, r.bt.billNumber, r.bt.vendorName, r.p86 && r.p86.subName, r.bt.subName, r.p86 && r.p86.email].join(' ').toLowerCase();
       return hay.indexOf(q) >= 0;
     });
   }
@@ -285,7 +291,7 @@
     var nib = ds.notInBuildertrend;
     return ((nib && nib.rows) || []).filter(function (p) {
       if (!q) return true;
-      return [p.jobNumber, p.coNumber, p.poNumber, p.jobLabel, p.title, p.client, p.email, p.street, p.city, p.status].join(' ').toLowerCase().indexOf(q) >= 0;
+      return [p.jobNumber, p.coNumber, p.poNumber, p.billNumber, p.jobLabel, p.title, p.client, p.email, p.street, p.city, p.status].join(' ').toLowerCase().indexOf(q) >= 0;
     });
   }
 
@@ -331,6 +337,16 @@
       // on a fact it never shows.
       if (bt.paidStatusText) meta.push('Paid: ' + esc(bt.paidStatusText));
       if (bt.subName) meta.push('Sub/vendor: ' + esc(bt.subName));
+    } else if (ds.key === 'bills') {
+      if (bt.jobName) meta.push('Job: ' + esc(bt.jobName));
+      meta.push('Payment: ' + (bt.paymentStatusText ? esc(bt.paymentStatusText) : '<i>blank</i>'));
+      // All three figures, always. The amount is the only one P86 can take, and
+      // the other two are what the held-back settlement items are measured
+      // against — a page that asks for a money press has to show the money.
+      meta.push('Amount ' + esc(bt.amountText) + ' · paid ' + esc(bt.paidText) + ' · owing ' + esc(bt.remainingText));
+      if (bt.vendorName) meta.push('Pay to: ' + esc(bt.vendorName));
+      if ((bt.relatedPurchaseOrderIds || []).length) meta.push('BT purchase order' + (bt.relatedPurchaseOrderIds.length === 1 ? ' ' : 's ') + esc(bt.relatedPurchaseOrderIds.join(', ')));
+      if (bt.dueDate) meta.push('Due ' + esc(String(bt.dueDate).slice(0, 10)));
     } else if (ds.key === 'clients') {
       if (bt.email) meta.push(esc(bt.email));
       if (bt.phone || bt.cell) meta.push(esc(bt.phone || bt.cell));
@@ -353,6 +369,7 @@
     if (kind === 'jobs') return esc([p.jobNumber, p.title].filter(Boolean).join(' ') || p.id);
     if (kind === 'changeOrders') return esc([p.coNumber, p.title].filter(Boolean).join(' ') || p.id);
     if (kind === 'purchaseOrders') return esc([p.poNumber, p.title].filter(Boolean).join(' ') || p.id);
+    if (kind === 'bills') return esc([p.billNumber, p.title].filter(Boolean).join(' ') || p.id);
     return esc(p.title || p.id);
   }
 
@@ -408,6 +425,11 @@
         if (r.bt.approvalKind) meta.push('Approved in Buildertrend ' + (r.bt.approvalKind === 'sub' ? 'by the sub' : 'internally'));
         if (r.job) meta.push('on ' + esc(r.job.label));
         meta.push('Cost ' + esc(p.totalText || '?') + (p.subName ? ' · ' + esc(p.subName) : ''));
+      }
+      if (ds.key === 'bills') {
+        if (r.bt.paymentStatusText) meta.push('Buildertrend: ' + esc(r.bt.paymentStatusText));
+        if (r.job) meta.push('on ' + esc(r.job.label));
+        meta.push('Amount ' + esc(p.amountText || '?') + (p.poNumber ? ' · PO ' + esc(p.poNumber) : ' · no PO') + (p.subName ? ' · ' + esc(p.subName) : ''));
       }
       html += '<div class="btp-name">' + p86Label(p, ds.key) + '</div>' + (meta.length ? '<div class="btp-meta">' + meta.join(' · ') + '</div>' : '');
     } else if (cls === 'change_order') {
@@ -583,6 +605,11 @@
     if (r.rung) head += '<span class="btp-rung">via ' + esc(r.rung) + '</span>';
     if (ds.key === 'jobs' && r.bt.scope !== 'open') head += '<span class="btp-rung">' + esc(r.bt.scope === 'closed' ? 'Closed in Buildertrend' : 'no Buildertrend status') + '</span>';
     var notes = (r.notes || []).length ? '<div class="btp-notes">' + r.notes.map(esc).join(' · ') + '</div>' : '';
+    if (r.p86Linked) {
+      notes = '<div class="btp-block c-heldback"><div class="btp-block-l">Project 86 still has the record linked to this one</div>' +
+        '<div class="btp-name">' + esc([r.p86Linked.billNumber, r.p86Linked.status, r.p86Linked.amountText].filter(Boolean).join(' · ')) + '</div>' +
+        '<div class="btp-fix-note">Nothing is proposed for it, and a sync never deletes or voids a P86 record. Decide in P86.</div></div>' + notes;
+    }
     head += applyButtonHTML(ds, r);
     return '<div class="btp-row"' + (canApply(r) ? ' data-btp-rowid="' + esc(r.bt.btId) + '"' : '') + '><div class="btp-row-head">' + head + '</div>' +
       sinceChangesHTML(r) + '<div class="btp-pair">' + btSide(ds, r) + p86Side(ds, r) + '</div>' +
@@ -627,7 +654,7 @@
   // linked with. (Warranty and Pending used to be the standing example — P86
   // now has both statuses, so they are ordinary agreeing rows.)
   function statusWordCount(ds) {
-    if (!ds || (ds.key !== 'jobs' && ds.key !== 'changeOrders')) return 0;
+    if (!ds || (ds.key !== 'jobs' && ds.key !== 'changeOrders' && ds.key !== 'bills')) return 0;
     return (ds.rows || []).filter(function (r) {
       return (r['class'] === 'matched' || r['class'] === 'conflict') && r.bt && r.bt.btId != null && r.bt.btId !== '' && r.btStatusDue === true;
     }).length;
@@ -694,6 +721,10 @@
     var t = 'Saves the Buildertrend id on each confident match' + (ds.key === 'jobs' ? ' and fills a start date only where P86 has none' : '') + '.';
     var w = statusWordCount(ds);
     if (w) t += ' Records what Buildertrend now calls ' + w + ' ' + (NOUN[ds.key] || 'record') + (w === 1 ? '' : 's') + ', beside the P86 status, which does not change.';
+    if (ds.key === 'bills') {
+      t += ' A bill’s amount, its bill number and its purchase order are applied one row at a time, and its amount only when you tick it.' +
+        ' No P86 bill is created, voided or deleted by this press.';
+    }
     if (ds.key === 'purchaseOrders') {
       t += ' The sub of each sent or approved PO without portal access to the job’s files yet gets it, as on the PO page (' + subAccessCount(ds) + ').';
       var k = approvalKindCount(ds);
@@ -717,6 +748,11 @@
     if (key === 'purchaseOrders' && ds) {
       var committed = (ds.rows || []).filter(function (x) { return x['class'] === 'new' && !x.createBlocked && x.bt.state86 && x.bt.state86 !== 'draft'; }).length;
       extra = ' ' + committed + ' of them are sent or approved in Buildertrend, so they are created committed and their cost accrues on the job. Where one has a P86 sub, that sub gets portal access to the job’s files, as on the PO page.';
+    }
+    if (key === 'bills' && ds) {
+      var paidN = (ds.rows || []).filter(function (x) { return x['class'] === 'new' && x.bt.state86 === 'paid'; }).length;
+      extra = ' Each is created on its linked P86 job at Buildertrend’s amount, which is real money owed: it accrues on the job and counts toward its purchase order’s %-billed. ' +
+        paidN + ' of them are already paid in Buildertrend and are created paid.';
     }
     return 'Create ' + n + ' ' + (key === 'jobs' ? 'open and warranty job' : (NOUN[key] || 'record')) + (n === 1 ? '' : 's') + ' in Project 86 from Buildertrend? Each is linked by its Buildertrend id.' + extra;
   }
@@ -865,12 +901,12 @@
     }
     var a = addr(p);
     if (a) meta.push(esc(a));
-    var archiveBtn = (ds.key === 'changeOrders' || ds.key === 'purchaseOrders') ? ''
+    var archiveBtn = DETAIL_KINDS[ds.key] ? ''
       : ds.key === 'leads'
       ? '<span class="btp-rung" style="margin-left:auto;">not archived: Buildertrend sends open leads only</span>'
       : '<button type="button" class="btp-btn btp-apply" data-btp-archive="' + esc(p.id) + '" data-btp-archive-label="' + esc(p.title || p.id) + '"' + (_applying ? ' disabled' : '') + '>Archive</button>';
     return '<div class="btp-row"><div class="btp-row-head"><span class="btp-chip c-notinbt">' + esc(CHIP.notinbt) + '</span>' +
-      '<span class="btp-rung">' + ((ds.key === 'changeOrders' || ds.key === 'purchaseOrders') ? 'review only — change it in P86 if Buildertrend is right' : 'review only — archiving sets it aside, restorable') + '</span>' + archiveBtn + '</div>' +
+      '<span class="btp-rung">' + (DETAIL_KINDS[ds.key] ? 'review only — change it in P86 if Buildertrend is right' : 'review only — archiving sets it aside, restorable') + '</span>' + archiveBtn + '</div>' +
       '<div class="btp-side-l">Project 86</div><div class="btp-name">' + p86Label(p, ds.key) + '</div>' +
       (meta.length ? '<div class="btp-meta">' + meta.join(' · ') + '</div>' : '') +
       ((p.resembles || []).length ? '<div class="btp-notes">Possible duplicate: looks like Buildertrend ' + p.resembles.map(function (x) {
@@ -941,6 +977,7 @@
         (ds.key === 'clients' ? 'Create clients first — leads and jobs link to a client through its Buildertrend id. ' : '') +
         (ds.key === 'changeOrders' ? 'Each is created on its linked P86 job with Buildertrend’s price and cost as one line, and approved and locked when Buildertrend approved it. A change order whose job is not linked yet waits. ' : '') +
         (ds.key === 'purchaseOrders' ? 'Each is created on its linked P86 job with Buildertrend’s number, status, cost and sub/vendor (when it is exactly one P86 sub). A sent or approved one is committed and locked, so its cost accrues. No bill is created. A sent or approved PO’s sub gets portal access to the job’s files, as on the PO page. ' : '') +
+        (ds.key === 'bills' ? 'Each is created on its linked P86 job at Buildertrend’s amount, with its vendor invoice number, dates and vendor, and its purchase order only where P86 has already imported that exact Buildertrend PO. Deleted and duplicated Buildertrend bills are never created. ' : '') +
         'Possible duplicates and ambiguous rows are never created.</span></div>';
       var note = _applyNote[ds.key];
       if (note) html += '<div class="btp-sentence ' + (note.ok ? 'is-ok' : 'is-bad') + '">' + esc(note.text) + '</div>';
@@ -968,7 +1005,7 @@
         html += tile('change_order', cc.counts.change_order, esc(LABEL.change_order), 'map to P86 change orders', ui.f === 'change_order');
         html += tile('not_a_job', cc.counts.not_a_job, esc(LABEL.not_a_job), 'not in the match rate', ui.f === 'not_a_job');
       }
-      if (cc.counts.refused) html += tile('refused', cc.counts.refused, esc(labelFor(ds, 'refused')), (ds.key === 'changeOrders' || ds.key === 'purchaseOrders') ? 'link its job first' : 'never created', ui.f === 'refused');
+      if (cc.counts.refused) html += tile('refused', cc.counts.refused, esc(labelFor(ds, 'refused')), DETAIL_KINDS[ds.key] ? 'link its job first' : 'never created', ui.f === 'refused');
       if (cc.counts.typo) html += tile('typo', cc.counts.typo, 'Probable BT typos', 'fix in Buildertrend', ui.f === 'typo');
       html += tile('rate', cc.rate == null ? '—' : Math.round(cc.rate * 100) + '%', 'Match rate', 'of ' + esc(cc.base), false, true);
       html += '</div>';

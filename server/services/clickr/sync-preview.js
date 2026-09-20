@@ -41,6 +41,7 @@ const { fetchDataset, MIN_KEY_LENGTH } = require('./client');
 const match = require('./bt-match');
 const coMatch = require('./co-match');
 const poMatch = require('./po-match');
+const billMatch = require('./bill-match');
 const coMoney = require('../money/change-order-totals');
 const since = require('./since-refresh');
 
@@ -132,6 +133,20 @@ async function readP86(pool, orgId) {
     + "AND EXISTS (SELECT 1 FROM attachment_folder_grants g WHERE g.sub_id = po.sub_id AND g.entity_type = 'job' AND g.entity_id = po.job_id AND g.folder = 'general')) AS sub_access "
     + 'FROM job_purchase_orders po JOIN jobs j ON j.id = po.job_id LEFT JOIN subs s ON s.id = po.sub_id AND s.organization_id = $1 '
     + 'WHERE j.organization_id = $1 AND j.bt_archived_at IS NULL AND (po.organization_id = $1 OR po.organization_id IS NULL)', [orgId]);
+  // Vendor bills on exactly the same terms as purchase orders: reached through
+  // THEIR JOB's organization AND their own, so a row stamped with another
+  // organization is never read (even on this org's job) and an older row with no
+  // organization still is — missing it would read its Buildertrend twin as "new"
+  // and create a duplicate payable. The purchase order is joined on the SAME JOB
+  // (bill-routes.js refuses a bill whose PO is on another job), which scopes it
+  // without a tolerance arm of its own.
+  const bills = await pool.query(
+    'SELECT b.id, b.job_id, b.status, b.bill_number, b.amount, b.bill_date, b.due_date, b.data, b.po_id, b.sub_id, b.bt_bill_id, '
+    + 's.name AS sub_name, po.po_number AS po_number '
+    + 'FROM job_vendor_bills b JOIN jobs j ON j.id = b.job_id '
+    + 'LEFT JOIN subs s ON s.id = b.sub_id AND s.organization_id = $1 '
+    + 'LEFT JOIN job_purchase_orders po ON po.id = b.po_id AND po.job_id = b.job_id '
+    + 'WHERE j.organization_id = $1 AND j.bt_archived_at IS NULL AND (b.organization_id = $1 OR b.organization_id IS NULL)', [orgId]);
   const subs = await pool.query("SELECT id, name FROM subs WHERE organization_id = $1 AND COALESCE(status, 'active') <> 'closed'", [orgId]);
   const users = await pool.query(
     'SELECT id, name FROM users WHERE organization_id = $1 AND active = true', [orgId]);
@@ -147,6 +162,7 @@ async function readP86(pool, orgId) {
     coTotals: changeOrderTotals(jobRows, cos.rows),
     coRows: cos.rows,
     poRows: pos.rows,
+    billRows: bills.rows,
     subs: subs.rows,
     directory: { users: users.rows.map((r) => ({ id: r.id, name: r.name })), clients: clients.rows.map((r) => ({ id: r.id, name: r.name })) },
     clients: clients.rows,
@@ -176,6 +192,9 @@ function notInBtSentence(ds, reliable, fr, p86Error, n, notListed) {
     ? ' Only change orders on P86 jobs whose Buildertrend job sent change orders in this read are listed; ' + notListed + ' on other jobs are not (Clickr\'s change-order dataset covers open jobs only).'
     : ds.key === 'purchaseOrders'
     ? ' Only purchase orders on P86 jobs whose Buildertrend job sent purchase orders in this read are listed; ' + notListed + ' on other jobs are not (Clickr\'s purchase-order dataset covers open jobs only).'
+    : ds.key === 'bills'
+    ? ' Only bills on P86 jobs whose Buildertrend job sent bills in this read are listed; ' + notListed + ' on other jobs are not (Clickr\'s bills dataset covers open jobs only).'
+      + ' A P86 bill nothing in Buildertrend reached is expected: P86 records bills Buildertrend never sees. Nothing is proposed for deletion, and a sync never voids one.'
     : ' Only open P86 leads are listed; ' + notListed + ' sold, lost or no-opportunity leads are expected to be absent (Buildertrend\'s Leads dataset holds open leads only).'
       // The mark itself is gated on a COMPLETE read (bt-match.js
       // notInBuildertrend), so after a partial one this must not describe a
@@ -197,10 +216,13 @@ function matchRows(kind, values, p86) {
   if (kind === 'clients') return match.matchClients(values, p86.clients || []);
   if (kind === 'changeOrders') return coMatch.matchChangeOrders(values, { jobs: p86.jobs, coRows: p86.coRows || [] });
   if (kind === 'purchaseOrders') return poMatch.matchPurchaseOrders(values, { jobs: p86.jobs, poRows: p86.poRows || [], subs: p86.subs || [] });
+  // Bills need poRows too: a bill's purchase order is resolved ONLY through the
+  // bt_po_id a P86 purchase order already carries.
+  if (kind === 'bills') return billMatch.matchBills(values, { jobs: p86.jobs, billRows: p86.billRows || [], poRows: p86.poRows || [], subs: p86.subs || [] });
   return match.matchLeads(values, p86.leads, { directory: p86.directory });
 }
 
-const PREVIEW_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders'];
+const PREVIEW_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills'];
 
 function buildDataset(kind, fr, p86, p86Error) {
   const ds = DATASETS[kind];
@@ -232,6 +254,8 @@ function buildDataset(kind, fr, p86, p86Error) {
     ? coMatch.notInBuildertrend(rows, values, p86)
     : kind === 'purchaseOrders'
     ? poMatch.notInBuildertrend(rows, values, p86)
+    : kind === 'bills'
+    ? billMatch.notInBuildertrend(rows, values, p86)
     // readComplete: a P86 lead is called "no longer an open lead in Buildertrend"
     // only when the Buildertrend read reached every record. After a partial read
     // its Buildertrend lead may simply be in the part never fetched.
@@ -387,7 +411,7 @@ async function buildPreview(org, deps) {
   try {
     p86 = await readP86(deps.pool, org.id);
   } catch (e) {
-    p86 = { jobs: [], leads: [], clients: [], coRows: [], poRows: [], subs: [], coTotals: new Map(), directory: { users: [], clients: [] }, unscopedJobs: 0, unscopedLeads: 0 };
+    p86 = { jobs: [], leads: [], clients: [], coRows: [], poRows: [], billRows: [], subs: [], coTotals: new Map(), directory: { users: [], clients: [] }, unscopedJobs: 0, unscopedLeads: 0 };
     p86Error = 'Could not read Project 86\'s own jobs and leads, so nothing was classified.';
   }
 
