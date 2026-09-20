@@ -192,7 +192,30 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**566** occurrences of `organization_id IS NULL` across `server/`.
+**569** occurrences of `organization_id IS NULL` across `server/`.
+
+566 → 569: the service-ticket CONTRACT settle, and the client merge that
+follows from it. Two reads in
+`routes/service-ticket-routes.js` `settleContract`, which proves the client and
+the estimate a service ticket is priced from belong to the caller’s company
+before either id is written to the ticket. Both are copied
+predicate-for-predicate from the reads that already exist for those tables —
+the `clients` one from `routes/ai-routes.js`, the `estimates` one from
+`routes/estimate-routes.js` — and both carry the arm on the OTHER row’s own
+column, whose older rows can be NULL. Dropping either arm would answer "not
+found" for a legacy client or a legacy estimate, so the office could not price
+a service ticket from the very records that predate tenancy. A foreign id
+answers identically to an absent one (404), which is the parity
+`test/work-order-kinds.test.js` pins.
+
+The third is the write those two make necessary. `service_tickets.client_id`
+is a reference to a client, so `services/clickr/reconcile-merge.js`’
+registry — which `test/reconcile-merge.test.js` pins to `server/db.js` —
+requires the client merge to repoint it, and `services/client-merge.js` now
+does, predicate-for-predicate with the `invoices` and `payments` UPDATEs it
+sits beside. The arm is on the TICKET’s own column: a ticket raised before
+tenancy would otherwise survive the merge still pointing at the client the
+merge just archived. No new table.
 
 
 562 → 566: the Buildertrend UNDO SPINE (`services/clickr/sync-journal.js`). Four statements, and
@@ -211,7 +234,6 @@ organisation in hand, so there are no un-stamped rows for an arm to be
 tolerant of, and both are classified `DIRECT` in
 `services/org-table-classification.js`. That asymmetry is the point — the
 arm exists for the records being CHANGED, not for the record of the change.
-
 557 → 562: the Buildertrend ESTIMATES sync. Five statements, on the same terms
 as the four syncs before it. `services/clickr/sync-preview.js` readP86’s
 `estimates` read and `sync-apply.js` `lockedEstimate` both reach an estimate

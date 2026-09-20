@@ -54,6 +54,7 @@ const PLAIN = {
   clients: [
     { table: 'leads', col: 'client_id' }, { table: 'jobs', col: 'client_id' }, { table: 'clients', col: 'parent_client_id' },
     { table: 'invoices', col: 'client_id' }, { table: 'payments', col: 'client_id' }, { table: 'projects', col: 'client_id' },
+    { table: 'service_tickets', col: 'client_id' },
   ],
 };
 

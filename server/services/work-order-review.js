@@ -31,6 +31,8 @@
 // row (or the org id) the caller already proved.
 
 const svc = require('./service-tickets');
+// Phase 2: WO-#### / ST-####, minted when a draft is issued.
+const ticketNumbers = require('./ticket-numbers');
 
 const REASON_MAX = 1000;
 const BUILDING_NOTE_MAX = 500;
@@ -410,6 +412,17 @@ async function changeStatus(db, opts) {
     if (sets.some(function (s) { return s.indexOf(actorRef) >= 0; })) params.push(eventActor.userId);
     const copyScope = rule.action === 'approve' && o.copyScope === true;
     if (copyScope) sets.push("scope_approved = COALESCE(NULLIF(TRIM(scope_proposed), ''), scope_approved)");
+
+    // A draft is not issued yet and carries no number; every other status
+    // does. Minted here, inside the same transaction and the same guarded
+    // UPDATE as the move, so a ticket cannot end up issued without one — or
+    // numbered by a move that was then refused. The series follows how it
+    // bills: ST-#### for a contract, WO-#### for everything else.
+    if (!ticket.ticket_number && ticketNumbers.statusWantsNumber(next)) {
+      const claimed = await ticketNumbers.nextNumber(client, orgId, ticket.bill_as);
+      params.push(claimed);
+      sets.push('ticket_number = COALESCE(ticket_number, $' + params.length + ')');
+    }
     params.push(from);
     const statusRef = '$' + params.length;
     const updated = await client.query(

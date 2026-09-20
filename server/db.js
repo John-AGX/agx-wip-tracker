@@ -5030,6 +5030,91 @@ async function initSchema() {
     -- B4: when someone who can edit the ticket last opened it (drives New from crew). Office only.
     ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS office_seen_at TIMESTAMPTZ;
 
+    -- ── Phase 2: what this ticket IS, and how it gets billed ────────────
+    -- John, 2026-09-19: "work orders are mainly for urgent issues, a go and do
+    -- this, it's approved type of call. We need to bill based on work performed
+    -- and materials and mark-up after the job is done. Service tickets are for
+    -- our smaller service jobs 10k and below, these would already have a
+    -- contract price and estimate to work from."
+    --
+    -- ONE column carries every rule: bill_as. It decides the extra office
+    -- fields, the extra field capture, the stricter finish gate, the billing
+    -- views and the number prefix. ticket_kind is only the WORD on the screen,
+    -- so the two can never disagree about behaviour:
+    --   none           every ticket that existed before this shipped. Behaves
+    --                  exactly as it always did and appears in no billing view.
+    --                  NOT the same as a real call written off — that is a
+    --                  billing state inside time_materials, added with billing.
+    --   time_materials a WORK ORDER: no price up front, billed after from
+    --                  labour, materials and markup.
+    --   contract       a SERVICE TICKET: a sold job of about $10k or less, with
+    --                  a contract price and an estimate behind it.
+    --
+    -- contract_amount is the FIRST money on this table. publicTicket()
+    -- (services/service-tickets.js) projects by inclusion, so a crew link can
+    -- only ever see it if someone adds the key to PUBLIC_TICKET_KEYS — the
+    -- crew-facing tests exist to stop exactly that.
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS bill_as     TEXT NOT NULL DEFAULT 'none';
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS ticket_kind TEXT NOT NULL DEFAULT 'work_order';
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS client_id       TEXT REFERENCES clients(id)   ON DELETE SET NULL;
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS estimate_id     TEXT REFERENCES estimates(id) ON DELETE SET NULL;
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS contract_amount NUMERIC(14,2);
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS contract_source TEXT;          -- estimate | typed
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS kind_changed_at TIMESTAMPTZ;   -- last time it changed kind
+    -- The number this ticket used to carry, if it changed series (a work order
+    -- that turned out to be a sold service ticket takes an ST-####). It is kept
+    -- so the old number is never handed to a DIFFERENT ticket later: somebody
+    -- has that number written on a purchase order or said it down the phone.
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS previous_ticket_number TEXT;
+    DO $service_tickets_bill_as_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_tickets_bill_as_chk') THEN
+        ALTER TABLE service_tickets ADD CONSTRAINT service_tickets_bill_as_chk
+          CHECK (bill_as IN ('none', 'time_materials', 'contract'));
+      END IF;
+    END $service_tickets_bill_as_chk$;
+    DO $service_tickets_kind_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_tickets_kind_chk') THEN
+        ALTER TABLE service_tickets ADD CONSTRAINT service_tickets_kind_chk
+          CHECK (ticket_kind IN ('work_order', 'service_ticket'));
+      END IF;
+    END $service_tickets_kind_chk$;
+    -- A price only ever sits on a contract ticket, and it is never negative.
+    DO $service_tickets_contract_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_tickets_contract_chk') THEN
+        ALTER TABLE service_tickets ADD CONSTRAINT service_tickets_contract_chk
+          CHECK (contract_amount IS NULL OR (bill_as = 'contract' AND contract_amount >= 0));
+      END IF;
+    END $service_tickets_contract_chk$;
+
+    -- Every ticket raised before this had no number: the column, its unique
+    -- index and the retry comment all existed, and nothing ever wrote one, so
+    -- a printed work order said only "Work order". Number them here, once,
+    -- oldest first within each organization, in the WO series they belong to
+    -- (they all bill nothing, so none of them is an ST).
+    --
+    -- Idempotent by construction: it only ever touches rows whose number is
+    -- still NULL, and a draft keeps none — services/ticket-numbers.js issues
+    -- that when the ticket is issued. If two replicas boot together the unique
+    -- index decides the winner and the loser's statement finds no NULL rows
+    -- left to write.
+    WITH ordered AS (
+      SELECT id,
+             organization_id,
+             ROW_NUMBER() OVER (PARTITION BY organization_id ORDER BY created_at, id) AS n
+        FROM service_tickets
+       WHERE ticket_number IS NULL AND status <> 'draft'
+    )
+    UPDATE service_tickets t
+       SET ticket_number = 'WO-' || lpad(o.n::text, 4, '0')
+      FROM ordered o
+     WHERE t.id = o.id
+       AND t.organization_id = o.organization_id
+       AND t.ticket_number IS NULL
+       AND NOT EXISTS (
+             SELECT 1 FROM service_tickets x
+              WHERE x.organization_id = o.organization_id
+                AND x.ticket_number = 'WO-' || lpad(o.n::text, 4, '0'));
+
     -- B4: problems a crew flagged. DIRECT tenancy (its own organization_id).
     -- A quarantine-style record, like revisions. share_id and task_id are SET NULL:
     -- revoking a link keeps the report, and a deleted task makes it ticket-level.

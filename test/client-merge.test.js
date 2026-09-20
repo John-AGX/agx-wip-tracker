@@ -93,7 +93,7 @@ function polyRow(table, id, entityId, orgId) {
 }
 
 function seed() {
-  for (const t of ['clients', 'leads', 'projects', 'jobs', 'invoices', 'payments', 'estimates',
+  for (const t of ['clients', 'leads', 'projects', 'jobs', 'invoices', 'payments', 'estimates', 'service_tickets',
     'file_folders', 'attachment_folder_grants', 'live_rooms', 'users', 'roles', 'organizations']
     .concat(merge.POLYMORPHIC)) {
     run('DELETE FROM ' + t);
@@ -131,6 +131,7 @@ function seed() {
   run("INSERT INTO projects (id, name, client_id, organization_id) VALUES ('p-src', 'Fountain Square', ?, 1)", SRC);
   run("INSERT INTO invoices (id, client_id, status, organization_id) VALUES ('inv-src', ?, 'draft', 1)", SRC);
   run("INSERT INTO payments (id, client_id, amount, organization_id) VALUES ('pay-src', ?, 250, 1)", SRC);
+  run("INSERT INTO service_tickets (id, title, status, client_id, organization_id) VALUES ('st-src', 'Pump room leak', 'open', ?, 1)", SRC);
   run("INSERT INTO jobs (id, owner_id, client_id, organization_id, data) VALUES ('j-col', 10, ?, 1, ?)",
     SRC, JSON.stringify({ jobNumber: 'S1', title: 'Column link', client: 'Pensum - Fountain Square Apartments' }));
   run("INSERT INTO jobs (id, owner_id, organization_id, data) VALUES ('j-blob', 10, 1, ?)",
@@ -157,6 +158,7 @@ function seed() {
   run("INSERT INTO projects (id, name, client_id, organization_id) VALUES ('p-shadow', 'Theirs', ?, 2)", SRC);
   run("INSERT INTO invoices (id, client_id, status, organization_id) VALUES ('inv-shadow', ?, 'draft', 2)", SRC);
   run("INSERT INTO payments (id, client_id, amount, organization_id) VALUES ('pay-shadow', ?, 99, 2)", SRC);
+  run("INSERT INTO service_tickets (id, title, status, client_id, organization_id) VALUES ('st-shadow', 'Theirs', 'open', ?, 2)", SRC);
   run("INSERT INTO jobs (id, owner_id, client_id, organization_id, data) VALUES ('j-shadow', 20, ?, 2, ?)",
     SRC, JSON.stringify({ jobNumber: 'X9', title: 'Theirs', clientId: SRC, client: 'Pensum - Fountain Square Apartments' }));
   run("INSERT INTO clients (id, name, parent_client_id, organization_id) VALUES ('c-shadow-kid', 'Theirs', ?, 2)", SRC);
@@ -202,6 +204,7 @@ describe('the merge covers the reference registry, and the registry is the schem
   const COVERED_COLUMNS = [
     ['clients', 'parent_client_id'], ['leads', 'client_id'], ['projects', 'client_id'],
     ['jobs', 'client_id'], ['invoices', 'client_id'], ['payments', 'client_id'],
+    ['service_tickets', 'client_id'],
   ];
 
   test('every registered client id column is one this suite drives a row through', () => {
@@ -264,7 +267,7 @@ describe('folding Pensum into the BH record', () => {
     expect(r.json.moved.estimates).toBe(1);
   });
 
-  test('jobs (by column and by blob), projects, invoices, payments and child clients all repoint', async () => {
+  test('jobs (by column and by blob), projects, invoices, payments, tickets and child clients all repoint', async () => {
     const r = await fold(SRC, KEEP);
     expect(r.status).toBe(200);
     expect(one("SELECT client_id FROM jobs WHERE id = 'j-col'").client_id).toBe(KEEP);
@@ -272,13 +275,14 @@ describe('folding Pensum into the BH record', () => {
     expect(one("SELECT client_id FROM projects WHERE id = 'p-src'").client_id).toBe(KEEP);
     expect(one("SELECT client_id FROM invoices WHERE id = 'inv-src'").client_id).toBe(KEEP);
     expect(one("SELECT client_id FROM payments WHERE id = 'pay-src'").client_id).toBe(KEEP);
+    expect(one("SELECT client_id FROM service_tickets WHERE id = 'st-src'").client_id).toBe(KEEP);
     expect(one("SELECT parent_client_id FROM clients WHERE id = 'c-kid'").parent_client_id).toBe(KEEP);
     // The displayed client name on both jobs follows the survivor's `name`,
     // which is what confirmLinkJobClient writes.
     expect(blob('jobs', 'j-col').client).toBe('BH - Fountain Square Apartments');
     expect(blob('jobs', 'j-blob').client).toBe('BH - Fountain Square Apartments');
     // Two jobs were reached two different ways; that is TWO jobs moved.
-    expect(r.json.moved).toEqual({ leads: 1, estimates: 1, jobs: 2, projects: 1, invoices: 1, payments: 1, children: 1 });
+    expect(r.json.moved).toEqual({ leads: 1, estimates: 1, jobs: 2, projects: 1, invoices: 1, payments: 1, service_tickets: 1, children: 1 });
   });
 
   test('everything filed against the client moves too, and same-named folders fold', async () => {
@@ -447,6 +451,7 @@ describe('what it refuses, and what it leaves alone when it does', () => {
     expect(one("SELECT client_id FROM projects WHERE id = 'p-shadow'").client_id).toBe(SRC);
     expect(one("SELECT client_id FROM invoices WHERE id = 'inv-shadow'").client_id).toBe(SRC);
     expect(one("SELECT client_id FROM payments WHERE id = 'pay-shadow'").client_id).toBe(SRC);
+    expect(one("SELECT client_id FROM service_tickets WHERE id = 'st-shadow'").client_id).toBe(SRC);
     expect(one("SELECT client_id FROM jobs WHERE id = 'j-shadow'").client_id).toBe(SRC);
     expect(blob('jobs', 'j-shadow')).toMatchObject({ clientId: SRC, client: 'Pensum - Fountain Square Apartments' });
     expect(one("SELECT parent_client_id FROM clients WHERE id = 'c-shadow-kid'").parent_client_id).toBe(SRC);
@@ -535,6 +540,7 @@ describe('the transaction', () => {
     expect(one("SELECT client_id FROM projects WHERE id = 'p-src'").client_id).toBe(SRC);
     expect(one("SELECT client_id FROM invoices WHERE id = 'inv-src'").client_id).toBe(SRC);
     expect(one("SELECT client_id FROM payments WHERE id = 'pay-src'").client_id).toBe(SRC);
+    expect(one("SELECT client_id FROM service_tickets WHERE id = 'st-src'").client_id).toBe(SRC);
     expect(one("SELECT client_id FROM jobs WHERE id = 'j-col'").client_id).toBe(SRC);
     expect(one("SELECT parent_client_id FROM clients WHERE id = 'c-kid'").parent_client_id).toBe(SRC);
     expect(blob('estimates', 'e-src').client_id).toBe(SRC);

@@ -38,6 +38,9 @@ const board = require('../services/service-ticket-board');
 const review = require('../services/work-order-review');
 const fields = require('../services/service-ticket-fields');
 const assignees = require('../services/service-ticket-assignees');
+// Phase 2: WO-#### / ST-#### and the price a service ticket carries.
+const ticketNumbers = require('../services/ticket-numbers');
+const { computeEstimateTotals } = require('../services/money/estimate-totals');
 const inflight = require('../services/inflight');
 const notices = require('../services/work-order-notices');
 // 1.33: the one place that says in SQL what a work-order building is
@@ -183,6 +186,12 @@ const TICKET_COLS = [
   // these is in svc.PUBLIC_TICKET_KEYS.
   'approval_notified_at', 'approval_notice_attempts', 'approval_notice_gave_up_at',
   'approved_at', 'approved_by', 'cancelled_at', 'cancelled_by',
+  // Phase 2: what it is and how it bills. bill_as carries every rule;
+  // ticket_kind is the word on the screen. contract_amount is the first money
+  // on this table and is office-only — it is NOT in svc.PUBLIC_TICKET_KEYS and
+  // NOT in MY_BUILDING_ROW_KEYS, and the crew-facing tests keep it that way.
+  'bill_as', 'ticket_kind', 'client_id', 'estimate_id', 'contract_amount',
+  'contract_source', 'kind_changed_at', 'previous_ticket_number',
 ].join(', ');
 
 // What a work order may carry to someone whose only claim on it is that it is
@@ -261,6 +270,73 @@ async function loadOwnedTicket(id, orgId) {
     [String(id), orgId]
   );
   return rows[0] || null;
+}
+
+// The contract half of "what is this ticket" (Phase 2). The field checker has
+// already decided the words; what is left needs the database: a client and an
+// estimate must belong to THIS organization, and a service ticket priced from
+// an estimate takes the same number the proposal shows.
+//
+// Answers { ok, values } — columns to write — or a refusal naming its field.
+// A parent that is absent and one that belongs to another tenant answer the
+// same, so this cannot be used to probe ids.
+async function settleContract(kindCheck, { orgId, current }) {
+  const values = Object.assign({}, kindCheck.values);
+  const prove = kindCheck.prove || {};
+
+  if (Object.prototype.hasOwnProperty.call(prove, 'client_id')) {
+    const clientId = prove.client_id;
+    if (clientId) {
+      const { rows } = await pool.query(
+        'SELECT 1 FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL) LIMIT 1',
+        [clientId, orgId]
+      );
+      if (!rows.length) return { ok: false, status: 404, field: 'client_id', error: 'Client not found' };
+    }
+    values.client_id = clientId;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(prove, 'estimate_id')) {
+    const estimateId = prove.estimate_id;
+    if (!estimateId) {
+      values.estimate_id = null;
+    } else {
+      const { rows } = await pool.query(
+        'SELECT data FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL) LIMIT 1',
+        [estimateId, orgId]
+      );
+      if (!rows.length) return { ok: false, status: 404, field: 'estimate_id', error: 'Estimate not found' };
+      values.estimate_id = estimateId;
+      // The price comes from the estimate unless the office typed one over it
+      // in the same request. Same pipeline the proposal prints, so the ticket
+      // and the document can never disagree about the number.
+      if (values.contract_amount == null) {
+        let total = null;
+        try {
+          total = computeEstimateTotals(rows[0].data || {}).proposalTotal;
+        } catch (e) {
+          console.error('[service-tickets] estimate total failed', estimateId, e.message);
+        }
+        // Zero is not a price here: an estimate with nothing priced on it yet
+        // would otherwise make a $0 service ticket that reads as sold.
+        if (!(Number(total) > 0)) {
+          return { ok: false, field: 'estimate_id', error: 'That estimate has no price to take.' };
+        }
+        values.contract_amount = Number(total).toFixed(2);
+        values.contract_source = 'estimate';
+      }
+    }
+  }
+
+  // A service ticket that never got a price, on either road.
+  const billAs = kindCheck.billAs;
+  const has = (k) => Object.prototype.hasOwnProperty.call(values, k);
+  const priced = (has('contract_amount') && values.contract_amount != null)
+    || (current && current.contract_amount != null && !has('contract_amount'));
+  if (billAs === 'contract' && !priced) {
+    return { ok: false, field: 'contract_amount', error: fields.CONTRACT_NEEDS_PRICE };
+  }
+  return { ok: true, values: values };
 }
 
 // ── A1: list ────────────────────────────────────────────────────────────
@@ -830,8 +906,10 @@ router.post('/', requireAuth, requireOrgId, async (req, res) => {
     }
 
     const id = newId('st');
-    const cols = ['id', 'organization_id', 'job_id', 'lead_id', 'title', 'created_by'];
-    const vals = [id, orgId, jobId, leadId, title, (req.user && req.user.id) || null];
+    // status is written, not left to the column default: a ticket is born a
+    // DRAFT, and the status door (A5) is the only thing that moves it after.
+    const cols = ['id', 'organization_id', 'job_id', 'lead_id', 'title', 'created_by', 'status'];
+    const vals = [id, orgId, jobId, leadId, title, (req.user && req.user.id) || null, 'draft'];
 
     // Optional fields go through the same allow-list the PATCH door uses, so
     // create and edit cannot accept different sets — and they are the CHECKED
@@ -855,6 +933,17 @@ router.post('/', requireAuth, requireOrgId, async (req, res) => {
 
     const addressProblem = fields.ticketAddressProblem(checked.values);
     if (addressProblem) return res.status(400).json({ error: addressProblem.error, field: addressProblem.field });
+
+    // Phase 2: is this a work order (billed after) or a service ticket (a
+    // contract price)? A create that says nothing keeps the old shape.
+    const kindCheck = fields.validateTicketKind(body, { mode: 'create' });
+    if (!kindCheck.ok) return res.status(400).json({ error: kindCheck.error, field: kindCheck.field });
+    const contract = await settleContract(kindCheck, { orgId, current: null });
+    if (!contract.ok) return res.status(contract.status || 400).json({ error: contract.error, field: contract.field });
+    for (const k of Object.keys(contract.values)) {
+      cols.push(k);
+      vals.push(contract.values[k]);
+    }
 
     if (Array.isArray(body.checklist)) {
       cols.push('checklist');
@@ -1147,6 +1236,22 @@ router.patch('/:id', requireAuth, requireOrgId, async (req, res) => {
         });
       }
 
+      // Phase 2: changing what the ticket IS, on the locked row — so the kind
+      // it is being changed FROM is the kind it actually has, and a ticket two
+      // people re-kind at once cannot end up priced as one and billed as the
+      // other. A save that says nothing about the kind leaves all of it alone.
+      const kindCheck = fields.validateTicketKind(body, { mode: 'update', current: locked });
+      if (!kindCheck.ok) return await refuse(400, { error: kindCheck.error, field: kindCheck.field });
+      const contract = await settleContract(kindCheck, { orgId, current: locked });
+      if (!contract.ok) {
+        return await refuse(contract.status || 400, { error: contract.error, field: contract.field });
+      }
+      for (const k of Object.keys(contract.values)) values[k] = contract.values[k];
+      // A kind change is its own fact on the timeline, and it takes a number in
+      // the new series — the old one stays on the log, never reused.
+      const kindMoved = hasOwn(values, 'bill_as') && String(values.bill_as) !== String(locked.bill_as || 'none');
+      if (kindMoved) values.kind_changed_at = new Date().toISOString();
+
       const sets = [];
       const params = [];
       for (const k of Object.keys(values)) {
@@ -1154,6 +1259,21 @@ router.patch('/:id', requireAuth, requireOrgId, async (req, res) => {
         params.push(values[k]);
         sets.push(k + ' = $' + params.length);
         changed.push(k);
+      }
+
+      // The series follows the billing basis, so a ticket that becomes a
+      // service ticket stops being WO-#### and takes the next ST-####. Only a
+      // ticket that already had a number is renumbered: a draft still gets its
+      // first number when it is issued.
+      if (kindMoved && locked.ticket_number) {
+        const nextNumber = await ticketNumbers.nextNumber(client, orgId, values.bill_as);
+        params.push(nextNumber);
+        sets.push('ticket_number = $' + params.length);
+        changed.push('ticket_number');
+        // The number it used to have is kept, so nobody else is ever given it:
+        // somebody has that number written on a purchase order.
+        params.push(locked.ticket_number);
+        sets.push('previous_ticket_number = $' + params.length);
       }
 
       // The assignee moved under us to someone other than the value this save

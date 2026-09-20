@@ -17,14 +17,19 @@ const { createPgSqlite } = require('./helpers/pg-sqlite');
 const { sqliteSchema } = require('./helpers/db-schema');
 
 const SRC = path.join(__dirname, '..', 'server', 'services', 'work-order-review.js');
-const SVC_ABS = path.join(__dirname, '..', 'server', 'services', 'service-tickets.js').split(path.sep).join('/');
 const made = [];
 
 function mutant(find, replace) {
   const src = fs.readFileSync(SRC, 'utf8').replace(/\r\n/g, '\n');
   if (src.split(find).length !== 2) throw new Error('anchor not found');
+  // The copy lives in the temp directory, so EVERY relative require in it has
+  // to be made absolute — naming them one at a time meant the next require
+  // added to the module broke this helper rather than the rule it guards.
   const out = src.replace(find, replace)
-    .replace("require('./service-tickets')", 'require(' + JSON.stringify(SVC_ABS) + ')');
+    .replace(/require\((['"])(\.[^'"]+)\1\)/g, (_m, _q, spec) => {
+      const abs = require.resolve(path.resolve(path.dirname(SRC), spec));
+      return 'require(' + JSON.stringify(abs.split(path.sep).join('/')) + ')';
+    });
   const p = path.join(os.tmpdir(), '_p86_wor_' + process.pid + '_' + Math.random().toString(36).slice(2, 9) + '.js');
   fs.writeFileSync(p, out, 'utf8');
   made.push(p);

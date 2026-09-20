@@ -275,8 +275,105 @@ function labelList(keys) {
   return seen.slice(0, -1).join(', ') + ' and ' + seen[seen.length - 1];
 }
 
+// ── What this ticket IS, and how it bills ───────────────────────────────
+//
+// John, 2026-09-19: a WORK ORDER is the urgent, approved-on-the-phone call,
+// billed afterwards from labour, materials and markup. A SERVICE TICKET is a
+// sold service job of about $10k or less that already has a contract price and
+// an estimate behind it. One column carries the behaviour (bill_as) and the
+// other is only the word on the screen (ticket_kind), so they cannot disagree.
+//
+// A ticket raised without saying which it is keeps the old shape — bill_as
+// 'none' — and behaves exactly as every ticket did before the two kinds
+// existed. That is what every ticket already in the database is.
+const KIND_WORDS = Object.freeze({ work_order: 'time_materials', service_ticket: 'contract' });
+const KIND_REFUSAL = 'A ticket is either a work order (billed after the work) or a service ticket (a contract price).';
+const CONTRACT_ONLY_REFUSAL = 'Only a service ticket carries a contract price. A work order is billed from what was done.';
+const AMOUNT_REFUSAL = 'The contract price must be an amount, and never below zero.';
+const CONTRACT_NEEDS_PRICE = 'A service ticket needs its contract price, or the estimate to take it from.';
+const MONEY_RE = /^[-+]?(?:\d+(?:\.\d{1,2})?|\.\d{1,2})$/;
+
+// The money keys this door will touch. Anything else about billing belongs to
+// the billing phase and has no business arriving on a create or an edit.
+const CONTRACT_KEYS = Object.freeze(['contract_amount', 'client_id', 'estimate_id']);
+
+function kindRefuse(field, error) {
+  return { ok: false, field: field, error: error };
+}
+
+// body.kind is the word a screen sends ('work_order' | 'service_ticket').
+// Answers the columns to write, plus the ids the caller must still prove
+// belong to this organization (this file runs no queries).
+function validateTicketKind(body, opts) {
+  const src = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const mode = opts && opts.mode === 'create' ? 'create' : 'update';
+  const current = (opts && opts.current) || {};
+  const values = {};
+  const prove = {};
+
+  let billAs = mode === 'create' ? 'none' : String(current.bill_as || 'none');
+  // On a create both columns are WRITTEN rather than left to the table's
+  // defaults, so a row always says out loud what it is — and a ticket raised
+  // without naming a kind is explicitly the old shape, not an accident.
+  if (mode === 'create') {
+    values.bill_as = 'none';
+    values.ticket_kind = 'work_order';
+  }
+  if (has(src, 'kind')) {
+    const word = String(src.kind == null ? '' : src.kind).trim().toLowerCase();
+    if (!Object.prototype.hasOwnProperty.call(KIND_WORDS, word)) return kindRefuse('kind', KIND_REFUSAL);
+    billAs = KIND_WORDS[word];
+    values.ticket_kind = word;
+    values.bill_as = billAs;
+  }
+
+  const wantsContract = billAs === 'contract';
+  for (const key of CONTRACT_KEYS) {
+    if (!has(src, key)) continue;
+    const raw = src[key];
+    const blank = raw == null || String(raw).trim() === '';
+    if (!wantsContract && !blank) return kindRefuse(key, CONTRACT_ONLY_REFUSAL);
+    if (key === 'contract_amount') {
+      if (blank) { values.contract_amount = null; continue; }
+      const text = String(raw).trim().replace(/[$,]/g, '');
+      if (!MONEY_RE.test(text) || Number(text) < 0) return kindRefuse(key, AMOUNT_REFUSAL);
+      values.contract_amount = text;
+      values.contract_source = 'typed';
+      continue;
+    }
+    // A client or an estimate is an id this file cannot check; the route
+    // proves it in the caller's organization before writing it.
+    prove[key] = blank ? null : String(raw).trim();
+  }
+
+  // A service ticket must arrive priced, one way or the other: the amount
+  // typed in, or the estimate the price is read from.
+  if (wantsContract && has(src, 'kind')) {
+    const priced = values.contract_amount != null || prove.estimate_id
+      || (mode === 'update' && current.contract_amount != null);
+    if (!priced) return kindRefuse('contract_amount', CONTRACT_NEEDS_PRICE);
+  }
+
+  // Turning a service ticket back into a work order drops the contract
+  // wholesale rather than leaving a price on a ticket that has none.
+  if (has(src, 'kind') && billAs !== 'contract') {
+    values.contract_amount = null;
+    values.contract_source = null;
+    prove.estimate_id = null;
+  }
+
+  return { ok: true, values: values, prove: prove, billAs: billAs };
+}
+
 module.exports = {
   validateTicketFields,
+  validateTicketKind,
+  KIND_WORDS,
+  KIND_REFUSAL,
+  CONTRACT_ONLY_REFUSAL,
+  AMOUNT_REFUSAL,
+  CONTRACT_NEEDS_PRICE,
+  CONTRACT_KEYS,
   TICKET_FIELD_RULES,
   TICKET_FIELD_LABELS,
   ASSIGNEE_REFUSAL,

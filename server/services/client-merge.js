@@ -208,7 +208,7 @@ async function mergeClients(db, orgId, sourceId, targetId) {
     };
   }
 
-  const moved = { leads: 0, estimates: 0, jobs: 0, projects: 0, invoices: 0, payments: 0, children: 0 };
+  const moved = { leads: 0, estimates: 0, jobs: 0, projects: 0, invoices: 0, payments: 0, service_tickets: 0, children: 0 };
   const also = {};
 
   // ── 1. fill the survivor's BLANKS from the source ───────────────────────
@@ -317,6 +317,17 @@ async function mergeClients(db, orgId, sourceId, targetId) {
     [dst, src, orgId]
   );
   moved.payments = payments.rowCount || 0;
+
+  // A work order or service ticket raised for the duplicate client. The row
+  // also carries job_id and lead_id, but those belong to the JOB and LEAD
+  // merges (reconcile-merge's PLAIN.jobs / PLAIN.leads)  a client merge
+  // moves the client link and nothing else, so a ticket keeps whatever job
+  // or lead it was raised under.
+  const tickets = await db.query(
+    'UPDATE service_tickets SET client_id = $1, updated_at = NOW() WHERE client_id = $2 AND (organization_id = $3 OR organization_id IS NULL)',
+    [dst, src, orgId]
+  );
+  moved.service_tickets = tickets.rowCount || 0;
 
   // jobs are counted as a SET of ids, because a job can be reached two ways —
   // the real column and the blob key below — and a job moved by both is one
