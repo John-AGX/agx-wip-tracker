@@ -176,22 +176,37 @@ const DATASETS = {
   // groups by worksheetId and orders by displayOrder; this registry only
   // reads lines.
   //
-  // Like bills, these keys were NOT taken from a pull: CLICKR_API_KEY lives
-  // only on the deployed server. They are the labels of ONE record’s detail
-  // panel in the Clickr UI (2026-09-20) converted to the camelCase this
-  // registry already uses, and every one is a CLAIM that describeMapping()
-  // settles without echoing a value: a declared key no record carries lands in
-  // missingKeys and the key the records really use lands in unexpectedKeys.
-  // readEstimateLine() below reads each one exactly as named, with no
-  // candidate list and no fallback (see the header of this file), so a wrong
-  // name reads as ABSENT and never as a wrong value.
+  // These keys were NOT taken from a pull when they were written: they were the
+  // labels of ONE record’s detail panel in the Clickr UI (2026-09-20), and
+  // describeMapping() is what settles a claim like that — without echoing a
+  // value, because a declared key no record carries lands in missingKeys and
+  // the key the records really use lands in unexpectedKeys. THE DIAGNOSTIC HAS
+  // NOW BEEN READ AGAINST ALL 277 LIVE RECORDS, and this entry is what it says:
   //
-  // ‘item’ is the least certain of them, exactly as ‘payTo’ is on bills and for
-  // the same reason: Clickr’s LIST view shows an "Item" column holding the
-  // line’s own name, and its underlying key was never seen on a record. It is
-  // declared under the label’s own camelCase like every other key here. It is
-  // also the one key KNOWN to be blank on a real record (a sampled row read
-  // "Item —"), which is why it is not, and can never be, the required key.
+  //   * every key below is carried by all 277 records (assemblyId by 265), and
+  //     the required key jobName reads usable on 277 of 277;
+  //   * ‘item’ WAS WRONG. It was declared from the LIST view’s "Item" column
+  //     and NO record carries it: the real key is ‘itemTitle’, carried by all
+  //     277. It was the least certain key in the entry and it is now the
+  //     settled one — by the diagnostic, which is the instrument this entry
+  //     was built to be settled by.
+  //   * ‘description’ is a SECOND text field, on 44 of the 277: Buildertrend’s
+  //     per-line description beside the title. It is declared and read because
+  //     a P86 line has to print something and a line whose title is blank (a
+  //     sampled row read "Item —") can print this instead — see
+  //     lineDescription() in estimate-match.js, which is a VALUE fallback and
+  //     never a fallback chain of key names. A P86 estimate line has exactly
+  //     ONE text field, so a line carrying both keeps its title and the
+  //     worksheet SAYS the description was not carried.
+  //   * costTypes (277), relatedItems (277), relatedPurchaseOrderLineItemId (4)
+  //     and internalNotes (2) are real keys this sync does NOT declare, so they
+  //     stay in unexpectedKeys for good. That is the honest state and not a
+  //     defect to be tidied away: declaring a key nothing reads would make the
+  //     diagnostic quieter and the sync no better informed.
+  //
+  // readEstimateLine() below reads each key exactly as named, with no candidate
+  // list and no fallback (see the header of this file), so a wrong name reads
+  // as ABSENT and never as a wrong value.
   estimates: {
     key: 'estimates',
     label: 'Estimates',
@@ -215,8 +230,8 @@ const DATASETS = {
     //     but an opaque number. usableName screens through isBtBlank, a TEXT
     //     blankness test, so a numeric id can NEVER read blank and the guard
     //     would pass vacuously on a dataset whose every other key had moved.
-    //   NOT item — the line’s own name, blank on a real sampled record and the
-    //     least certain key in the entry. Requiring it would refuse the whole
+    //   NOT itemTitle — the line’s own name, and blank on real records (a
+    //     sampled row read "Item —"). Requiring it would refuse the whole
     //     dataset over a key that costs one line its printed name.
     //   NOT costCodeTitle or groupTitle — a line need belong to neither.
     requiredKey: 'jobName',
@@ -230,7 +245,7 @@ const DATASETS = {
     keys: [
       'lineItemId', 'worksheetId', 'groupId', 'assemblyId', 'costCodeId', 'costCategoryId', 'formatId',
       'costCodeTitle', 'costCategoryName', 'groupTitle', 'groupPath', 'displayOrder', 'lineItemType', 'markedAs',
-      'item',
+      'itemTitle', 'description',
       'quantity', 'unitCost', 'builderCost', 'markupType', 'markupPercent', 'markupPerUnit', 'markupAmount',
       'margin', 'unitPrice', 'ownerPrice', 'amountInvoiced', 'totalWithTax',
       'jobId', 'jobName', 'contractPrice', 'proposalStatus', 'worksheetLocked', 'isSentToBudget',
@@ -472,8 +487,12 @@ function readEstimateLine(rec) {
       : (typeof r.displayOrder === 'string' && /^-?\d+(\.\d+)?$/.test(r.displayOrder.trim()) ? Number(r.displayOrder.trim()) : null),
     lineItemType: scalarText(r.lineItemType),
     markedAs: scalarText(r.markedAs),
-    // UNCERTAIN KEY — see the note on the registry entry.
-    item: scalarText(r.item),
+    // THE LINE’S OWN NAME, and Buildertrend’s own description beside it. Both
+    // are settled keys of the live dataset (itemTitle on all 277 records,
+    // description on 44). Which one a P86 line PRINTS is decided in
+    // estimate-match.js, because P86 has one text field for the two of them.
+    itemTitle: scalarText(r.itemTitle),
+    description: scalarText(r.description),
     costCodeTitle: scalarText(r.costCodeTitle),
     costCategoryName: scalarText(r.costCategoryName),
     assemblyId: scalarText(r.assemblyId),
@@ -483,9 +502,12 @@ function readEstimateLine(rec) {
     quantity: r.quantity === undefined ? null : r.quantity,
     unitCost: r.unitCost === undefined ? null : r.unitCost,
     builderCost: r.builderCost === undefined ? null : r.builderCost,
-    // The markup WORD and its three mutually exclusive figures. estimate-match
-    // maps only the words it knows and REFUSES anything else naming it, so an
-    // unexpected word lands on the page instead of being rounded to a percent.
+    // The markup TYPE and the four figures beside it. The type is a NUMERIC
+    // CODE ("1", "5"), not a word, and the figures are NOT mutually exclusive:
+    // Buildertrend populates all four on every line and the type only records
+    // which one the person typed. estimate-match.js reads the PERCENT and
+    // checks it against ownerPrice rather than gating on the type. Read here
+    // exactly as named; decided there.
     markupType: scalarText(r.markupType),
     markupPercent: r.markupPercent === undefined ? null : r.markupPercent,
     markupPerUnit: r.markupPerUnit === undefined ? null : r.markupPerUnit,

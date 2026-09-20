@@ -14,7 +14,7 @@
 //     Buildertrend's ownerPrice. A per-unit or flat markup is NOT price = cost
 //     x k, so the whole worksheet is refused rather than imported at a number
 //     that only matches until somebody edits a quantity;
-//   * MONEY NEVER MOVES BY ITSELF. The line items are a held-back item: the
+//   * MONEY NEVER MOVES BY ITSELF. The line items are a held-back itemTitle: the
 //     safe press does not apply them, an "apply everything" press that names no
 //     fields does not apply them, and the DATABASE ROW is asserted unchanged
 //     after both. The contract price and the total difference are never applied
@@ -93,7 +93,11 @@ function lineRec(o) {
     displayOrder: o.order === undefined ? null : o.order,
     lineItemType: 'Line item',
     markedAs: 'Estimate',
-    item: o.item === undefined ? null : o.item,
+    itemTitle: o.itemTitle === undefined ? null : o.itemTitle,
+    // Buildertrend's SECOND text field, carried by every record and filled on
+    // 44 of the real 277. A P86 line has ONE text field, so the fixtures that
+    // set both prove which one is printed and that the other is NAMED.
+    description: o.description === undefined ? null : o.description,
     quantity: qty,
     unitCost: cost,
     builderCost: qty * cost,
@@ -102,7 +106,7 @@ function lineRec(o) {
     markupPerUnit: o.markupPerUnit === undefined ? 0 : o.markupPerUnit,
     markupAmount: o.markupAmount === undefined ? 0 : o.markupAmount,
     margin: o.margin === undefined ? 0 : o.margin,
-    unitPrice: qty > 0 ? (o.owner || 0) / qty : 0,
+    unitPrice: qty > 0 && typeof o.owner === 'number' ? o.owner / qty : 0,
     ownerPrice: o.owner === undefined ? 0 : o.owner,
     amountInvoiced: 0,
     totalWithTax: o.owner === undefined ? 0 : o.owner,
@@ -126,57 +130,85 @@ const OAK = { jobId: 444, jobName: 'Oak Ridge' };
 const PALM = { jobId: 555, jobName: 'Palm Bay' };
 const BELLA = { jobId: 666, jobName: 'Bella Vista' };
 const LAKE = { jobId: 777, jobName: 'Lakeview' };
+const RIVER = { jobId: 888, jobName: 'Riverwalk' };
 const NOJOB = { jobId: 999, jobName: 'Unlinked Job' };
 
 const L = (base, o) => lineRec(Object.assign({}, base, o));
 
 const BT_LINES = [
   // ws 100 — display order OUT of arrival order, two groups, one deleted line.
-  L(CITI, { ws: 100, id: 1001, groupId: 'G1', groupTitle: 'Labor', order: 2, item: 'Framing labor', qty: 10, cost: 50, markupPercent: 20, owner: 600 }),
-  L(CITI, { ws: 100, id: 1002, groupId: 'G1', groupTitle: 'Labor', order: 1, item: 'Cleanup', qty: 1, cost: 100, markupPercent: 0, owner: 100 }),
-  L(CITI, { ws: 100, id: 1003, groupId: 'G2', groupTitle: 'Materials', order: 3, item: 'Lumber', qty: 4, cost: 25, markupPercent: 10, owner: 110 }),
-  L(CITI, { ws: 100, id: 1004, groupId: 'G1', groupTitle: 'Labor', order: 4, item: 'Removed', qty: 99, cost: 99, markupPercent: 50, owner: 9999, deleted: true }),
+  L(CITI, { ws: 100, id: 1001, groupId: 'G1', groupTitle: 'Labor', order: 2, itemTitle: 'Framing labor', qty: 10, cost: 50, markupPercent: 20, owner: 600 }),
+  L(CITI, { ws: 100, id: 1002, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'Cleanup', qty: 1, cost: 100, markupPercent: 0, owner: 100 }),
+  L(CITI, { ws: 100, id: 1003, groupId: 'G2', groupTitle: 'Materials', order: 3, itemTitle: 'Lumber', qty: 4, cost: 25, markupPercent: 10, owner: 110 }),
+  L(CITI, { ws: 100, id: 1004, groupId: 'G1', groupTitle: 'Labor', order: 4, itemTitle: 'Removed', qty: 99, cost: 99, markupPercent: 50, owner: 9999, deleted: true }),
 
   // ws 200 — rung 0, and P86 already holds exactly these lines.
-  L(WATER, { ws: 200, id: 2001, groupId: 'G3', groupTitle: 'Sub', order: 1, item: 'Stucco', qty: 1, cost: 2000, markupPercent: 15, owner: 2300 }),
+  L(WATER, { ws: 200, id: 2001, groupId: 'G3', groupTitle: 'Sub', order: 1, itemTitle: 'Stucco', qty: 1, cost: 2000, markupPercent: 15, owner: 2300 }),
 
   // ws 300 — its P86 estimate was SENT to a client.
-  L(OAK, { ws: 300, id: 3001, groupId: 'G1', groupTitle: 'Labor', order: 1, item: 'Paint', qty: 2, cost: 300, markupPercent: 25, owner: 750 }),
+  L(OAK, { ws: 300, id: 3001, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'Paint', qty: 2, cost: 300, markupPercent: 25, owner: 750 }),
 
   // ws 400 — NEW, with an ungrouped line, a MARGIN line and two groups whose
   // titles are equal but whose paths are not.
-  L(PALM, { ws: 400, id: 4001, order: 1, item: 'Mobilization', qty: 1, cost: 500, markupPercent: 10, owner: 550 }),
-  L(PALM, { ws: 400, id: 4002, groupId: 'G4', groupTitle: 'Labor', groupPath: 'Building A > Labor', order: 2, item: 'Trim', qty: 3, cost: 100, markupType: 'Margin', margin: 20, owner: 375 }),
-  L(PALM, { ws: 400, id: 4003, groupId: 'G5', groupTitle: 'Labor', groupPath: 'Building B > Labor', order: 3, item: 'Trim B', qty: 2, cost: 100, markupPercent: 25, owner: 250 }),
-  L(PALM, { ws: 400, id: 4004, groupId: 'G4', groupTitle: 'Labor', groupPath: 'Building A > Labor', order: 4, item: 'Trim extra', qty: 1, cost: 40, markupPercent: 0, owner: 40 }),
+  L(PALM, { ws: 400, id: 4001, order: 1, itemTitle: 'Mobilization', qty: 1, cost: 500, markupPercent: 10, owner: 550 }),
+  L(PALM, { ws: 400, id: 4002, groupId: 'G4', groupTitle: 'Labor', groupPath: 'Building A > Labor', order: 2, itemTitle: 'Trim', qty: 3, cost: 100, markupType: '5', markupPercent: 25, margin: 20, owner: 375 }),
+  L(PALM, { ws: 400, id: 4003, groupId: 'G5', groupTitle: 'Labor', groupPath: 'Building B > Labor', order: 3, itemTitle: 'Trim B', qty: 2, cost: 100, markupPercent: 25, owner: 250 }),
+  L(PALM, { ws: 400, id: 4004, groupId: 'G4', groupTitle: 'Labor', groupPath: 'Building A > Labor', order: 4, itemTitle: 'Trim extra', qty: 1, cost: 40, markupPercent: 0, owner: 40 }),
 
   // ws 500 and 501 — two worksheets on one job, so both key on the same title
   // and both land on the same P86 estimate.
-  L(BELLA, { ws: 500, id: 5001, groupId: 'G1', groupTitle: 'Labor', order: 1, item: 'A', qty: 1, cost: 10, markupPercent: 0, owner: 10 }),
-  L(BELLA, { ws: 501, id: 5011, groupId: 'G1', groupTitle: 'Labor', order: 1, item: 'B', qty: 1, cost: 20, markupPercent: 0, owner: 20 }),
+  L(BELLA, { ws: 500, id: 5001, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'A', qty: 1, cost: 10, markupPercent: 0, owner: 10 }),
+  L(BELLA, { ws: 501, id: 5011, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'B', qty: 1, cost: 20, markupPercent: 0, owner: 20 }),
 
   // ws 600 — its Buildertrend job is not linked to a P86 job.
-  L(NOJOB, { ws: 600, id: 6001, groupId: 'G1', groupTitle: 'Labor', order: 1, item: 'C', qty: 1, cost: 30, markupPercent: 0, owner: 30 }),
+  L(NOJOB, { ws: 600, id: 6001, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'C', qty: 1, cost: 30, markupPercent: 0, owner: 30 }),
 
   // ws 700 — EVERY line deleted, and a P86 estimate is linked to it.
-  L(CITI, { ws: 700, id: 7001, groupId: 'G1', groupTitle: 'Labor', order: 1, item: 'D', qty: 1, cost: 40, markupPercent: 0, owner: 40, deleted: true }),
-  L(CITI, { ws: 700, id: 7002, groupId: 'G1', groupTitle: 'Labor', order: 2, item: 'E', qty: 1, cost: 50, markupPercent: 0, owner: 50, deleted: true }),
+  L(CITI, { ws: 700, id: 7001, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'D', qty: 1, cost: 40, markupPercent: 0, owner: 40, deleted: true }),
+  L(CITI, { ws: 700, id: 7002, groupId: 'G1', groupTitle: 'Labor', order: 2, itemTitle: 'E', qty: 1, cost: 50, markupPercent: 0, owner: 50, deleted: true }),
 
   // ws 800 — its lines DISAGREE about the worksheet's contract price.
-  L(CITI, { ws: 800, id: 8001, groupId: 'G1', groupTitle: 'Labor', order: 1, item: 'F', qty: 1, cost: 60, markupPercent: 0, owner: 60, contractPrice: 100000 }),
-  L(CITI, { ws: 800, id: 8002, groupId: 'G1', groupTitle: 'Labor', order: 2, item: 'G', qty: 1, cost: 70, markupPercent: 0, owner: 70, contractPrice: 250000 }),
+  L(CITI, { ws: 800, id: 8001, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'F', qty: 1, cost: 60, markupPercent: 0, owner: 60, contractPrice: 100000 }),
+  L(CITI, { ws: 800, id: 8002, groupId: 'G1', groupTitle: 'Labor', order: 2, itemTitle: 'G', qty: 1, cost: 70, markupPercent: 0, owner: 70, contractPrice: 250000 }),
 
-  // ws 900 / 901 / 902 — the three markups P86 cannot carry.
-  L(CITI, { ws: 900, id: 9001, groupId: 'G1', groupTitle: 'Labor', order: 1, item: 'Fine', qty: 1, cost: 80, markupPercent: 10, owner: 88 }),
-  L(CITI, { ws: 900, id: 9002, groupId: 'G1', groupTitle: 'Labor', order: 2, item: 'Flat rate door', qty: 2, cost: 100, markupType: 'Markup per unit', markupPerUnit: 25, owner: 250 }),
-  L(CITI, { ws: 901, id: 9011, groupId: 'G1', groupTitle: 'Labor', order: 1, item: 'No type', qty: 1, cost: 90, markupType: null, owner: 90 }),
-  L(CITI, { ws: 902, id: 9021, groupId: 'G1', groupTitle: 'Labor', order: 1, item: 'Odd type', qty: 1, cost: 95, markupType: 'Sliding scale', owner: 95 }),
+  // ws 900 / 901 / 902 — the three lines P86 cannot carry, and not one of them
+  // is refused for the WORD Buildertrend used.
+  L(CITI, { ws: 900, id: 9001, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'Fine', qty: 1, cost: 80, markupPercent: 10, owner: 88 }),
+  // Typed as a per-unit markup (code "2") — and the percent Buildertrend wrote
+  // beside it does NOT reproduce what it says the owner pays. THAT refuses it.
+  L(CITI, { ws: 900, id: 9002, groupId: 'G1', groupTitle: 'Labor', order: 2, itemTitle: 'Flat rate door', qty: 2, cost: 100, markupType: '2', markupPerUnit: 25, markupAmount: 50, owner: 250 }),
+  // No markup percent AT ALL, which is the one thing here only the mapping
+  // diagnostic can settle.
+  L(CITI, { ws: 901, id: 9011, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'No percent', qty: 1, cost: 90, markupType: null, markupPercent: null, owner: 90 }),
+  // A flat markup on a ZERO cost: 0 x k is 0 for every k, so no percent
+  // expresses it — and the CHECK is what says so now.
+  L(CITI, { ws: 902, id: 9021, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'Permit', qty: 1, cost: 0, markupType: '3', markupAmount: 500, owner: 500 }),
 
   // ws 1000 — a P86 estimate this sync already linked that has LOST its job.
-  L(SADDLE, { ws: 1000, id: 10001, groupId: 'G1', groupTitle: 'Labor', order: 1, item: 'H', qty: 1, cost: 120, markupPercent: 0, owner: 120 }),
+  L(SADDLE, { ws: 1000, id: 10001, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'H', qty: 1, cost: 120, markupPercent: 0, owner: 120 }),
 
-  // ws 1100 — Buildertrend's owner price does NOT agree with its own markup.
-  L(LAKE, { ws: 1100, id: 11001, groupId: 'G3', groupTitle: 'Sub', order: 1, item: 'Roof', qty: 1, cost: 1000, markupPercent: 20, owner: 1500 }),
+  // ws 1100 — Buildertrend's owner price does NOT agree with its own markup:
+  // 1000 x 1.20 is 1200 and it says the owner pays 1500. The LINE is refused
+  // and the worksheet with it.
+  L(LAKE, { ws: 1100, id: 11001, groupId: 'G3', groupTitle: 'Sub', order: 1, itemTitle: 'Roof', qty: 1, cost: 1000, markupPercent: 20, owner: 1500 }),
+
+  // ws 1200 — one line that checks out and one whose owner price is not
+  // readable money at all. Nothing could check the second, so it is imported
+  // and the WORKSHEET TOTAL is what names the difference.
+  L(LAKE, { ws: 1200, id: 12001, groupId: 'G3', groupTitle: 'Sub', order: 1, itemTitle: 'Gutters', qty: 1, cost: 1000, markupPercent: 20, owner: 1200 }),
+  L(LAKE, { ws: 1200, id: 12002, groupId: 'G3', groupTitle: 'Sub', order: 2, itemTitle: 'Soffit', qty: 1, cost: 500, markupPercent: 0, owner: '1 - 2' }),
+
+  // ws 1300 — THE FOUR REAL LINES, by their real numbers, read out of Clickr's
+  // own UI on 2026-09-20. Every one carries all four markup notations and
+  // markupType is the CODE saying which one the person typed.
+  L(RIVER, { ws: 1300, id: 13001, groupId: 'G8', groupTitle: 'Sitework', order: 1, itemTitle: 'A — percent typed', qty: 1, cost: 5100, markupType: '1', markupPercent: 100, markupPerUnit: 5100, markupAmount: 5100, margin: 50, owner: 10200 }),
+  L(RIVER, { ws: 1300, id: 13002, groupId: 'G8', groupTitle: 'Sitework', order: 2, itemTitle: 'B — the rounded percent', qty: 1, cost: 770, markupType: '5', markupPercent: 88.68, markupPerUnit: 682.83, markupAmount: 682.83, margin: 47, owner: 1452.83 }),
+  L(RIVER, { ws: 1300, id: 13003, groupId: 'G8', groupTitle: 'Sitework', order: 3, itemTitle: 'C — margin typed', qty: 1, cost: 9600, markupType: '5', markupPercent: 150, markupPerUnit: 14400, markupAmount: 14400, margin: 60, owner: 24000 }),
+  L(RIVER, { ws: 1300, id: 13004, groupId: 'G8', groupTitle: 'Sitework', order: 4, itemTitle: 'D — excluded at -100%', description: 'Cabinets the owner is not being charged for', qty: 1, cost: 36000, markupType: '1', markupPercent: -100, markupPerUnit: -36000, markupAmount: -36000, margin: 0, owner: 0 }),
+
+  // ws 1301 — a markup type code this sync has never seen. It imports, because
+  // the PERCENT is what is used.
+  L(RIVER, { ws: 1301, id: 13011, groupId: 'G8', groupTitle: 'Sitework', order: 1, itemTitle: 'Unknown code', qty: 1, cost: 200, markupType: '7', markupPercent: 25, owner: 250 }),
 ];
 
 function clickrFetch(url) {
@@ -237,6 +269,7 @@ function seed() {
   job.run('j-5', 10, AGX, '555', JSON.stringify({ jobNumber: 'RV2030', title: 'Palm Bay', status: 'In Progress' }));
   job.run('j-6', 10, AGX, '666', JSON.stringify({ jobNumber: 'RV2040', title: 'Bella Vista', status: 'In Progress' }));
   job.run('j-7', 10, AGX, '777', JSON.stringify({ jobNumber: 'RV2050', title: 'Lakeview', status: 'In Progress' }));
+  job.run('j-8', 10, AGX, '888', JSON.stringify({ jobNumber: 'RV2060', title: 'Riverwalk', status: 'In Progress' }));
 
 
   const est = engine.db.prepare(
@@ -424,17 +457,20 @@ describe('THE READ — a record is a LINE, and the dedupe key is the line', () =
     expect([ds.mapping.requiredKey, ds.mapping.requiredOk, ds.mapping.requiredUsable]).toEqual(['jobName', true, BT_LINES.length]);
   });
 
-  test('THE DIAGNOSTIC THAT CONFIRMS THE REAL KEY NAMES: a declared key nothing carries is missing, and the key it really used is unexpected', () => {
-    // Exactly the live case this mapping is braced for: "Item" is not `item`.
+  test('THE DIAGNOSTIC THAT SETTLED THE REAL KEY NAMES: a declared key nothing carries is missing, and the key it really used is unexpected', () => {
+    // NOT hypothetical: this is how 'item' was settled. It was declared from
+    // the Clickr LIST view's "Item" column, no record carried it, and the
+    // diagnostic put it in missingKeys with the real key — 'itemTitle', on all
+    // 277 — sitting in unexpectedKeys beside it. Run here the other way round.
     const renamed = BT_LINES.map((r) => {
       const c = Object.assign({}, r);
-      delete c.item;
-      c.lineItemTitle = 'Framing labor';
+      delete c.itemTitle;
+      c.item = 'Framing labor';
       return c;
     });
     const d = describeMapping('estimates', renamed);
-    expect(d.missingKeys).toEqual(['item']);
-    expect(d.unexpectedKeys).toEqual([{ key: 'lineItemTitle', carriedBy: renamed.length }]);
+    expect(d.missingKeys).toEqual(['itemTitle']);
+    expect(d.unexpectedKeys).toEqual([{ key: 'item', carriedBy: renamed.length }]);
     // The dataset still classifies: a wrong key costs a line its name, not the tab.
     expect([d.requiredOk, d.refusal]).toEqual([true, null]);
     // And NO VALUE is echoed by the diagnostic.
@@ -444,10 +480,29 @@ describe('THE READ — a record is a LINE, and the dedupe key is the line', () =
 
   test('a wrong key reads as ABSENT, never as a wrong value, and never throws', () => {
     const v = readEstimateLine({ worksheetId: '1', jobName: 'J', lineItemTitle: 'Acme', markupPct: 22 });
-    expect([v.item, v.markupType, v.markupPercent, v.quantity, v.unitCost]).toEqual([null, null, null, null, null]);
+    expect([v.itemTitle, v.description, v.markupType, v.markupPercent, v.quantity, v.unitCost]).toEqual([null, null, null, null, null, null]);
     expect([v.worksheetLocked, v.isDeleted]).toEqual([false, false]);
     expect(readEstimateLine(null).btId).toBeNull();
     expect(readEstimateLine('nope').isDeleted).toBe(false);
+  });
+
+  test('THE KEY IS FIXED: itemTitle is declared and read, ‘item’ is gone, and the description beside it is read too', () => {
+    expect(DATASETS.estimates.keys).toContain('itemTitle');
+    expect(DATASETS.estimates.keys).toContain('description');
+    expect(DATASETS.estimates.keys).not.toContain('item');
+    // On records shaped the way the real 277 are, nothing is missing at all.
+    expect(describeMapping('estimates', BT_LINES).missingKeys).toEqual([]);
+    const v = readEstimateLine({ worksheetId: '1', jobName: 'J', itemTitle: 'Framing labor', description: 'two coats' });
+    expect([v.itemTitle, v.description]).toEqual(['Framing labor', 'two coats']);
+    // THE TITLE IS WHAT PRINTS, and the description is the next value down —
+    // ahead of the cost code, which is a CATEGORY and not what the line is.
+    expect(estMatch.lineDescription(v)).toBe('Framing labor');
+    expect(estMatch.lineDescription(readEstimateLine({ description: 'Two coats of primer', costCodeTitle: 'Subcontractors Costs' }))).toBe('Two coats of primer');
+    expect(estMatch.lineDescription(readEstimateLine({ costCodeTitle: 'Subcontractors Costs' }))).toBe('Subcontractors Costs');
+    expect(estMatch.lineDescription(readEstimateLine({}))).toBe('(no description in Buildertrend)');
+    // And a line carrying BOTH says so on its row rather than dropping one.
+    const both = estMatch.buildLines([readEstimateLine(L(CITI, { ws: 8300, id: 8301, order: 1, itemTitle: 'Trim', description: 'two coats', cost: 10, owner: 10 }))], '8300');
+    expect([both.described, contentOf(both.lines)[0].description]).toEqual([1, 'Trim']);
   });
 
   test('the required key is jobName, and losing it refuses the WHOLE dataset rather than classifying blanks', () => {
@@ -543,7 +598,7 @@ describe('GROUPING — worksheets, display order, and header-delimited sections'
 });
 
 // ── MARKUP ────────────────────────────────────────────────────────────────
-describe('MARKUP — a percent and a margin map across; a per-unit or flat markup refuses', () => {
+describe('MARKUP — the percent is read and then CHECKED against Buildertrend’s own owner price', () => {
   test('a PERCENT maps straight across', () => {
     const lines = builtFor(100, 'e', 'a');
     expect(contentOf(lines).map((l) => [l.description, l.qty, l.unitCost, l.markup]))
@@ -553,85 +608,227 @@ describe('MARKUP — a percent and a margin map across; a per-unit or flat marku
     expect(contentOf(lines).every((l) => typeof l.markup === 'number')).toBe(true);
   });
 
-  test('a MARGIN becomes the markup percent that is the SAME multiplier, so nothing drifts on a later edit', () => {
-    expect(estMatch.markupPercentFor({ markupType: 'Margin', margin: 20 }).pct).toBeCloseTo(25, 9);
-    expect(estMatch.markupPercentFor({ markupType: 'Margin', margin: 0 }).pct).toBe(0);
-    // The property, stated as arithmetic: 1 + p/100 === 1/(1 - m/100).
-    for (const m of [5, 12.5, 20, 33.3, 33.333, 60, 66.667, 99]) {
-      const p = estMatch.markupPercentFor({ markupType: 'Margin', margin: m }).pct;
-      expect(1 + p / 100).toBeCloseTo(1 / (1 - m / 100), 9);
+  test('THE MARGIN IS NOT CONSULTED — the percent is, whatever notation the person typed', () => {
+    // A margin and its percent are the same multiplier — 1 + p/100 = 1/(1 -
+    // m/100) — which is WHY taking Buildertrend's percent on a margin-typed
+    // line loses nothing. It is simply not something this module computes any
+    // more, because Buildertrend writes the percent on the record itself.
+    for (const m of [20, 47, 50, 60]) {
+      expect(1 + ((m / (100 - m)) * 100) / 100).toBeCloseTo(1 / (1 - m / 100), 9);
     }
-    // Which is why it survives an edit: double the cost, double the price, both ways.
-    const p = estMatch.markupPercentFor({ markupType: 'Margin', margin: 20 }).pct;
-    expect(200 * (1 + p / 100)).toBeCloseTo(200 / (1 - 20 / 100), 9);
-    // A margin with no multiplier at all is refused with the rest.
-    expect(estMatch.markupPercentFor({ markupType: 'Margin', margin: 100 }).why).toMatch(/no markup percent at all/);
-    expect(estMatch.markupPercentFor({ markupType: 'Margin', margin: -5 }).why).toMatch(/no markup percent at all/);
+    // ws 400's 'Trim' is typed as a 20% margin and carries the percent 25.
+    const trim = contentOf(builtFor(400, 'e', 'a')).find((l) => l.description === 'Trim');
+    expect([trim.qty, trim.unitCost, trim.markup]).toEqual([3, 100, 25]);
+    // And the margin is NOT a fallback: a line whose MARGIN would reproduce the
+    // owner price and whose percent does not is refused, never rescued by it.
+    const rescued = [readEstimateLine(L(CITI, { ws: 8100, id: 8101, order: 1, itemTitle: 'Margin only', qty: 1, cost: 100, markupType: '5', markupPercent: 0, margin: 20, owner: 125 }))];
+    const b = estMatch.buildLines(rescued, '8100');
+    expect(contentOf(b.lines)).toEqual([]);
+    expect(b.refusals[0].why).toMatch(/owner pays \$125\.00 for it, and Project 86 prices the same quantity, unit cost and 0% markup at \$100\.00/);
   });
 
-  test('a PER-UNIT markup refuses the whole worksheet, naming the line and the reason', async () => {
+  test('a line whose percent does NOT reproduce Buildertrend’s own owner price refuses the WHOLE worksheet, naming both figures', async () => {
     const ds = await estRows();
     const r = byBt(ds, 900);
     expect([r['class'], r.p86]).toEqual(['refused', null]);
     expect(r.job.id).toBe('j-1');
     const text = r.notes.join(' ');
     expect(text).toMatch(/1 of this worksheet’s 2 lines cannot be carried/);
-    expect(text).toMatch(/“Flat rate door” — Buildertrend prices it with a per-unit markup/);
-    expect(text).toMatch(/change what the line means the moment a quantity or a cost is edited/);
+    // 2 x $100 at the 0% percent beside it is $200, and Buildertrend says the
+    // owner pays $250. Both figures, on the row.
+    expect(text).toMatch(/“Flat rate door” — Buildertrend says the owner pays \$250\.00 for it, and Project 86 prices the same quantity, unit cost and 0% markup at \$200\.00 — \$50\.00 less/);
+    // The TYPE is quoted as information. It is not what refused anything.
+    expect(text).toMatch(/Buildertrend records its markup type as "2"/);
     // An estimate missing lines is a wrong document: the GOOD line is not imported either.
     expect([r.corrections, r.heldBack]).toEqual([[], []]);
   });
 
-  test('a FLAT AMOUNT refuses too, and for the reason that is not "we did not bother"', () => {
-    const why = estMatch.markupPercentFor({ markupType: 'Markup amount', markupAmount: 500 }).why;
-    expect(why).toMatch(/a flat markup amount/);
-    // The case no percent can express at all: a flat markup on a zero cost.
-    // 0 x k is 0 for every k, so there is no percent to convert TO.
-    expect(estMatch.markupPercentFor({ markupType: 'Flat', markupAmount: 500 }).pct).toBeUndefined();
+  test('a FLAT markup on a ZERO cost is still refused, and for the reason it always had: 0 x k is 0 for every k', async () => {
+    const ds = await estRows();
+    const r = byBt(ds, 902);
+    expect(r['class']).toBe('refused');
+    expect(r.notes.join(' ')).toMatch(/“Permit” — Buildertrend says the owner pays \$500\.00 for it, and Project 86 prices the same quantity, unit cost and 0% markup at \$0\.00/);
+    // Directly on the check: there is no percent that prices a zero cost at
+    // $500, so no tolerance and no notation can rescue this line.
+    expect(estMatch.lineAgreesWithBuildertrend({ qty: 1, unitCost: 0, markup: 0 }, { ownerPrice: 500, markupType: '3' }).why).toMatch(/\$500\.00 less/);
+    expect(estMatch.lineAgreesWithBuildertrend({ qty: 1, unitCost: 0, markup: 9999 }, { ownerPrice: 500 }).why).toMatch(/\$500\.00 less/);
   });
 
-  test('NO markup type refuses and points at the mapping diagnostic, which is the only thing that can settle a key name', async () => {
+  test('NO markup PERCENT refuses and points at the mapping diagnostic, which is the only thing that can settle a key name', async () => {
     const ds = await estRows();
-    expect(byBt(ds, 901).notes.join(' ')).toMatch(/sent no markup type on it.*markupType.*key name is wrong in field-map\.js/s);
+    expect(byBt(ds, 901).notes.join(' ')).toMatch(/sent no markup percent on it.*markupPercent.*key name is wrong in field-map\.js/s);
+    // A percent that is present but unreadable is named rather than zeroed.
+    expect(estMatch.markupPercentFor({ markupPercent: 'abc' }).why).toMatch(/not a readable number/);
+    // A BLANK TYPE no longer refuses anything: the percent is what is read.
+    expect(estMatch.markupPercentFor({ markupType: null, markupPercent: 12 }).pct).toBe(12);
   });
 
-  test('a markup type this sync has no rule for refuses NAMING THE WORD, so it is never rounded to a percent', async () => {
+  test('markupType is INFORMATIONAL: "1", "5" and a code this sync has never seen all import, because the percent is what is used', async () => {
     const ds = await estRows();
-    expect(byBt(ds, 902).notes.join(' ')).toMatch(/a markup type this sync has no rule for \("Sliding scale"\)/);
-    expect(estMatch.markupKind('Sliding scale')).toBeNull();
-    // The words it DOES know, exactly — no .includes(), because 'percent
-    // markup' contains 'markup' and 'markup per unit' contains both.
-    expect(['Percent', 'percentage', 'Markup Percent'].map(estMatch.markupKind)).toEqual(['percent', 'percent', 'percent']);
-    expect(['Margin', 'margin percent'].map(estMatch.markupKind)).toEqual(['margin', 'margin']);
-    expect(['Per unit', 'Markup per unit'].map(estMatch.markupKind)).toEqual(['perUnit', 'perUnit']);
-    expect(['Amount', 'Flat', 'Lump sum'].map(estMatch.markupKind)).toEqual(['amount', 'amount', 'amount']);
+    // The two codes the real records carry, on the worksheet of real lines.
+    expect(byBt(ds, 1300)['class']).toBe('new');
+    expect(contentOf(byBt(ds, 1300).build.lines).length).toBe(4);
+    // And a code nobody has ever seen. It imports, and nothing anywhere on the
+    // page says "no rule for" — the sentence that refused all 62 worksheets.
+    const r = byBt(ds, 1301);
+    expect([r['class'], contentOf(r.build.lines)[0].markup]).toEqual(['new', 25]);
+    expect(JSON.stringify(ds.rows)).not.toMatch(/no rule for/);
+    // The word table is GONE, so there is nothing left to gate on.
+    expect(estMatch.markupKind).toBeUndefined();
+    for (const t of ['1', '5', '7', 'Sliding scale', 'Margin', null, '']) {
+      expect([t, estMatch.markupPercentFor({ markupType: t, markupPercent: 88.68 }).pct]).toEqual([t, 88.68]);
+    }
   });
 
   test('THE PROOF: P86 prices Buildertrend’s own lines at Buildertrend’s own owner price, through the REAL pricing code', () => {
-    for (const ws of [100, 200, 300, 400]) {
+    for (const ws of [100, 200, 300, 400, 1300, 1301]) {
       const live = BT_LINES.filter((r) => r.worksheetId === String(ws)).map(readEstimateLine).filter((v) => !v.isDeleted);
       const built = estMatch.buildLines(live, String(ws));
-      expect(built.refusals).toEqual([]);
+      expect([ws, built.refusals]).toEqual([ws, []]);
       // js/pricing-pipeline.js, via services/money/estimate-totals.js — the same
       // module the editor chip and the proposal preview run.
-      const priced = estimateTotals.computeEstimateTotals({ lines: built.lines, alternates: [] });
+      const priced = Math.round(estimateTotals.computeEstimateTotals({ lines: built.lines, alternates: [] }).clientPrice * 100) / 100;
       const owner = estMatch.btOwnerTotal(live).total;
-      expect([ws, Math.round(priced.clientPrice * 100) / 100]).toEqual([ws, owner]);
+      // To the cent on every worksheet of round percents...
+      if (ws !== 1300) expect([ws, priced]).toEqual([ws, owner]);
+      // ...and within the worksheet's own tolerance on every one of them.
+      expect([ws, Math.abs(priced - owner) <= built.tolerance + estMatch.EPS]).toEqual([ws, true]);
     }
+  });
+
+  test('THE PENNY THAT IS NOT AN ERROR: the worksheet of real lines is a cent out, and an absolute half cent would call that a money discrepancy', () => {
+    const live = BT_LINES.filter((r) => r.worksheetId === '1300').map(readEstimateLine);
+    const built = estMatch.buildLines(live, '1300');
+    const priced = Math.round(estimateTotals.computeEstimateTotals({ lines: built.lines, alternates: [] }).clientPrice * 100) / 100;
+    expect([priced, estMatch.btOwnerTotal(live).total]).toEqual([35652.84, 35652.83]);
+    // The mutation, as arithmetic: EPS alone flags it; the worksheet's own
+    // tolerance — the sum of its lines' — does not.
+    expect(Math.abs(priced - 35652.83) >= estMatch.EPS).toBe(true);
+    expect(Math.abs(priced - 35652.83) <= built.tolerance + estMatch.EPS).toBe(true);
   });
 
   test('and when they DISAGREE the difference is a held-back money item, never absorbed', async () => {
     const ds = await estRows();
-    const r = byBt(ds, 1100);
+    const r = byBt(ds, 1200);
+    expect([r['class'], r.p86.id]).toEqual(['matched', 'est-diff']);
     const h = fieldsOf(r.heldBack);
-    expect([h.totalDiff.bt, h.totalDiff.p86, h.totalDiff.applicable, h.totalDiff.money]).toEqual(['$1,500.00', '$1,200.00', false, true]);
-    expect(h.totalDiff.note).toMatch(/down \$300\.00/);
+    expect([h.totalDiff.bt, h.totalDiff.p86, h.totalDiff.applicable, h.totalDiff.money]).toEqual(['$1,200.00', '$1,700.00', false, true]);
+    expect(h.totalDiff.note).toMatch(/up \$500\.00/);
     expect(h.totalDiff.note).toMatch(/shown rather than absorbed/);
+    // AND THE REASON IT CAN STILL ARISE AT ALL, now that every readable line is
+    // checked: one line's owner price is not readable money, so nothing checked
+    // it. The row says exactly that.
+    expect(r.notes.join(' ')).toMatch(/1 of this worksheet’s lines sent an owner price that is not readable money, so nothing could check/);
+    // ...and the held-back note names the tolerance it broke, in the figures
+    // the comparison actually used rather than rounded to a cent.
+    expect(h.totalDiff.note).toMatch(/more than the \$0\.0900 that Buildertrend’s own two-decimal markup percents can explain/);
     // It is not a correction, so no apply path of any shape can reach it.
     expect(r.corrections.map((c) => c.field)).not.toContain('totalDiff');
   });
+
+  test('a line whose percent does not reproduce its owner price is refused EVEN WHERE a P86 estimate is already matched to the worksheet', async () => {
+    const ds = await estRows();
+    const r = byBt(ds, 1100);
+    expect([r['class'], r.p86]).toEqual(['refused', null]);
+    expect(r.notes.join(' ')).toMatch(/“Roof” — Buildertrend says the owner pays \$1,500\.00 for it, and Project 86 prices the same quantity, unit cost and 20% markup at \$1,200\.00 — \$300\.00 less/);
+    expect([r.corrections, r.heldBack]).toEqual([[], []]);
+  });
 });
 
+
+// ── THE FOUR REAL LINES ───────────────────────────────────────────────────
+//
+// Read out of Clickr's own UI on 2026-09-20, by their real numbers, and they
+// are the evidence the whole markup rule rests on: Buildertrend populates ALL
+// FOUR notations on every line, markupType is only the CODE saying which one
+// the person typed, and the percent always reproduces the owner price.
+//
+// Line B is the one that matters most. Its percent is rounded to two decimals,
+// so P86 prices it six tenths of a cent above what Buildertrend says the owner
+// pays — and a tolerance of an absolute half cent refuses a line that is right.
+describe('THE REAL RECORDS, by their real numbers', () => {
+  //     name  type   qty  unitCost  markupPercent  perUnit   amount   margin  ownerPrice
+  const REAL = [
+    ['A', '1', 1, 5100, 100, 5100, 5100, 50, 10200],
+    ['B', '5', 1, 770, 88.68, 682.83, 682.83, 47, 1452.83],
+    ['C', '5', 1, 9600, 150, 14400, 14400, 60, 24000],
+    ['D', '1', 1, 36000, -100, -36000, -36000, 0, 0],
+  ];
+  const lineOf = (row) => readEstimateLine(L(RIVER, {
+    ws: 9900, id: 9901, order: 1, itemTitle: row[0], markupType: row[1], qty: row[2], cost: row[3],
+    markupPercent: row[4], markupPerUnit: row[5], markupAmount: row[6], margin: row[7], owner: row[8],
+  }));
+  const builtOf = (row) => estMatch.buildLines([lineOf(row)], '9900');
+  const pricedOf = (row) => estMatch.p86PricedTotal(builtOf(row).lines).clientPrice;
+
+  test('every one of the four imports, and P86 prices it at Buildertrend’s own owner price', () => {
+    for (const row of REAL) {
+      const built = builtOf(row);
+      expect([row[0], built.refusals]).toEqual([row[0], []]);
+      const l = contentOf(built.lines)[0];
+      // The percent is taken WHATEVER the type says, and the quantity and cost
+      // are Buildertrend's own.
+      expect([row[0], l.qty, l.unitCost, l.markup]).toEqual([row[0], row[2], row[3], row[4]]);
+      expect([row[0], Math.abs(pricedOf(row) - row[8]) <= estMatch.priceTolerance(row[2] * row[3])]).toEqual([row[0], true]);
+    }
+  });
+
+  test('THE ARITHMETIC, stated: three are exact and B is six tenths of a cent out', () => {
+    expect(pricedOf(REAL[0])).toBe(10200);          // 5100 x 2.00
+    expect(pricedOf(REAL[2])).toBe(24000);          // 9600 x 2.50
+    expect(pricedOf(REAL[3])).toBe(0);              // 36000 x 0
+    expect(pricedOf(REAL[1])).toBeCloseTo(1452.836, 9);   // 770 x 1.8868
+    expect(pricedOf(REAL[1]) - 1452.83).toBeCloseTo(0.006, 9);
+  });
+
+  test('LINE B IS THE TOLERANCE TEST: it imports, and an absolute half cent refuses it', () => {
+    expect(builtOf(REAL[1]).refusals).toEqual([]);
+    const resid = Math.abs(pricedOf(REAL[1]) - 1452.83);
+    // The mutation this test exists to kill, run here as arithmetic: EPS alone
+    // is smaller than a residual Buildertrend's own rounding guarantees.
+    expect(resid > estMatch.EPS).toBe(true);
+    expect(estMatch.priceTolerance(770)).toBeCloseTo(0.0435, 9);
+    expect(resid <= estMatch.priceTolerance(770)).toBe(true);
+  });
+
+  test('and the tolerance still catches a percent that is wrong by ONE STEP', () => {
+    // 88.69% instead of 88.68% on that same line: $0.08 out against $0.0435.
+    const wrong = readEstimateLine(L(RIVER, { ws: 9900, id: 9902, order: 1, itemTitle: 'B', markupType: '5', qty: 1, cost: 770, markupPercent: 88.69, owner: 1452.83 }));
+    const built = estMatch.buildLines([wrong], '9900');
+    expect(contentOf(built.lines)).toEqual([]);
+    expect(built.refusals[0].why).toMatch(/\$0\.08 more, which is more than the \$0\.0435/);
+    // As the PROPERTY rather than the example: one step of a two-decimal
+    // percent is worth C x 0.0001, and the tolerance is 0.005 + C x 0.00005 —
+    // so above $100 of line cost a one-step error is always caught.
+    for (const C of [101, 200, 770, 5100, 36000]) {
+      expect([C, C * 0.0001 > estMatch.priceTolerance(C)]).toEqual([C, true]);
+    }
+  });
+
+  test('a NEGATIVE markup imports exactly as Buildertrend priced it, and the row names the lines', async () => {
+    const built = builtOf(REAL[3]);
+    const l = contentOf(built.lines)[0];
+    // The cost stays on the estimate; the price is nothing. Which is the
+    // document Buildertrend shows.
+    expect([l.unitCost, l.markup]).toEqual([36000, -100]);
+    expect(estMatch.p86PricedTotal(built.lines).clientPrice).toBe(0);
+    expect(built.negatives).toEqual([{ line: 'D', pct: -100 }]);
+    const ds = await estRows();
+    expect(byBt(ds, 1300).notes.join(' ')).toMatch(/1 of this worksheet’s lines carries a NEGATIVE Buildertrend markup .*at -100%.*the cost stays in the estimate/);
+  });
+
+  test('the worksheet of all four is OFFERED, and its own penny is not called a money discrepancy', async () => {
+    const ds = await estRows();
+    const r = byBt(ds, 1300);
+    expect([r['class'], r.job.id]).toEqual(['new', 'j-8']);
+    expect([r.bt.costText, r.bt.ownerText]).toEqual(['$51,470.00', '$35,652.83']);
+    expect(r.notes.join(' ')).not.toMatch(/Project 86 prices these lines at/);
+    // And the line carrying a Buildertrend description as well as a title says
+    // so, because a P86 line has one text field and only the title fits.
+    expect(r.notes.join(' ')).toMatch(/1 of this worksheet’s lines carries a Buildertrend description as well as a title/);
+    expect(contentOf(r.build.lines).map((l) => l.description)).toEqual(['A — percent typed', 'B — the rounded percent', 'C — margin typed', 'D — excluded at -100%']);
+  });
+});
 
 // ── A QUANTITY IS NOT MONEY ──────────────────────────────────────────
 //
@@ -652,7 +849,7 @@ describe('A QUANTITY AND A PERCENT ARE NOT MONEY, so neither is rounded to cents
   const content = (o) => contentOf(build(o).lines)[0];
 
   test('a four-decimal quantity is built as the figure Buildertrend sent, and the totals then AGREE', () => {
-    const live = one({ item: 'Sod', qty: 1.3333, cost: 1000, markupPercent: 0, owner: 1333.30 });
+    const live = one({ itemTitle: 'Sod', qty: 1.3333, cost: 1000, markupPercent: 0, owner: 1333.30 });
     const built = estMatch.buildLines(live, '8000');
     expect(built.refusals).toEqual([]);
     const l = contentOf(built.lines)[0];
@@ -666,13 +863,13 @@ describe('A QUANTITY AND A PERCENT ARE NOT MONEY, so neither is rounded to cents
   });
 
   test('a quantity below half a cent is NOT zero', () => {
-    expect(content({ item: 'Trace', qty: 0.004, cost: 100, markupPercent: 0, owner: 0.4 }).qty).toBe(0.004);
+    expect(content({ itemTitle: 'Trace', qty: 0.004, cost: 100, markupPercent: 0, owner: 0.4 }).qty).toBe(0.004);
   });
 
   test('the cost total printed on the row is read the same way the lines are', () => {
     // btCostTotal feeds the 'cost $x' text beside the line-items item. Read
     // through num() it would say $1,330.00 for lines that cost $1,333.30.
-    expect(estMatch.btCostTotal(one({ item: 'Sod', qty: 1.3333, cost: 1000, owner: 1333.30 }))).toBe(1333.3);
+    expect(estMatch.btCostTotal(one({ itemTitle: 'Sod', qty: 1.3333, cost: 1000, owner: 1333.30 }))).toBe(1333.3);
   });
 
   test('every shape readEstimateLine can deliver survives — number, comma text, and the {value, scale} envelope', () => {
@@ -681,14 +878,14 @@ describe('A QUANTITY AND A PERCENT ARE NOT MONEY, so neither is rounded to cents
     // Buildertrend's envelope. A bare Number() on this is NaN, which would
     // refuse EVERY line of EVERY worksheet — so the grammar is reused for it.
     expect(estMatch.numExact({ value: 1.3333, scale: 4 })).toBe(1.3333);
-    expect(content({ item: 'Env', qty: { value: 1.3333, scale: 4 }, cost: 1000, markupPercent: 0, owner: 1333.30 }).qty).toBe(1.3333);
+    expect(content({ itemTitle: 'Env', qty: { value: 1.3333, scale: 4 }, cost: 1000, markupPercent: 0, owner: 1333.30 }).qty).toBe(1.3333);
     // num's contract, kept exactly: blank is 0, unreadable is null.
     expect([estMatch.numExact(null), estMatch.numExact(''), estMatch.numExact(0)]).toEqual([0, 0, 0]);
     expect([estMatch.numExact('abc'), estMatch.numExact('1 - 2'), estMatch.numExact([])]).toEqual([null, null, null]);
   });
 
   test('and the refusal it replaces is still there: an unreadable quantity is NAMED, never zeroed', () => {
-    const b = build({ item: 'Junk', qty: 'abc', cost: 100, markupPercent: 0 });
+    const b = build({ itemTitle: 'Junk', qty: 'abc', cost: 100, markupPercent: 0 });
     expect(contentOf(b.lines)).toEqual([]);
     expect(b.refusals.map((r) => r.why)).toEqual(['its quantity is not a readable number']);
   });
@@ -711,23 +908,30 @@ describe('A QUANTITY AND A PERCENT ARE NOT MONEY, so neither is rounded to cents
   });
 
   test('a markup percent carried past two decimals is carried, not rounded', () => {
-    expect(content({ item: 'P', qty: 1, cost: 100, markupPercent: 12.345, owner: 112.345 }).markup).toBe(12.345);
+    expect(content({ itemTitle: 'P', qty: 1, cost: 100, markupPercent: 12.345, owner: 112.345 }).markup).toBe(12.345);
     expect(estMatch.markupPercentFor({ markupType: 'Percent', markupPercent: 12.345 }).pct).toBe(12.345);
   });
 
-  test('a margin past two decimals converts instead of being refused as 100%', () => {
-    // num(99.999) is 100, and 100 has no markup percent at all — so a readable
-    // margin used to be refused by the ROUNDING rather than by its value.
-    const r = estMatch.markupPercentFor({ markupType: 'Margin', margin: 99.999 });
-    expect(r.why).toBeUndefined();
-    expect(1 + r.pct / 100).toBeCloseTo(1 / (1 - 99.999 / 100), 6);
-    // A margin that really has no multiplier is still refused.
-    expect(estMatch.markupPercentFor({ markupType: 'Margin', margin: 100 }).why).toMatch(/no markup percent at all/);
+  test('a PERCENT past two decimals is carried, and the line still checks out — the tolerance does not force two decimals on anybody', () => {
+    // num(99.999) is 100; numExact keeps the figure, and the check prices the
+    // figure that was kept rather than the rounded one.
+    expect(content({ itemTitle: 'Deep', qty: 1, cost: 100, markupPercent: 99.999, owner: 199.999 }).markup).toBe(99.999);
+    expect(estMatch.markupPercentFor({ markupType: '5', markupPercent: 99.999 }).pct).toBe(99.999);
   });
 
   test('but MONEY is still money: a unit cost keeps its cents rounding', () => {
     expect(estMatch.num(1.3333)).toBe(1.33);
-    expect(content({ item: 'M', qty: 1, cost: 10.005, markupPercent: 0, owner: 10.01 }).unitCost).toBe(10.01);
+    expect(content({ itemTitle: 'M', qty: 1, cost: 10.005, markupPercent: 0, owner: 10.01 }).unitCost).toBe(10.01);
+  });
+
+  test('and where that rounding moves the PRICE, the line is refused naming Buildertrend’s own unit cost — never blamed on a markup', () => {
+    // 1000 x $0.8756 is $875.60 and a P86 line can only carry $0.88, which is
+    // $880.00: a real $4.40 that used to ride into a created estimate behind a
+    // note. The refusal says whose limit it is, so nobody hunts the markup.
+    const b = build({ itemTitle: 'Sod', qty: 1000, cost: 0.8756, markupPercent: 0, owner: 875.6 });
+    expect(contentOf(b.lines)).toEqual([]);
+    expect(b.refusals[0].why).toMatch(/\$880\.00 — \$4\.40 more/);
+    expect(b.refusals[0].why).toMatch(/Buildertrend’s unit cost on it is 0\.8756 and a Project 86 line carries cents/);
   });
 });
 
@@ -750,8 +954,8 @@ describe('LINE IDS are unique across the PORTFOLIO, not just inside one workshee
 
   // The two seed collisions that need no missing key at all.
   const CASES = [
-    ['a group title with NO group id', [{ groupTitle: 'Labor', item: 'A', cost: 10, owner: 10 }], [{ groupTitle: 'Labor', item: 'B', cost: 20, owner: 20 }]],
-    ['the same group id on both', [{ groupId: 'G1', groupTitle: 'Labor', item: 'A', cost: 10, owner: 10 }], [{ groupId: 'G1', groupTitle: 'Labor', item: 'B', cost: 20, owner: 20 }]],
+    ['a group title with NO group id', [{ groupTitle: 'Labor', itemTitle: 'A', cost: 10, owner: 10 }], [{ groupTitle: 'Labor', itemTitle: 'B', cost: 20, owner: 20 }]],
+    ['the same group id on both', [{ groupId: 'G1', groupTitle: 'Labor', itemTitle: 'A', cost: 10, owner: 10 }], [{ groupId: 'G1', groupTitle: 'Labor', itemTitle: 'B', cost: 20, owner: 20 }]],
   ];
 
   test.each(CASES)('two worksheets grouping by %s share no id, and nothing is re-minted', (_w, a, b) => {
@@ -775,8 +979,8 @@ describe('LINE IDS are unique across the PORTFOLIO, not just inside one workshee
   test('a MISSING Buildertrend line id does not collide either, and it is not silent', () => {
     // slug('') is '', so every id-less line used to seed on the same 'x'.
     const noId = (ws, o) => [readEstimateLine(Object.assign(L(CITI, Object.assign({ ws, id: 1, order: 1, cost: 1, owner: 1 }, o)), { lineItemId: null }))];
-    const liveA = noId(9300, { groupId: 'GA', groupTitle: 'A', item: 'A' });
-    const liveB = noId(9400, { groupId: 'GB', groupTitle: 'B', item: 'B' });
+    const liveA = noId(9300, { groupId: 'GA', groupTitle: 'A', itemTitle: 'A' });
+    const liveB = noId(9400, { groupId: 'GB', groupTitle: 'B', itemTitle: 'B' });
     const flat = estMatch.buildLines(liveA, '9300').lines
       .concat(estMatch.buildLines(liveB, '9400').lines).map((l) => Object.assign({}, l));
     expect(new Set(flat.map((l) => l.id)).size).toBe(flat.length);
@@ -787,13 +991,13 @@ describe('LINE IDS are unique across the PORTFOLIO, not just inside one workshee
   });
 
   test('a header still reads like a header and a line like a line, so a heal matches its neighbours', () => {
-    const built = estMatch.buildLines(wsOf(9500, [{ groupId: 'G1', groupTitle: 'Labor', item: 'A', cost: 1, owner: 1 }]), '9500');
+    const built = estMatch.buildLines(wsOf(9500, [{ groupId: 'G1', groupTitle: 'Labor', itemTitle: 'A', cost: 1, owner: 1 }]), '9500');
     expect(built.lines.length).toBe(2);
     for (const l of built.lines) expect(String(l.id)[0]).toBe(prefixFor(l));
   });
 
   test('and the ids are still DETERMINISTIC, so a re-read is the same array and a re-apply is a no-op', () => {
-    const rows = [{ groupId: 'G1', groupTitle: 'Labor', item: 'A', cost: 10, owner: 10 }, { groupTitle: 'Sub', item: 'B', cost: 20, owner: 20 }];
+    const rows = [{ groupId: 'G1', groupTitle: 'Labor', itemTitle: 'A', cost: 10, owner: 10 }, { groupTitle: 'Sub', itemTitle: 'B', cost: 20, owner: 20 }];
     const a = estMatch.buildLines(wsOf(9600, rows), '9600');
     const b = estMatch.buildLines(wsOf(9600, rows), '9600');
     expect(a.lines.map((l) => l.id)).toEqual(b.lines.map((l) => l.id));
@@ -826,15 +1030,15 @@ describe('LINE IDS are unique across the PORTFOLIO, not just inside one workshee
     const strip = (rows) => rows.map((o) => readEstimateLine(Object.assign(
       L(CITI, Object.assign({ ws: 9700, order: 1, cost: 10, owner: 10 }, o)), o.keep ? {} : { lineItemId: null })));
 
-    const none = matchEstimates(strip([{ id: 1, groupId: 'GA', groupTitle: 'A', item: 'A' }]), p86);
+    const none = matchEstimates(strip([{ id: 1, groupId: 'GA', groupTitle: 'A', itemTitle: 'A' }]), p86);
     expect(none[0].notes.join(' ')).toMatch(/no line id on ANY of this worksheet.s lines.*"lineItemId".*key name is wrong in field-map\.js/s);
 
-    const some = matchEstimates(strip([{ id: 1, groupId: 'GA', groupTitle: 'A', item: 'A', keep: true },
-      { id: 2, groupId: 'GA', groupTitle: 'A', item: 'B', order: 2 }]), p86);
+    const some = matchEstimates(strip([{ id: 1, groupId: 'GA', groupTitle: 'A', itemTitle: 'A', keep: true },
+      { id: 2, groupId: 'GA', groupTitle: 'A', itemTitle: 'B', order: 2 }]), p86);
     expect(some[0].notes.join(' ')).toMatch(/1 of this worksheet.s lines came with no Buildertrend line id/);
 
     // And a worksheet whose lines all carry one says nothing at all.
-    const ok = matchEstimates(strip([{ id: 1, groupId: 'GA', groupTitle: 'A', item: 'A', keep: true }]), p86);
+    const ok = matchEstimates(strip([{ id: 1, groupId: 'GA', groupTitle: 'A', itemTitle: 'A', keep: true }]), p86);
     expect(ok[0].notes.join(' ')).not.toMatch(/line id/);
 
     // ...and on a MATCHED row too, which is a different notes array in a
@@ -842,7 +1046,7 @@ describe('LINE IDS are unique across the PORTFOLIO, not just inside one workshee
     // worksheet happens to land in, so one copy covering one path is not it.
     const linked = Object.assign({}, p86, { estimateRows: [{ id: 'e-x', attached_job_id: 'j-x',
       bt_worksheet_id: '9700', data: { id: 'e-x', title: 'Citi Lakes', lines: [], alternates: [] } }] });
-    const m = matchEstimates(strip([{ id: 1, groupId: 'GA', groupTitle: 'A', item: 'A' }]), linked);
+    const m = matchEstimates(strip([{ id: 1, groupId: 'GA', groupTitle: 'A', itemTitle: 'A' }]), linked);
     expect(m[0]['class']).toBe('matched');
     expect(m[0].notes.join(' ')).toMatch(/no line id on ANY of this worksheet.s lines/);
   });
@@ -1217,16 +1421,16 @@ describe('CREATE — a Buildertrend-only worksheet becomes a real P86 estimate',
   test('a bulk create makes every creatable worksheet and no refused, ambiguous or already-matched one', async () => {
     const before = count('estimates');
     const r = await put(ADMIN, { mode: 'create', btIds: [] });
-    // ws 400 is the only 'new' row: every other worksheet is matched, ambiguous
-    // or refused.
-    expect(r.json.counts.created).toBe(1);
-    expect(count('estimates')).toBe(before + 1);
-    expect(estRow(r.json.results[0].p86Id).bt_worksheet_id).toBe('400');
+    // ws 400, 1300 and 1301 are the 'new' rows: every other worksheet is
+    // matched, ambiguous or refused.
+    expect(r.json.counts.created).toBe(3);
+    expect(count('estimates')).toBe(before + 3);
+    expect(r.json.results.filter((x) => x.p86Id).map((x) => estRow(x.p86Id).bt_worksheet_id).sort()).toEqual(['1300', '1301', '400']);
   });
 
   test('a REFUSED worksheet is never created, by name or in the bulk press', async () => {
     const before = count('estimates');
-    const r = await put(ADMIN, { mode: 'create', btIds: ['900', '901', '902', '800', '600', '700'] });
+    const r = await put(ADMIN, { mode: 'create', btIds: ['900', '901', '902', '800', '600', '700', '1100'] });
     expect(r.json.counts.created).toBe(0);
     expect(count('estimates')).toBe(before);
   });
