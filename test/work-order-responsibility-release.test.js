@@ -68,9 +68,12 @@ const hits = (text) => OWNED.filter((re) => re.test(text)).map(String);
 // ── 1. the release is cut ─────────────────────────────────────────────────
 describe('release ' + VERSION + ' is cut', () => {
   test('APP_VERSION and the newest release are both ' + VERSION + ', dated the day the owner said it', () => {
-    expect(catalog.APP_VERSION).toBe(VERSION);
-    expect(catalog.releases[0].version).toBe(VERSION);
-    expect(catalog.releases[0].date).toBe('2026-09-20');
+    // Written the day this was cut, when it WAS newest. Later releases ship
+    // above it, so what stays true is that APP_VERSION names the head of the
+    // list and this entry is still in it, dated the day the owner said.
+    expect(catalog.APP_VERSION).toBe(catalog.releases[0].version);
+    expect(rel()).toBeTruthy();
+    expect(rel().date).toBe('2026-09-20');
     // It corrects 1.34 rather than replacing it. Other branches shipped 1.35
     // and 1.36 the same day, so 1.34 is below this entry but not adjacent to
     // it — what must hold is that both are in the list, newest first.
@@ -82,8 +85,13 @@ describe('release ' + VERSION + ' is cut', () => {
     const stale = Object.assign({}, catalog, { APP_VERSION: '1.34' });
     expect(() => { expect(stale.APP_VERSION).toBe(stale.releases[0].version); }).toThrow();
     // And filed in the wrong place: a note under the release it corrects.
-    const below = [catalog.releases[1], catalog.releases[0]].concat(catalog.releases.slice(2));
-    expect(below[0].version).not.toBe(VERSION);
+    // Filed in the wrong place: a note under the release it corrects. Checked
+    // against THIS entry's own position, so a later release above it is fine.
+    const at = catalog.releases.findIndex((r) => r.version === VERSION);
+    const swapped = catalog.releases.slice();
+    swapped[at] = catalog.releases[at + 1];
+    swapped[at + 1] = catalog.releases[at];
+    expect(swapped[at].version).not.toBe(VERSION);
   });
 
   test('its rows are grouped new, improved, fixed, and every row has text', () => {
@@ -256,8 +264,13 @@ describe('the catalog says a building belongs to nobody from here on', () => {
     // spellings. Scoping the scan to the newest entry is the decision, not an
     // oversight, and this is the line that says so out loud.
     expect(hits(allText(r134)).length).toBeGreaterThan(0);
-    // And what is under the scan is the newest entry, not merely some entry.
-    expect(rel()).toBe(catalog.releases[0]);
+    // And what is under the scan is THIS entry, sitting above the one it
+    // corrects — not merely some entry, and not required to be the newest,
+    // because later releases ship above it.
+    const at = catalog.releases.findIndex((r) => r.version === VERSION);
+    const at134 = catalog.releases.findIndex((r) => r.version === '1.34');
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(at134);
   });
 
   test(VERSION + ' says in its own rows why the note below it disagrees', () => {
