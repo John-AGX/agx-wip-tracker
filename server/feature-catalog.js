@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.37';
+const APP_VERSION = '1.38';
 
 const releases = [
+  {
+    version: '1.38',
+    date: '2026-09-20',
+    name: 'An address is a property, not a job',
+    summary: 'A Buildertrend lead is no longer held up just because Project 86 has other leads at the same address — doing twenty jobs at one complex is a good client, not a duplicate.',
+    changes: [
+      { type: 'fixed', text: 'A lead whose only overlap with Project 86 is its address is now offered as a new lead instead of being refused as ambiguous. Thirty-one Buildertrend leads were stuck on this: a laundry-room conversion was being held against twenty-one other pieces of work at the same apartment complex. The row still lists every lead Project 86 holds at that property, so you can see what is nearby before creating it.' },
+      { type: 'improved', text: 'The same-work check that stands behind that now reads a rewording as the same lead. It compares the words a title is made of rather than the order they are written in, expands the abbreviations this trade uses (Bldg, Apt, Mgmt) and folds plurals — so “Roof leak at Edgewater 255 and 205” is recognised as “Edgewater Roof Leak 255/205”, and “Building 9 Balcony Repair” as “Bldg 9 Balcony Repairs”. Building numbers are never folded, because Building 9 is not Building 12.' },
+      { type: 'fixed', text: 'A job number that more than one Buildertrend job carries is no longer offered as a change. Project 86 numbers exactly one job with it, so applying it could only take that number off whichever job held it first. The row says which number is duplicated and how many jobs share it.' },
+    ],
+  },
   {
     version: '1.37',
     date: '2026-09-20',

@@ -316,12 +316,16 @@ describe('MATCHER — jobs', () => {
     noProposals(r);
   });
 
-  test('a number shared by four BT rows: every one of them ambiguous', () => {
+  test('a number shared by four BT rows: the number is ignored for them and each falls back to the evidence that remains', () => {
     const hits = rows.filter((r) => r.bt.number === 'WO16');
     expect(hits).toHaveLength(4);
     for (const r of hits) {
-      expect(r.class).toBe('ambiguous');
-      expect(r.notes.join(' ')).toMatch(/4 Buildertrend jobs use the number WO16/);
+      // None of the four has a name or an address P86 knows, so each is NEW —
+      // where the old refusal left all four permanently unclearable.
+      expect(r.class).toBe('new');
+      expect(r.notes.join(' ')).toMatch(/4 Buildertrend jobs carry the number WO16, so it identifies none of them/);
+      // The renumber instruction survives only where it is still TRUE: the create.
+      expect(r.notes.join(' ')).toMatch(/only one of the 4 can be created/);
     }
   });
 
@@ -452,7 +456,9 @@ describe('MATCHER — jobs', () => {
 
   test('the match rate excludes change orders, not-a-job and refused rows', () => {
     const s = match.summarise(rows);
-    expect(s.counts).toEqual({ matched: 3, conflict: 4, ambiguous: 14, possible_duplicate: 2, new: 2, change_order: 1, not_a_job: 2, refused: 1 });
+    // The four WO16 rows moved from ambiguous to new when the shared number
+    // stopped refusing them; the match-rate base is unchanged (both count).
+    expect(s.counts).toEqual({ matched: 3, conflict: 4, ambiguous: 10, possible_duplicate: 2, new: 6, change_order: 1, not_a_job: 2, refused: 1 });
     expect(s.matchRateBase).toBe(25);
     expect(s.matchRate).toBeCloseTo(7 / 25, 10);
     const open = match.summarise(rows, (r) => r.bt.scope === 'open');
@@ -540,6 +546,242 @@ describe('MATCHER — jobs — Warranty is in the vocabulary, in its own state',
     expect(statusOf('W1005 Archived Job')).toEqual([]);
     const r = one(wrows, 'W1005 Archived Job');
     expect(r.corrections.map((c) => c.field)).not.toContain('status');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// REPEAT WORK AT ONE PROPERTY, AND A NUMBER BUILDERTREND GAVE OUT TWICE
+//
+// Both halves are the live 2026-09 preview, not theory: 31 of 34 ambiguous
+// leads were refused for "only the address matches", and 35 of 41 ambiguous
+// jobs had no P86 candidate at all — they were ambiguous against EACH OTHER
+// inside Buildertrend over a number P86 cannot renumber.
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('AN ADDRESS IS A PROPERTY; A LEAD IS A PIECE OF WORK AT IT', () => {
+  // The real row. 21 P86 leads carry 257 Milwaukee Avenue because AGX has done
+  // 21 pieces of work at that complex — a sign of a good client, not a
+  // duplicate. Not one of them is a laundry-room conversion.
+  const AT = { street_address: '257 Milwaukee Avenue', city: 'Dunedin', state: 'FL', zip: '34698' };
+  const TITLES = [
+    'Edgewater Golf Cart Charging Stations', 'Edgewater Roof Leak 255/205', 'Edgewater Leasing Office Leak',
+    'Belleair Roof Hatch Replacement Building 1', 'Edgewater Pool Deck Pressure Wash', 'Edgewater Mailbox Kiosk Repaint',
+    'Edgewater Dumpster Enclosure Gates', 'Edgewater Stair Tread Replacement 210', 'Edgewater Clubhouse Interior Paint',
+    'Edgewater Carport Post Repairs', 'Edgewater Fence Section 12', 'Edgewater Sidewalk Trip Hazard Grinding',
+    'Edgewater Breezeway Lighting', 'Edgewater Gutter Cleaning', 'Edgewater Balcony Railing Repaint 110',
+    'Edgewater Entry Monument Sign', 'Edgewater Unit 304 Water Intrusion', 'Edgewater Roof Vent Boots',
+    'Edgewater Soffit Repairs 230', 'Edgewater Car Charger Bollards', 'Edgewater Trash Chute Doors',
+  ];
+  const P86 = TITLES.map((t, i) => pLead('edge-' + i, Object.assign({ title: t }, AT)));
+  const btAt = (title, o) => leadRec(title, Object.assign({ street: '257 Milwaukee Avenue', city: 'Dunedin', zip: '34698',
+    contactName: 'BH - Promenade at Edgewater Apartments' }, o || {}));
+  const run = (rec, p86) => match.matchLeads([rec].map(readLead), p86 || P86, {});
+
+  test('THE EDGEWATER ROW: the only overlap with 21 P86 leads is the address, so it is NEW and nothing is proposed', () => {
+    const rows = run(btAt('Edgewater - Building 259 Laundry Room Conversion'));
+    expect(rows[0].class).toBe('new');
+    expect(rows[0].candidates).toEqual([]);
+    noProposals(rows[0]);
+  });
+
+  test('...and the row still NAMES every lead at that property, so nothing is created blind', () => {
+    const rows = run(btAt('Edgewater - Building 259 Laundry Room Conversion'));
+    expect(rows[0].considered.map((c) => c.id)).toEqual(P86.map((p) => p.id));
+    expect(rows[0].considered.map((c) => c.rungs.join(', '))).toEqual(P86.map(() => 'address'));
+    expect(rows[0].notes.join(' ')).toMatch(/P86 holds 21 leads at 257 Milwaukee Avenue, Dunedin, FL, 34698/);
+    expect(rows[0].notes.join(' ')).toMatch(/an address is a property and a lead is a piece of work at it/i);
+    // Shown on the row is what keeps them out of "in P86, not in Buildertrend".
+    expect(match.notInBuildertrend(rows, P86, 'leads').rows).toEqual([]);
+  });
+
+  test('the note no longer tells anyone the address alone refused the row', () => {
+    const rows = run(btAt('Edgewater - Building 259 Laundry Room Conversion'));
+    expect(rows[0].notes.join(' ')).not.toMatch(/Only the address matches/);
+    expect(rows[0].notes.join(' ')).not.toMatch(/Nothing is proposed/);
+  });
+
+  // ── THE RISK THE LOOSENING CREATES, AND THE PATH THAT HAS TO CLOSE IT ──
+  // Today's refusal was preventing duplicates by accident. These are the cases
+  // that must not become a second P86 lead. Each drives the real title
+  // comparison, so weakening it turns them red.
+  test.each([
+    ['Edgewater Roof Leak 255/205', 'Roof leak at Edgewater 255 and 205'],
+    ['Bldg 9 Balcony Repairs', 'Building 9 Balcony Repair'],
+    ['Edgewater Roof Leak 255/205', 'Roof Leak - Edgewater Bldgs 255 & 205'],
+    ['Waterside I Siding Replacement', 'Waterside 1 Siding Replacment'],
+    ['Bay Pointe Roof Hatch Replacement', 'Roof hatch replacements at Bay Pointe'],
+  ])('the same work worded differently is still the same work: %s / %s', (a, b) => {
+    expect(match.nearTitles(a, b)).toBe(true);
+    expect(match.nearTitles(b, a)).toBe(true);
+  });
+
+  test('...and a different piece of work at the same complex is NOT: the 21 stay apart', () => {
+    for (const t of TITLES) {
+      expect(match.nearTitles('Edgewater - Building 259 Laundry Room Conversion', t)).toBe(false);
+    }
+  });
+
+  test('A BUILDERTREND LEAD THAT IS AN EXISTING P86 LEAD, WORDED DIFFERENTLY: possible_duplicate, never new', () => {
+    const rows = run(btAt('Roof leak at Edgewater 255 and 205'));
+    expect(rows[0].class).toBe('possible_duplicate');
+    expect(rows[0].candidates.map((c) => [c.title, c.rungs.join(', ')]))
+      .toEqual([['Edgewater Roof Leak 255/205', 'address, similar title']]);
+    expect(rows[0].notes[0]).toMatch(/reads like this one worded differently/);
+    noProposals(rows[0]);
+    // The other 20 at that address are context, not candidates — and the note
+    // counts the leads it lists, not the leads at the address.
+    expect(rows[0].considered).toHaveLength(20);
+    expect(rows[0].notes.join(' ')).toMatch(/P86 holds 20 other leads at 257 Milwaukee Avenue/);
+  });
+
+  test('...at a DIFFERENT address too: the fuzzy title carries it on its own', () => {
+    const rows = run(btAt('Roof leak at Edgewater 255 and 205', { street: '9 Somewhere Else Rd', city: 'Tampa', zip: '33602' }));
+    expect(rows[0].class).toBe('possible_duplicate');
+    expect(rows[0].candidates.map((c) => [c.title, c.rungs.join(', ')]))
+      .toEqual([['Edgewater Roof Leak 255/205', 'similar title']]);
+    expect(rows[0].considered || []).toEqual([]);
+  });
+
+  // ── loosening the address rule loosened NEITHER confirming rung ──
+  test('a title + address match still matches, and the other leads at the address stay "also considered"', () => {
+    const rows = run(btAt('Edgewater Gutter Cleaning'));
+    expect(rows[0]).toMatchObject({ class: 'matched', rung: 'title + address' });
+    expect(rows[0].p86.title).toBe('Edgewater Gutter Cleaning');
+    expect(rows[0].considered).toHaveLength(20);
+  });
+
+  test('a title + client match still matches, with no address at all in common', () => {
+    const p86 = P86.map((p) => (p.title === 'Edgewater Gutter Cleaning'
+      ? Object.assign({}, p, { client_name: 'BH - Promenade at Edgewater Apartments' }) : p));
+    const rec = leadRec('Edgewater Gutter Cleaning', { street: '1 Elsewhere St', city: 'Tampa', zip: '33602',
+      contactName: 'BH - Promenade at Edgewater Apartments' });
+    const rows = match.matchLeads([rec].map(readLead), p86, {});
+    // Confident on the client, so Buildertrend's address is PROPOSED onto it —
+    // a confident row carrying a correction is "conflict", never "ambiguous".
+    expect(rows[0]).toMatchObject({ class: 'conflict', rung: 'title + client' });
+    expect(rows[0].p86.id).toBe('edge-13');
+    expect(rows[0].corrections.map((c) => c.field).sort()).toEqual(['city', 'street', 'zip']);
+  });
+});
+
+describe('THE NEAR INDEX AND THE ONE-PAIR TEST ANSWER THE SAME QUESTION', () => {
+  // nearIndex sums Dice off a bigram posting list; nearTitles compares one pair
+  // outright. The matcher reads BOTH — the index for its near rungs, the pair
+  // test for a lead at an address it is deciding about — so a drift between
+  // them would make the same two titles near on one path and not on the other.
+  const WORDS = ['Harbor', 'Edgewater', 'Belleair', 'Waterside', 'Roof', 'Paint', 'Repairs', 'Repair', 'Railings',
+    'Bldg 9', 'Building 9', 'Leak', 'Leaks', 'Balcony', 'Stairs', 'Gate', 'at', 'and', '255', '205', 'Phase 2'];
+  const pick = (n, seed) => {
+    const out = [];
+    for (let i = 0; i < n; i++) out.push(WORDS[(seed * (i + 3) * 7 + i * 11) % WORDS.length]);
+    return out.join(' ');
+  };
+  const ITEMS = [];
+  for (let i = 0; i < 120; i++) ITEMS.push({ id: 'i' + i, title: pick(2 + (i % 4), i + 1), street: '' });
+
+  test('every query: the posting list returns exactly the brute-force answer, in item order', () => {
+    const near = match.nearIndex(ITEMS, (it) => it.title);
+    const noSkip = () => false;
+    const LABELS = { name: 'similar title', place: 'same address, typo-tolerant' };
+    let hitRows = 0;
+    for (let q = 0; q < 60; q++) {
+      const title = pick(2 + (q % 4), q * 3 + 2);
+      const got = near(title, { street: '', city: '', state: '', zip: '' }, noSkip, LABELS)
+        .filter((h) => h.why.indexOf(LABELS.name) !== -1).map((h) => h.it.id);
+      const want = ITEMS.filter((it) => match.nearTitles(title, it.title)).map((it) => it.id);
+      expect(got).toEqual(want);
+      if (want.length) hitRows++;
+    }
+    // A vacuous pass — no query ever matching anything — would prove nothing.
+    expect(hitRows).toBeGreaterThan(10);
+  });
+});
+
+describe('A BUILDERTREND NUMBER MORE THAN ONE JOB CARRIES IDENTIFIES NONE OF THEM', () => {
+  const P86 = [
+    pJob('wj-bal', { jobNumber: 'WO25', title: 'Edgewater Balcony Repairs', street_address: '257 Milwaukee Avenue', city: 'Dunedin', zip: '34698' }),
+    pJob('wj-hatch', { jobNumber: 'WO31', title: 'Belleair Roof Hatch', street_address: '88 Belleair Rd', city: 'Largo', zip: '33770' }),
+    pJob('wj-gate', { jobNumber: 'WO40', title: 'Seaside Gate Motor', street_address: '9 Other Way' }),
+    pJob('wj-once', { jobNumber: 'WO90', title: 'Harborview Stair Repair' }),
+  ];
+  const BT = [
+    jobRec('WO25 Edgewater Balcony Repairs', { street: '257 Milwaukee Avenue', city: 'Dunedin', zip: '34698' }),
+    jobRec('WO25 Belleair Roof Hatch', { street: '88 Belleair Rd', city: 'Largo', zip: '33770' }),
+    jobRec('WO25 Seaside Gate Motor', { street: '1 Nowhere Ln' }),
+    jobRec('WO25 Brand New Pressure Wash', { street: '44 Fresh St' }),
+    jobRec('WO25 Another Unknown Thing', { street: '77 Unknown Ave' }),
+    jobRec('WO90 Harborview Stair Repair'),
+  ];
+  const rows = match.matchJobs(BT.map(readJob), P86, {});
+  const at = (raw) => one(rows, raw);
+
+  test('the one whose name AND address find a P86 job is MATCHED, although P86 numbers it WO25 itself', () => {
+    expect(at('WO25 Edgewater Balcony Repairs')).toMatchObject({ class: 'matched', rung: 'name + address' });
+    expect(at('WO25 Edgewater Balcony Repairs').p86.id).toBe('wj-bal');
+    expect(at('WO25 Edgewater Balcony Repairs').notes.join(' ')).toMatch(/5 Buildertrend jobs carry the number WO25/);
+  });
+
+  test('a P86 job numbered DIFFERENTLY still matches on name + address, and its number is never offered for renumbering', () => {
+    const r = at('WO25 Belleair Roof Hatch');
+    expect(r).toMatchObject({ class: 'matched', rung: 'name + address' });
+    expect(r.p86.id).toBe('wj-hatch');
+    expect(r.notes.join(' ')).toMatch(/P86 keeps its own number WO31/);
+    const held = r.heldBack.find((h) => h.field === 'jobNumber');
+    expect(held).toMatchObject({ bt: 'WO25', p86: 'WO31', applicable: false });
+    expect(held.note).toMatch(/5 Buildertrend jobs carry the number WO25, so it is not offered here/);
+  });
+
+  test('the one the remaining evidence cannot tell apart stays ambiguous, with a note that is now true', () => {
+    const r = at('WO25 Seaside Gate Motor');
+    expect(r.class).toBe('ambiguous');
+    expect(r.candidates.map((c) => [c.id, c.rungs.join(', ')])).toEqual([['wj-gate', 'name']]);
+    expect(r.notes.join(' ')).toMatch(/Only a weak match \(name\)/);
+    expect(r.notes.join(' ')).toMatch(/5 Buildertrend jobs carry the number WO25, so it identifies none of them/);
+    expect(r.notes.join(' ')).not.toMatch(/give each its own number in Buildertrend/);
+    noProposals(r);
+  });
+
+  test('the ones P86 has never seen are NEW, and the renumber instruction survives only where it is still true', () => {
+    for (const raw of ['WO25 Brand New Pressure Wash', 'WO25 Another Unknown Thing']) {
+      expect(at(raw).class).toBe('new');
+      expect(at(raw).notes.join(' ')).toMatch(/P86 numbers one job with it, so only one of the 5 can be created/);
+    }
+  });
+
+  test('the P86 job that carries the shared number is shown on every row it did not decide, and never counted absent', () => {
+    for (const raw of ['WO25 Seaside Gate Motor', 'WO25 Brand New Pressure Wash', 'WO25 Another Unknown Thing']) {
+      expect(at(raw).considered.map((c) => [c.id, c.rungs.join(', ')])).toEqual([['wj-bal', 'number (shared in Buildertrend)']]);
+    }
+    expect(match.notInBuildertrend(rows, P86, 'jobs').rows).toEqual([]);
+  });
+
+  test('no two Buildertrend jobs claim one P86 job', () => {
+    const claimed = rows.filter((r) => r.p86).map((r) => r.p86.id);
+    expect(claimed.sort()).toEqual(['wj-bal', 'wj-hatch', 'wj-once']);
+    expect(new Set(claimed).size).toBe(claimed.length);
+  });
+
+  test('a job number used ONCE still matches on the number alone, exactly as before', () => {
+    expect(at('WO90 Harborview Stair Repair')).toMatchObject({ class: 'matched', rung: 'number' });
+    expect(at('WO90 Harborview Stair Repair').p86.id).toBe('wj-once');
+    expect(at('WO90 Harborview Stair Repair').considered).toEqual([]);
+  });
+
+  test('demoteCollisions still fires: two Buildertrend jobs that both land on one P86 job are BOTH refused', () => {
+    const crash = match.matchJobs([
+      jobRec('WO25 Belleair Roof Hatch', { street: '88 Belleair Rd', city: 'Largo', zip: '33770' }),
+      jobRec('WO25 Filler Row'),
+      jobRec('WO31 Belleair Roof Hatch', { street: '88 Belleair Rd', city: 'Largo', zip: '33770' }),
+    ].map(readJob), P86, {});
+    const hits = crash.filter((r) => r.bt.raw.indexOf('Belleair') !== -1);
+    expect(hits).toHaveLength(2);
+    for (const r of hits) {
+      expect(r.class).toBe('ambiguous');
+      expect(r.p86).toBe(null);
+      expect(r.notes.join(' ')).toMatch(/2 Buildertrend jobs all land on this same P86 job/);
+      noProposals(r);
+    }
+    expect(crash.filter((r) => r.p86)).toEqual([]);
   });
 });
 
@@ -1222,7 +1464,7 @@ describe('HTTP — the preview over real-shape Clickr pages', () => {
     // Contract from data.contractAmount; approved COs = the $1,000 approved row only
     // (not the $9,000 draft, not org B's mis-stamped $50,000).
     expect(s1050.heldBack.map((h) => [h.field, h.p86, h.bt])).toEqual([['approvedCOPrice', '$1,000.00', '$2,500.00']]);
-    expect(jobs.rows.filter((x) => x.bt.number === 'WO16').every((x) => x.class === 'ambiguous')).toBe(true);
+    expect(jobs.rows.filter((x) => x.bt.number === 'WO16').every((x) => x.class === 'new')).toBe(true);
     expect(jobs.summary.counts).toMatchObject({ not_a_job: 1, change_order: 1 });
     expect(r.json.p86).toMatchObject({ jobs: 3, leads: 2, unscopedJobs: 1, unscopedLeads: 1 });
     expect(jobs.notInBuildertrend).toMatchObject({ reliable: true });

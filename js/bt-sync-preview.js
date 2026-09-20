@@ -474,7 +474,10 @@
       // The estimates already on this job that nothing matched. Not candidates
       // and not a guess — the server refuses to choose between them — but a
       // person can, and without these buttons that decision has no door.
-      if ((r.considered || []).length) {
+      // ESTIMATES ONLY: this copy says "this worksheet", and a lead row now
+      // carries a considered list too (the P86 leads at the same property).
+      // That one is rendered once, by alsoHTML, with the same link buttons.
+      if (ds.key === 'estimates' && (r.considered || []).length) {
         html += '<div class="btp-meta">Already on this job — link this worksheet to one instead of creating a second:</div>'
           + candidatesHTML(ds, r.considered, null, r);
       }

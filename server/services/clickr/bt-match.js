@@ -703,9 +703,15 @@ function jobProposals(bt, p, ctx) {
 
   // JOB NUMBER — identity. Never applied automatically; a person may tick it.
   if (bt.number && exactNumberKey(bt.number) !== exactNumberKey(p.jobNumber)) {
+    // A number MORE THAN ONE Buildertrend job carries is not offered at all:
+    // P86 numbers exactly one job with it, so ticking it could only take it off
+    // whichever job held it first.
+    const sharedBy = bt.numberSharedBy || 0;
     acc.heldBack.push({ field: 'jobNumber', label: 'Job number', reason: 'identity', bt: bt.number, p86: p.jobNumber,
-      value: bt.number, applicable: true,
-      note: 'The job number is P86\'s identity and the QuickBooks cost-import key. Never applied automatically — tick it to renumber this job on purpose.' });
+      value: bt.number, applicable: !sharedBy,
+      note: sharedBy
+        ? sharedBy + ' Buildertrend jobs carry the number ' + bt.number + ', so it is not offered here — P86 numbers one job with it. Give each its own number in Buildertrend first.'
+        : 'The job number is P86\'s identity and the QuickBooks cost-import key. Never applied automatically — tick it to renumber this job on purpose.' });
   }
   return { acc, notes };
 }
@@ -732,16 +738,79 @@ function indexBy(list, keyFn) {
   return m;
 }
 
+// ── the NEAR TITLE: "the same work, worded differently" ─────────────────────
+// A near rung asks whether two names are one piece of work written twice, and
+// WORD ORDER, an ABBREVIATION and a PLURAL do not bear on that question. Both of
+// these pairs are one lead, and both were 0.77 apart as written — under every
+// threshold here, so neither was reached at all:
+//   "Edgewater Roof Leak 255/205" / "Roof leak at Edgewater 255 and 205"
+//   "Bldg 9 Balcony Repairs"      / "Building 9 Balcony Repair"
+// So the near key sorts the words, expands the abbreviations this trade writes
+// and folds the plurals before anything is compared. textKey() is NOT touched:
+// the exact rungs still match a name exactly as written. This key is read only
+// by the near rungs, where a false hit costs a REVIEW and never a match.
+const NEAR_ABBREV = {
+  bldg: 'building', blg: 'building', bldng: 'building', apt: 'apartment',
+  ste: 'suite', rm: 'room', ctr: 'center', mgmt: 'management', maint: 'maintenance',
+};
+
+function nearWord(w) {
+  let x = NEAR_ABBREV[w] || w;
+  // A plural is the same word — "Repairs" is "Repair" — but "Glass" is not "Glas".
+  if (x.length > 3 && x.endsWith('s') && !x.endsWith('ss')) x = x.slice(0, -1);
+  return NEAR_ABBREV[x] || x;
+}
+
+// Every word that says WHICH work this is, in one order. The stop words go,
+// because they are what a rewording adds ("Roof leak AT Edgewater"); the
+// numbers stay, because "Bldg 9" and "Bldg 12" are different buildings.
+function nearKey(s) {
+  const out = [];
+  for (const w of textKey(s).split(' ')) {
+    if (!w || STOP.has(w)) continue;
+    out.push(nearWord(w));
+  }
+  return out.sort().join(' ');
+}
+
 // ── the NEAR rungs, indexed ─────────────────────────────────────────────────
-// A similar name (character-bigram Dice >= 0.85) or the same place written with
-// a typo. Comparing every Buildertrend row with every P86 record ran in the
+// A similar name (nearNames below, over the near key) or the same place written
+// with a typo. Comparing every Buildertrend row with every P86 record ran in the
 // request and blocked the live server for seconds (692 x 900 = 4 s). The same
 // test is now answered from two indexes: a bigram posting list (the Dice
 // intersection is summed only over records that share a bigram) and the
 // street's house number (a typo-tolerant street agrees only on the SAME house
-// number). The answer is identical to the brute-force loop — proved against it
-// in test/clickr-sync-preview.test.js — and in the same record order.
+// number). The answer is identical to the brute-force loop over nearTitles(),
+// in the same record order — executed against it in
+// test/clickr-sync-preview.test.js ("the index and the one-pair test").
 const NEAR_NAME = 0.85;
+// Below that threshold, the same BOUNDED word test the exact rungs use, on the
+// near key: a rewording that adds or drops a word ("Roof Leak - Edgewater Bldgs
+// 255 & 205" for "Edgewater Roof Leak 255/205") still has to share a
+// DISTINCTIVE word, or be the same generic name twice. The Dice floor is what
+// keeps it affordable — it is read off the posting list that is already summed,
+// and a name below it cannot carry half of the other's words anyway. Measured
+// on the real shape (692 Buildertrend jobs x 900 P86 jobs, repeated trade
+// vocabulary): 239 ms against 58 ms without the arm, where the brute-force loop
+// this index replaced cost 4 s.
+const NEAR_WORDS = 0.5;
+
+function nearNames(dice, ka, kb) {
+  if (dice >= NEAR_NAME) return true;
+  if (dice < NEAR_WORDS) return false;
+  const e = nameEvidence(ka, kb);
+  return e === 'agree' || e === 'weak';
+}
+
+// Two titles, compared the way the near rungs compare them. The index below
+// answers the same question from a posting list; this answers it for ONE pair,
+// and both go through nearNames so the two can never drift apart.
+function nearTitles(a, b) {
+  const ka = nearKey(a);
+  const kb = nearKey(b);
+  if (!ka || !kb) return false;
+  return nearNames(charSimilarity(ka, kb), ka, kb);
+}
 
 function nearIndex(items, titleOf) {
   const postings = new Map();   // bigram -> { idx: [item index], cnt: [count] }
@@ -750,9 +819,11 @@ function nearIndex(items, titleOf) {
   const order = new Map();
   const byFirst = new Map();
   const unnumbered = [];
+  const keys = [];
   items.forEach((it, i) => {
     order.set(it.id, i);
-    const g = bigrams(titleOf(it));
+    keys[i] = nearKey(titleOf(it));
+    const g = bigrams(keys[i]);
     let n = 0;
     for (const [k, c] of g) {
       n += c;
@@ -776,8 +847,9 @@ function nearIndex(items, titleOf) {
       if (!hits.has(it.id)) hits.set(it.id, { it, why: [] });
       hits.get(it.id).why.push(why);
     };
-    if (textKey(title)) {
-      const A = bigrams(title);
+    const qk = nearKey(title);
+    if (qk) {
+      const A = bigrams(qk);
       let na = 0;
       for (const c of A.values()) na += c;
       if (na) {
@@ -794,7 +866,7 @@ function nearIndex(items, titleOf) {
         for (const ix of touched) {
           const x = inter[ix];
           inter[ix] = 0;
-          if ((2 * x) / (na + sizes[ix]) >= NEAR_NAME && !skip(items[ix])) hit(items[ix], labels.name);
+          if (!skip(items[ix]) && nearNames((2 * x) / (na + sizes[ix]), qk, keys[ix])) hit(items[ix], labels.name);
         }
       }
     }
@@ -813,6 +885,12 @@ function nearIndex(items, titleOf) {
       .map((h) => ({ it: h.it, why: h.why.sort((a, b) => (a === labels.name ? -1 : b === labels.name ? 1 : 0)) }));
   };
 }
+
+// The rung a number MORE THAN ONE Buildertrend job carries is listed under. It
+// reaches the P86 job that holds the number — so the job is shown, is kept out
+// of "in P86, not in Buildertrend", and can be linked by hand — and it never
+// decides a row.
+const SHARED_NUMBER_RUNG = 'number (shared in Buildertrend)';
 
 // btValues: field-map readJob() values. p86Rows: { id, data }. ctx.coTotals:
 // Map(jobId -> { computable, total, source, why }).
@@ -887,8 +965,41 @@ function matchJobs(btValues, p86Rows, ctx) {
       for (const p of byExact.get(exactNumberKey(n)) || []) if (free(p)) exact.push(p);
       for (const p of byLoose.get(looseNumberKey(n)) || []) if (free(p) && exactNumberKey(p.jobNumber) !== exactNumberKey(n)) loose.push(p);
     }
-    add(exact, 'number');
-    add(loose, 'number written differently');
+    // THE NUMBER, WHEN MORE THAN ONE BUILDERTREND JOB CARRIES IT. It then tells
+    // those jobs apart from nothing, so it decides none of them. P86 cannot
+    // renumber Buildertrend, so refusing all of them left 35 jobs stuck for
+    // good; the number is simply ignored FOR THOSE JOBS, and the rungs below
+    // (name, address, name + address) are what they are matched on instead.
+    // sharedBy is 0 unless MORE THAN ONE row carries it: `shared` counts every
+    // row, so a number only this job uses reads 1 there and is not shared.
+    const sharedBy = pj.numbers.length === 1 && (shared.get(pj.number) || 0) > 1 ? shared.get(pj.number) : 0;
+    const numberShared = sharedBy > 0;
+    if (!numberShared) {
+      add(exact, 'number');
+      add(loose, 'number written differently');
+    }
+    const byNumber = numberShared ? [] : exact;
+    const byLooseNumber = numberShared ? [] : loose;
+    const sharedNote = numberShared
+      ? sharedBy + ' Buildertrend jobs carry the number ' + pj.number + ', so it identifies none of them and was not used to match this row.'
+      : null;
+    // A P86 job that carries the shared number is not a CANDIDATE either: as a
+    // candidate it landed on all five rows at once and refused four of them for
+    // "sharing a name or address" they never shared. It is SHOWN instead, under
+    // "also considered" — reached, kept out of "in P86, not in Buildertrend",
+    // and linkable by hand — where it decides nothing.
+    const sharedSeen = [];
+    if (numberShared) {
+      for (const p of exact.concat(loose)) if (!sharedSeen.some((x) => x.id === p.id)) sharedSeen.push(p);
+    }
+    const sharedIds = new Set(sharedSeen.map((p) => p.id));
+    const withShared = (row) => {
+      if (!sharedSeen.length) return row;
+      const already = new Set([].concat(row.p86 ? [row.p86] : [], row.candidates || [], row.p86Duplicates || []).map((x) => x.id));
+      const rest = sharedSeen.filter((p) => !already.has(p.id));
+      if (rest.length) row.considered = (row.considered || []).concat(rest.map((p) => jobCand(p, [SHARED_NUMBER_RUNG])));
+      return row;
+    };
     const nk = textKey(title);
     const nameHits = nk ? (byName.get(nk) || []).filter(free) : [];
     const sk = streetKey(v.street);
@@ -900,17 +1011,17 @@ function matchJobs(btValues, p86Rows, ctx) {
     // On an ambiguous row they are candidates; next to a confident match they are
     // shown as possible P86 duplicates; alone they make a possible duplicate.
     const linkedIds = new Set(linked.map((p) => p.id));
-    const nearList = near(title, bt, (p) => cands.has(p.id) || linkedIds.has(p.id) || !free(p), NEAR_LABELS).map((h) => jobCand(h.it, h.why));
+    const nearList = near(title, bt, (p) => cands.has(p.id) || linkedIds.has(p.id) || sharedIds.has(p.id) || !free(p), NEAR_LABELS).map((h) => jobCand(h.it, h.why));
     const allCands = () => [...cands.values()].map((x) => jobCand(x.p, x.rungs)).concat(nearList);
-    const amb = (note) => unpairedRow(bt, 'ambiguous', allCands(), [note]);
+    const amb = (note) => withShared(unpairedRow(bt, 'ambiguous', allCands(), sharedNote ? [note, sharedNote] : [note]));
 
     const confidentRow = (p, rungName, cNotes) => {
-      const { acc, notes } = jobProposals(Object.assign({}, bt, { title }, moneyIn), p, c);
+      const { acc, notes } = jobProposals(Object.assign({}, bt, { title, numberSharedBy: sharedBy }, moneyIn), p, c);
       const row = {
         bt, class: acc.corrections.length ? 'conflict' : 'matched', rung: rungName, p86: jobCand(p, [rungName]),
         btStatusDue: btStatusDue(bt.status, p.btStatus),
         corrections: acc.corrections, btBlank: acc.btBlank, heldBack: acc.heldBack, flags: acc.flags,
-        candidates: [], notes: cNotes.concat(notes), p86Duplicates: [],
+        candidates: [], notes: cNotes.concat(notes), p86Duplicates: [], considered: [],
       };
       if (nearList.length) {
         // The match stands, but P86 also holds jobs that look like this one. They
@@ -922,7 +1033,7 @@ function matchJobs(btValues, p86Rows, ctx) {
             + ' like this one: ' + nearList.map((x) => [x.jobNumber, x.title].filter(Boolean).join(' ') || x.id).join('; ')
             + '. Nothing about ' + (nearList.length === 1 ? 'it' : 'them') + ' is proposed — review for a duplicate in P86.' });
       }
-      return row;
+      return withShared(row);
     };
 
     if (linked.length > 1) {
@@ -935,17 +1046,14 @@ function matchJobs(btValues, p86Rows, ctx) {
       return amb('Two job numbers in one name (' + pj.numbers.join(', ') + '). Nothing is proposed; fix it in Buildertrend.');
     }
     const num = pj.number;
-    if ((shared.get(num) || 0) > 1) {
-      return amb(shared.get(num) + ' Buildertrend jobs use the number ' + num + '. Nothing is proposed for any of them; give each its own number in Buildertrend.');
-    }
     let confident = null;
     let rung = null;
     const confidenceNotes = [];
-    if (exact.length > 1) {
-      return amb('P86 holds ' + exact.length + ' jobs numbered ' + num + '. Nothing is proposed.');
+    if (byNumber.length > 1) {
+      return amb('P86 holds ' + byNumber.length + ' jobs numbered ' + num + '. Nothing is proposed.');
     }
-    if (exact.length === 1) {
-      const p = exact[0];
+    if (byNumber.length === 1) {
+      const p = byNumber[0];
       const others = [...cands.values()].filter((x) => x.p.id !== p.id);
       if (others.length) {
         return amb('The number matches P86 job ' + (p.jobNumber || p.id) + ', but ' + others.length + ' other P86 job'
@@ -978,14 +1086,20 @@ function matchJobs(btValues, p86Rows, ctx) {
       }
       confident = p;
       rung = 'number';
-    } else if (loose.length) {
-      return amb('No P86 job is numbered exactly ' + num + ', but ' + loose.map((p) => p.jobNumber).join(', ')
+    } else if (byLooseNumber.length) {
+      return amb('No P86 job is numbered exactly ' + num + ', but ' + byLooseNumber.map((p) => p.jobNumber).join(', ')
         + ' is the same number written differently. That is not treated as a match; nothing is proposed.');
     } else if (cands.size === 1) {
       const only = [...cands.values()][0];
-      if (only.rungs.has('name + address') && isP86Blank(only.p.jobNumber)) {
+      // A shared Buildertrend number is no reason to refuse the name AND the
+      // address: the number is the evidence that failed, not P86's own number.
+      if (only.rungs.has('name + address') && (isP86Blank(only.p.jobNumber) || numberShared)) {
         confident = only.p;
         rung = 'name + address';
+        if (numberShared) {
+          confidenceNotes.push('Matched on the name and the address: ' + sharedNote
+            + (isP86Blank(only.p.jobNumber) ? '' : ' P86 keeps its own number ' + only.p.jobNumber + '.'));
+        }
       } else if (only.rungs.has('name + address')) {
         return amb('Same name and address, but P86 numbers this job ' + only.p.jobNumber + ' and Buildertrend ' + num + '. Nothing is proposed.');
       } else {
@@ -998,14 +1112,22 @@ function matchJobs(btValues, p86Rows, ctx) {
     if (confident) return confidentRow(confident, rung, confidenceNotes);
 
     // Would be new. A NEAR duplicate makes it a review item instead.
+    const newNotes = [];
+    if (sharedNote) {
+      // TRUE of the create, and only of the create: P86 refuses a second job
+      // with one number, so renumbering in Buildertrend is what unblocks the
+      // rest — it is no longer what unblocks the MATCH.
+      newNotes.push(sharedNote + ' P86 numbers one job with it, so only one of the ' + sharedBy
+        + ' can be created — give the others their own number in Buildertrend first.');
+    }
     if (nearList.length) {
-      return unpairedRow(bt, 'possible_duplicate', nearList,
-        ['No P86 job matches exactly, but ' + nearList.length + ' look' + (nearList.length === 1 ? 's' : '') + ' like this one. Review before anything is created.']);
+      return withShared(unpairedRow(bt, 'possible_duplicate', nearList,
+        ['No P86 job matches exactly, but ' + nearList.length + ' look' + (nearList.length === 1 ? 's' : '') + ' like this one. Review before anything is created.'].concat(newNotes)));
     }
     if (titleBlank) {
-      return unpairedRow(bt, 'refused', [], ['This Buildertrend job has a number (' + num + ') but no name, so it cannot be confirmed against P86 and will never be created.']);
+      return withShared(unpairedRow(bt, 'refused', [], ['This Buildertrend job has a number (' + num + ') but no name, so it cannot be confirmed against P86 and will never be created.']));
     }
-    return unpairedRow(bt, 'new', [], []);
+    return withShared(unpairedRow(bt, 'new', [], newNotes));
   });
 
   demoteCollisions(rows, 'job');
@@ -1281,8 +1403,41 @@ function matchLeads(btValues, p86Rows, ctx) {
       }
       return row;
     }
-    if (cands.size) {
-      return amb('Only the address matches a P86 lead (' + cands.size + '). Nothing is proposed.');
+    // ONLY THE ADDRESS REACHED ANYTHING. An address is a PROPERTY and a lead is
+    // a piece of work at it: AGX does repeat work at the same apartment complex
+    // for years, so 21 P86 leads can share this street without one of them being
+    // this lead. The address CORROBORATES a title that already matched (the
+    // rungs above); on its own it proposes nothing — and refuses nothing either,
+    // because refusing here left 31 new leads permanently unclearable.
+    const atAddress = [...cands.values()];
+    if (atAddress.length) {
+      // What the address is still good for. A lead already at this property
+      // whose TITLE reads like this one is the same lead worded differently, and
+      // that is the duplicate this arm used to prevent by accident.
+      const same = atAddress.filter((x) => nearTitles(bt.title, x.p.title));
+      const rest = atAddress.filter((x) => same.indexOf(x) === -1);
+      // Counts what it LISTS, and says so: on the arm that names one of them as
+      // a candidate, the rest are the OTHER leads at that address.
+      const alsoNote = (list, picked) => 'P86 holds ' + list.length + (picked ? ' other' : '') + ' lead' + (list.length === 1 ? '' : 's')
+        + ' at ' + placeText(bt) + ' (' + list.map((x) => '"' + x.p.title + '"').join(', ')
+        + '). An address is a property and a lead is a piece of work at it, so the address alone proposes nothing: '
+        + (list.length === 1 ? 'that lead is' : 'those leads are') + ' listed under "also considered".';
+      const row = same.length
+        ? unpairedRow(bt, 'possible_duplicate',
+          same.map((x) => leadCand(x.p, [...x.rungs, 'similar title'])).concat(nearList),
+          [same.length + ' P86 lead' + (same.length === 1 ? '' : 's') + ' at this address ' + (same.length === 1 ? 'reads' : 'read')
+            + ' like this one worded differently. Review before anything is created.'])
+        : nearList.length
+          ? unpairedRow(bt, 'possible_duplicate', nearList,
+            ['No P86 lead matches exactly, but ' + nearList.length + ' look' + (nearList.length === 1 ? 's' : '') + ' like this one. Review before anything is created.'])
+          : unpairedRow(bt, 'new', [], []);
+      // The leads at that property are USEFUL CONTEXT, and they are already
+      // collected: they stay on the row (and out of "in P86, not in
+      // Buildertrend") so a person creating this lead sees what else P86 holds
+      // there and can link to one instead.
+      row.considered = rest.map((x) => leadCand(x.p, x.rungs));
+      if (rest.length) row.notes.push(alsoNote(rest, same.length > 0));
+      return row;
     }
     if (nearList.length) {
       return unpairedRow(bt, 'possible_duplicate', nearList,
@@ -1634,7 +1789,7 @@ function matchClients(btValues, p86Rows) {
 module.exports = {
   matchJobs, matchLeads, matchClients, p86ClientView, clientCore, sameClientProperty, emailKey, phoneKey, notInBuildertrend, summarise, RATE_CLASSES,
   parseJobName, exactNumberKey, looseNumberKey, namesAgree, nameEvidence, placeEvidence, streetsMatchStrict, streetsAgree, samePlace,
-  nearIndex, bigrams, GENERIC,
+  nearIndex, nearKey, nearTitles, bigrams, GENERIC,
   isBtBlank, isP86Blank, textKey, streetKey, cityKey, stateKey, zipKey, dateKey, fuzzyEq, osa, charSimilarity,
   parseMoney, fmtMoney, compareField, compareMoney, btJobState, btScope, p86JobState, p86LeadState, btStatusDue,
   p86JobView, p86LeadView, coreTitle, personKey,
