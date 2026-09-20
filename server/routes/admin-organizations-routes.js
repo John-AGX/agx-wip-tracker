@@ -492,12 +492,24 @@ router.delete('/:id', requireAuth, requireSystemAdmin, async (req, res) => {
 // ROLES_MANAGE and then adds its own gate: the caller's organisation must be
 // the one CLICKR_API_KEY belongs to. The census drives /me WITHOUT the
 // parameter, so the mode's tenancy is proved in test/clickr-sync-preview.test.js.
+//
+// ?view=clickr-scout&dataset=<24 hex> — the READ-ONLY Clickr dataset scout
+// (server/services/clickr/scout.js): what keys a dataset carries, how often,
+// how many distinct values each holds, and — only where a value cannot be
+// personal or free text — what those values are. A third MODE of this route
+// for the same census reason. Same two gates as the preview (it imports the
+// preview's own ownerSlug), and it is handed NO pool on purpose: it reads
+// nothing from Project 86 and writes nothing anywhere. Its tenancy, its
+// dataset-id check and its disclosure rule are proved in test/clickr-scout.test.js.
 router.get('/me', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), (req, res) => {
   if (req.query && req.query.view === 'buildertrend-archive') {
     return require('../services/clickr/sync-apply').handleArchiveList(req, res, { pool });
   }
   if (req.query && req.query.view === 'buildertrend-preview') {
     return require('../services/clickr/sync-preview').handle(req, res, { pool });
+  }
+  if (req.query && req.query.view === 'clickr-scout') {
+    return require('../services/clickr/scout').handle(req, res, {});
   }
   res.json({ organization: req.organization });
 });
