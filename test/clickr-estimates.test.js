@@ -180,9 +180,16 @@ const BT_LINES = [
   // No markup percent AT ALL, which is the one thing here only the mapping
   // diagnostic can settle.
   L(CITI, { ws: 901, id: 9011, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'No percent', qty: 1, cost: 90, markupType: null, markupPercent: null, owner: 90 }),
-  // A flat markup on a ZERO cost: 0 x k is 0 for every k, so no percent
-  // expresses it — and the CHECK is what says so now.
-  L(CITI, { ws: 902, id: 9021, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'Permit', qty: 1, cost: 0, markupType: '3', markupAmount: 500, owner: 500 }),
+  // A flat markup on a ZERO cost: 0 x k is 0 for every k, so no PERCENT can
+  // express it — and P86 now carries the price on the line instead (unitSell),
+  // which is what makes this worksheet importable rather than refused.
+  // On RIVER rather than CITI: rung 1 keys on job + worksheet title and a
+  // worksheet's title IS its job name, so every worksheet on one job keys
+  // identically. While this one was refused at the line stage that never
+  // mattered; now that it imports, sharing CITI with ws 100 would make both
+  // ambiguous and unmatch ws 100 from est-a. RIVER already carries two
+  // importing worksheets and holds no P86 estimate.
+  L(RIVER, { ws: 902, id: 9021, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'Permit', qty: 1, cost: 0, markupType: '3', markupAmount: 500, owner: 500 }),
 
   // ws 1000 — a P86 estimate this sync already linked that has LOST its job.
   L(SADDLE, { ws: 1000, id: 10001, groupId: 'G1', groupTitle: 'Labor', order: 1, itemTitle: 'H', qty: 1, cost: 120, markupPercent: 0, owner: 120 }),
@@ -643,15 +650,64 @@ describe('MARKUP — the percent is read and then CHECKED against Buildertrend�
     expect([r.corrections, r.heldBack]).toEqual([[], []]);
   });
 
-  test('a FLAT markup on a ZERO cost is still refused, and for the reason it always had: 0 x k is 0 for every k', async () => {
+  test('a FLAT markup on a ZERO cost IMPORTS NOW, carrying the price rather than deriving it', async () => {
+    // 0 x k is 0 for every k — that has not changed and cannot. What changed
+    // is that P86 no longer has to derive a price from a cost: the line
+    // carries `unitSell`, the promised per-unit price, and the markup is not
+    // consulted. The COST stays exactly what Buildertrend says it is ($0.00),
+    // so the line's profit is the whole $500.00, which is what Buildertrend's
+    // own worksheet says it is.
     const ds = await estRows();
     const r = byBt(ds, 902);
-    expect(r['class']).toBe('refused');
-    expect(r.notes.join(' ')).toMatch(/“Permit” — Buildertrend says the owner pays \$500\.00 for it, and Project 86 prices the same quantity, unit cost and 0% markup at \$0\.00/);
-    // Directly on the check: there is no percent that prices a zero cost at
-    // $500, so no tolerance and no notation can rescue this line.
-    expect(estMatch.lineAgreesWithBuildertrend({ qty: 1, unitCost: 0, markup: 0 }, { ownerPrice: 500, markupType: '3' }).why).toMatch(/\$500\.00 less/);
-    expect(estMatch.lineAgreesWithBuildertrend({ qty: 1, unitCost: 0, markup: 9999 }, { ownerPrice: 500 }).why).toMatch(/\$500\.00 less/);
+    expect(r['class']).toBe('new');
+    const l = contentOf(r.build.lines)[0];
+    expect([l.description, l.qty, l.unitCost, l.unitSell]).toEqual(['Permit', 1, 0, 500]);
+    // Priced through P86's OWN pipeline it comes to Buildertrend's own owner
+    // price, EXACTLY — a promise has no rounded percent to forgive.
+    expect(estMatch.p86PricedTotal(r.build.lines).clientPrice).toBe(500);
+    expect(estMatch.btOwnerTotal(BT_LINES.filter((x) => x.worksheetId === '902').map(readEstimateLine)).total).toBe(500);
+    // And the row SAYS so — a price P86 was told rather than derived is a
+    // thing to see, not to discover in a total.
+    expect(r.notes.join(' ')).toMatch(/carries a price Buildertrend states outright rather than deriving from a cost \(“Permit” at \$500\.00\)/);
+
+    // ── AND THE CHECK ITSELF still refuses what it always refused ──
+    // A zero cost base is unreachable by every percent, and the sentence says
+    // that rather than quoting a markup tolerance that was never binding.
+    const zeroCost = estMatch.lineAgreesWithBuildertrend({ qty: 1, unitCost: 0, markup: 0 }, { ownerPrice: 500, markupType: '3' }).why;
+    expect(zeroCost).toMatch(/over a builder cost of \$0\.00, and no markup percent can express that/);
+    expect(zeroCost).toMatch(/Buildertrend records its markup type as "3"/);
+    expect(estMatch.lineAgreesWithBuildertrend({ qty: 1, unitCost: 0, markup: 9999 }, { ownerPrice: 500 }).why)
+      .toMatch(/no markup percent can express that/);
+    // A QUANTITY OF ZERO is the one shape a promise cannot express either,
+    // and it is named as itself.
+    expect(estMatch.promisedCandidates({ qty: 0, unitCost: 0 }, { ownerPrice: 500 })).toEqual([]);
+    expect(estMatch.lineAgreesWithBuildertrend({ qty: 0, unitCost: 0, markup: 0 }, { ownerPrice: 500 }).why)
+      .toMatch(/quantity is 0, so a stated unit price cannot reach it either/);
+  });
+
+  test('THE GATE: a promise rescues only what NO percent could reach, never a percent that disagrees', () => {
+    // This is the difference between "the percent failed" and "no percent
+    // exists", and the whole safety of the promotion rests on it.
+    //
+    // A NON-ZERO cost base can always be reached by some percent, so when
+    // Buildertrend's own percent misses its own owner price the two figures
+    // Buildertrend sent disagree WITH EACH OTHER. Carrying that at the owner
+    // price would bury the disagreement instead of naming it.
+    expect(estMatch.promisedCandidates({ qty: 2, unitCost: 100 }, { ownerPrice: 250 })).toEqual([]);
+    expect(estMatch.promisedCandidates({ qty: 1, unitCost: 770 }, { ownerPrice: 1452.83 })).toEqual([]);
+    // A ZERO cost base can be reached by none, and IS promotable.
+    expect(estMatch.promisedCandidates({ qty: 1, unitCost: 0 }, { ownerPrice: 20000 })).toEqual([20000]);
+    // A quantity of zero is promotable by nothing.
+    expect(estMatch.promisedCandidates({ qty: 0, unitCost: 0 }, { ownerPrice: 20000 })).toEqual([]);
+    // An owner price that is not readable money has nothing to promise.
+    expect(estMatch.promisedCandidates({ qty: 1, unitCost: 0 }, { ownerPrice: '1 - 2' })).toEqual([]);
+    // ...and ws 900's line is the live proof: same worksheet, non-zero cost,
+    // markup type "2" — still refused, still naming both figures.
+    const nine = BT_LINES.filter((x) => x.worksheetId === '900').map(readEstimateLine);
+    const built = estMatch.buildLines(nine, '900');
+    expect(built.refusals).toHaveLength(1);
+    expect(built.refusals[0].why).toMatch(/owner pays \$250\.00 for it, and Project 86 prices the same quantity, unit cost and 0% markup at \$200\.00/);
+    expect(built.promised).toEqual([]);
   });
 
   test('NO markup PERCENT refuses and points at the mapping diagnostic, which is the only thing that can settle a key name', async () => {
@@ -1421,16 +1477,22 @@ describe('CREATE — a Buildertrend-only worksheet becomes a real P86 estimate',
   test('a bulk create makes every creatable worksheet and no refused, ambiguous or already-matched one', async () => {
     const before = count('estimates');
     const r = await put(ADMIN, { mode: 'create', btIds: [] });
-    // ws 400, 1300 and 1301 are the 'new' rows: every other worksheet is
-    // matched, ambiguous or refused.
-    expect(r.json.counts.created).toBe(3);
-    expect(count('estimates')).toBe(before + 3);
-    expect(r.json.results.filter((x) => x.p86Id).map((x) => estRow(x.p86Id).bt_worksheet_id).sort()).toEqual(['1300', '1301', '400']);
+    // ws 400, 902, 1300 and 1301 are the 'new' rows: every other worksheet is
+    // matched, ambiguous or refused. 902 joined them when the zero-cost flat
+    // rate stopped being unexpressible — it carries its price on the line.
+    expect(r.json.counts.created).toBe(4);
+    expect(count('estimates')).toBe(before + 4);
+    expect(r.json.results.filter((x) => x.p86Id).map((x) => estRow(x.p86Id).bt_worksheet_id).sort()).toEqual(['1300', '1301', '400', '902']);
   });
 
   test('a REFUSED worksheet is never created, by name or in the bulk press', async () => {
     const before = count('estimates');
-    const r = await put(ADMIN, { mode: 'create', btIds: ['900', '901', '902', '800', '600', '700', '1100'] });
+    // 902 is NOT in this list any more: a zero-cost flat rate imports now.
+    // Every id here is still refused, and for a reason a promised price
+    // cannot touch — a percent that disagrees with its own owner price (900,
+    // 1100), a missing percent (901), lines that disagree about the worksheet
+    // (800), an unlinked job (600), every line deleted (700).
+    const r = await put(ADMIN, { mode: 'create', btIds: ['900', '901', '800', '600', '700', '1100'] });
     expect(r.json.counts.created).toBe(0);
     expect(count('estimates')).toBe(before);
   });

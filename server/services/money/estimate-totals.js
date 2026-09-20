@@ -48,12 +48,16 @@ function computeEstimateTotals(blob) {
     return {
       baseCost: sub0, markedUp: sub0, blendedMarkup: 0, clientPrice: sub0, proposalTotal: sub0,
       feeFlat: 0, feePctAmount: 0, taxAmount: 0, lineCount: lineCount, sectionCount: sectionCount,
-      targetMarginActive: false
+      targetMarginActive: false,
+      promisedSell: 0, promisedSubtotal: 0, promisedCount: 0
     };
   }
 
   const targetActive = P.targetMarginActive(est);
   let subtotal = 0, markedUp = 0;
+  // The promised half of the priced total — twin of the note in
+  // js/estimates.js. INCLUDED groups only, exactly like subtotal/markedUp.
+  let promisedSell = 0, promisedSubtotal = 0, promisedCount = 0;
   // EVERY PRICED SET THAT WENT INTO `markedUp`, kept rather than discarded.
   // An estimate total is a SUM of per-alternate resolves, so no single `per`
   // holds it and applyFeesAndTax cannot be handed one. It is handed the parts
@@ -70,14 +74,30 @@ function computeEstimateTotals(blob) {
       const per = P.computeForLines(est, allLines.filter(function (l) { return l.alternateId === alt.id; }));
       parts.push(per);
       subtotal += per.subtotal;
-      markedUp += targetActive ? P.applyTargetMargin(per.subtotal, est) : per.markedUp;
+      promisedSell += num(per.lockedSell); promisedSubtotal += num(per.lockedSubtotal);
+      promisedCount += num(per.promisedCount);
+      // ⚠ resolveTargetMargin, NOT resolveMarkedUp, and NOT the ternary this
+      // replaced. Three different numbers:
+      //   • the ternary discards a promised price under a target margin — it
+      //     back-solves the WHOLE group's cost, including the cost of lines
+      //     whose price was already promised;
+      //   • resolveMarkedUp would ALSO honour a document `targetPrice`, and on
+      //     a blob with no `alternates` key clientPriceRequested returns true
+      //     — so it would move the estimate lock this call site is not allowed
+      //     to touch (see the note over applyFeesAndTax below);
+      //   • resolveTargetMargin is the carve-out alone. On a group with no
+      //     promised line it returns the ternary's number character for
+      //     character, which is every estimate that exists today.
+      markedUp += P.resolveTargetMargin(per, est);
     });
   } else {
     // Legacy estimate with no alternates[] — one implicit group of all lines.
     const per = P.computeForLines(est, allLines);
     parts.push(per);
     subtotal = per.subtotal;
-    markedUp = targetActive ? P.applyTargetMargin(per.subtotal, est) : per.markedUp;
+    promisedSell = num(per.lockedSell); promisedSubtotal = num(per.lockedSubtotal);
+    promisedCount = num(per.promisedCount);
+    markedUp = P.resolveTargetMargin(per, est);   // see the note above
   }
 
   // ⚠ THE ESTIMATE LOCK IS NOT TOUCHED HERE, AND DELIBERATELY NOT.
@@ -102,7 +122,10 @@ function computeEstimateTotals(blob) {
     taxAmount: fees.taxAmount,
     lineCount: lineCount,
     sectionCount: sectionCount,
-    targetMarginActive: targetActive
+    targetMarginActive: targetActive,
+    promisedSell: promisedSell,
+    promisedSubtotal: promisedSubtotal,
+    promisedCount: promisedCount
   };
 }
 

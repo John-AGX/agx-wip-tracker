@@ -126,13 +126,15 @@
   var _P = window.p86Pricing;
   function sectionHeaderFor(line, allLines)        { return _P.sectionHeaderFor(line, allLines); }
   function effectiveMarkup(line, allLines, est)    { return _P.effectiveMarkupForLine(line, allLines, est); }
-  function targetMarginActive(est)                 { return _P.targetMarginActive(est); }
-  function applyTargetMargin(subtotal, est)        { return _P.applyTargetMargin(subtotal, est); }
+  // targetMarginActive / applyTargetMargin used to be aliased here so this
+  // file could apply the target margin itself. It does not any more —
+  // _P.resolveTargetMargin does, promised lines carved out — and an alias
+  // with no caller is an invitation to re-derive the cascade locally, which
+  // is the drift this module exists to end.
 
   function computeTotal(estimate) {
     if (!estimate) return 0;
     var includedIds = includedGroupIds(estimate);
-    var targetMode = targetMarginActive(estimate);
     var markedUp = 0;
     // Every priced set summed into this total — applyFeesAndTax's decision
     // comes from these, not from a second walk of estimate.lines. Twin of the
@@ -144,12 +146,17 @@
       });
       var per = _P.computeForLines(estimate, groupLines);
       parts.push(per);
-      var groupMarkedUp = per.markedUp;
-      // Target-margin override: back-compute this group's marked-up
-      // total off its own subtotal so the per-group sum still equals
-      // the override total. Mirrors estimate-editor exactly.
-      if (targetMode) groupMarkedUp = applyTargetMargin(per.subtotal, estimate);
-      markedUp += groupMarkedUp;
+      // Target-margin override: back-compute this group's marked-up total off
+      // its own subtotal so the per-group sum still equals the override total.
+      // Mirrors estimate-editor exactly — including the carve-out, which is
+      // why this is resolveTargetMargin and not the ternary it replaced: a
+      // line carrying a promised unitSell keeps its promise and only the
+      // remaining cost is back-solved. resolveMarkedUp would additionally
+      // open the CHANGE-ORDER document-price door, which an estimate must
+      // never open — see js/pricing-pipeline.js, the one file that may name
+      // that field (test/co-client-price.test.js holds this one to never
+      // mentioning it, which is why the word is not written here).
+      markedUp += _P.resolveTargetMargin(per, estimate);
     });
     var fees = _P.applyFeesAndTax(markedUp, estimate, _P.sumOfPriced(parts));
     return fees.total;
@@ -282,15 +289,31 @@
   // the editor's PROPOSAL TOTAL chip. Row extensions are therefore consistent
   // with the group subtotal; fees and tax are added once at the bottom, which
   // is exactly how a schedule of values reconciles.
+  // ⚠ THE PRESENCE TEST IS THE PIPELINE'S, NOT A LOCAL ONE.
+  // This function shipped its own — `typeof line.unitSell === 'number'` —
+  // and it disagrees with p86Pricing.sellLocked on the shape the editor
+  // actually produces: an input field hands back the STRING "2750", the
+  // pipeline locks the line at $2,750.00 and the number this printed was the
+  // marked-up cost instead. The proposal and the Proposal Total chip would
+  // have quoted different money for the same row, on the one document the
+  // client signs. A local copy of a discriminator is a discriminator that
+  // will disagree; there is now one, in js/pricing-pipeline.js.
+  //
+  // A target margin is deliberately NOT applied here. It is a DOCUMENT rule
+  // resolved per group (computeGroupTotal / computeTotal), and the layouts
+  // that print a unit price print it beside the bottom-up markup the
+  // estimator typed. That was true before this change and is unchanged by it.
   function lineMoney(estimate, line, allLines) {
     var qty = Number(line.qty) || 0;
     var cost = Number(line.unitCost) || 0;
     var mk = 0;
     try { mk = Number(effectiveMarkup(line, allLines, estimate)) || 0; } catch (e) { mk = 0; }
-    var unitSell = (typeof line.unitSell === 'number' && !isNaN(line.unitSell))
-      ? Number(line.unitSell)
-      : cost * (1 + mk / 100);
-    return { qty: qty, unitCost: cost, unitSell: unitSell, extCost: qty * cost, extSell: qty * unitSell, markup: mk };
+    var promised = null;
+    try { promised = _P.promisedUnitSell(line); } catch (e) { promised = null; }
+    var locked = promised != null;
+    var unitSell = locked ? promised : cost * (1 + mk / 100);
+    return { qty: qty, unitCost: cost, unitSell: unitSell, promised: locked,
+             extCost: qty * cost, extSell: qty * unitSell, markup: locked ? null : mk };
   }
 
   function moneyCell(n) { return escapeHTMLLocal(fmtProposalCurrency(n)); }
@@ -882,7 +905,13 @@
       qty:         { label: 'Qty',         cls: 'c-qty',   cell: function (v) { return escapeHTMLLocal(v.line.qty != null ? String(v.line.qty) : ''); } },
       unit:        { label: 'Unit',        cls: 'c-unit',  cell: function (v) { return escapeHTMLLocal(v.line.unit || ''); } },
       unitCost:    { label: 'Unit Cost',   cls: 'c-money', cell: function (v) { return money(v.money.unitCost); } },
-      markup:      { label: 'Markup',      cls: 'c-qty',   cell: function (v) { return escapeHTMLLocal(pct(v.money.markup)); } },
+      // A promised line has NO markup — its price was stated, not derived —
+      // and lineMoney says so by handing back null. pct(null) is "0%", which
+      // is a confident wrong answer about the one number this column exists
+      // to report, so the word is printed instead.
+      markup:      { label: 'Markup',      cls: 'c-qty',   cell: function (v) {
+                       return v.money.markup == null ? 'promised' : escapeHTMLLocal(pct(v.money.markup));
+                     } },
       unitSell:    { label: 'Unit Price',  cls: 'c-money', cell: function (v) { return money(v.money.unitSell); } },
       extCost:     { label: 'Ext. Cost',   cls: 'c-money', cell: function (v) { return money(v.money.extCost); } },
       extSell:     { label: 'Ext. Price',  cls: 'c-money', cell: function (v) { return money(v.money.extSell); } },
@@ -1401,11 +1430,10 @@
     var alt = (estimate.alternates || []).find(function(a) { return a.id === alternateId; });
     var thisAltExcluded = !!(alt && alt.excludeFromTotal);
     var per = _P.computeForLines(estimate, lines);
-    var markedUp = per.markedUp;
-    if (targetMarginActive(estimate) && !thisAltExcluded) {
-      markedUp = applyTargetMargin(per.subtotal, estimate);
-    }
-    return markedUp;
+    // An EXCLUDED group keeps its bottom-up markup — including any promised
+    // line's promise, which per.markedUp already carries.
+    if (thisAltExcluded) return per.markedUp;
+    return _P.resolveTargetMargin(per, estimate);
   }
 
   // Render into the Preview tab pane. Called by the editor when the user

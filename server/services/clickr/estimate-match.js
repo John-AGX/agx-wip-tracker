@@ -118,15 +118,39 @@
 // Buildertrend shows. The worksheet SAYS so in a note rather than leaving it to
 // be found in a total.
 //
-// P86 does own a field that means exactly "a price was promised, rather than
+// AND WHERE THE PERCENT CANNOT REACH THE PRICE, THE PRICE IS CARRIED DIRECTLY.
+// P86 owns a field that means exactly "a price was promised, rather than
 // derived from a cost": pricing-pipeline's `unitSell`, whose own header cites a
-// Buildertrend flat rate as the case it was built for. It is still NOT used
-// here, and that is still a deliberate refusal rather than an oversight: it is
-// change-order-only, that is ENFORCED rather than assumed
-// (test/co-income-call-sites.js), and while the shared pipeline honours it, it
-// is invisible to js/bt-export.js's forked cascade, to the hand-rolled cascades
-// in server/routes/ai-routes.js, and to the estimate editor's target-margin
-// rebuild. Nothing in this data needs it: every line carries a percent.
+// Buildertrend flat rate as the case it was built for. It used to be refused
+// here because it was change-order-only — enforced, not assumed — and because
+// it was invisible to js/bt-export.js's forked cascade, to the hand-rolled
+// cascades in server/routes/ai-routes.js and to the estimate editor's
+// target-margin rebuild. Every one of those now runs the shared pipeline, so
+// the reason is gone and the field is used.
+//
+// IT IS USED ONLY WHERE NO PERCENT COULD HAVE WORKED — which is narrower than
+// "where the percent failed", and the difference is the whole safety of this.
+// A line whose cost base is not zero CAN be reached by some percent, so a
+// percent that misses its own owner price means Buildertrend's two figures
+// disagree with each other; that stays refused and still names both, because
+// burying a disagreement under a promise is the opposite of carrying it. Only
+// a ZERO cost base is unreachable by construction, and a promoted line is put
+// back through the same check, which for a promise is exact. A line that
+// imports today therefore imports tomorrow with the same keys, the same
+// fingerprint and the same arithmetic.
+//
+// THE CASE IT ANSWERS, verbatim from the live preview: "A. Structural Repairs
+// at Building 9" — Buildertrend says the owner pays $20,000.00, the builder
+// cost is $0.00, markup type "2". 0 x k is 0 for every k, so no percent can
+// express it and the worksheet was refused. The cost stays $0.00, because
+// `unitCost` means COST and Buildertrend says the cost is nothing; the price
+// is stated; the line's profit is finally the whole $20,000.00, which is what
+// Buildertrend's own worksheet says it is.
+//
+// WHAT STILL REFUSES: a price that cannot be expressed EITHER way. A quantity
+// of zero is the one that actually occurs — qty x any unit price is $0.00, so
+// a non-zero owner price is unreachable — and the refusal names that limit
+// instead of the markup-percent limit, which no longer applies.
 //
 // AND THE WORKSHEET IS PROVED TOO. Every importable worksheet is priced through
 // P86's OWN pricing code — services/money/estimate-totals.js, which runs
@@ -138,6 +162,11 @@
 
 const match = require('./bt-match');
 const estimateTotals = require('../money/estimate-totals');
+// sellLocked, and nothing else: the ONE rule for "does this line carry a
+// promised price". A local copy of that discriminator is a copy that will
+// disagree — `unitSell: 0` is a real promise at $0 and `unitSell: ''` is no
+// promise at all, and both shapes are reachable from this importer.
+const pricing = require('../../../js/pricing-pipeline.js');
 const crypto = require('crypto');
 
 const { isBtBlank, isP86Blank, textKey, parseMoney, fmtMoney } = match;
@@ -269,8 +298,15 @@ const fmtTol = (t) => '$' + t.toFixed(4);
 // names the count, and the worksheet's total difference is what stands over
 // them. The count is NOT taken a second time here — one rule, one counter.
 function lineAgreesWithBuildertrend(line, L, exactCost) {
+  // A PROMISED LINE'S TOLERANCE IS HALF A CENT AND NOTHING MORE. The scaled
+  // term of priceTolerance exists to forgive a markup PERCENT rounded to two
+  // decimals; a promised line has no percent to round, so P86 prices it at
+  // exactly the figure Buildertrend sent and the only slack it may have is
+  // the cent Buildertrend's own storage rounds to. Handing a promise the
+  // cost-scaled tolerance would forgive a real error on a big line.
+  const promised = pricing.sellLocked(line);
   const base = line.qty * line.unitCost;
-  const tol = priceTolerance(base);
+  const tol = priceTolerance(promised ? 0 : base);
   const m = parseMoney(L.ownerPrice);
   if (m.kind !== 'value' && m.kind !== 'blank') return { tol };
   // A blank owner price IS $0.00: on a money field "blank" and "zero" are the
@@ -287,12 +323,95 @@ function lineAgreesWithBuildertrend(line, L, exactCost) {
   // A unit cost carrying more than cents is P86's OWN limit rather than
   // Buildertrend disagreeing with itself, and it is named as what it is.
   const rounded = exactCost != null && exactCost !== line.unitCost;
+  // A promise that does not verify is not a markup problem and must not be
+  // described as one. In practice only one shape reaches here: a quantity of
+  // zero, where qty x any unit price is $0.00 and the owner price is not.
+  if (promised) {
+    return { tol, promisedFailed: true,
+      why: 'Buildertrend says the owner pays ' + fmtMoney(owner) + ' for it and Project 86 cannot carry that price at all: '
+        + 'its cost and markup do not reach it, and neither does the promised price it was given, which prices at '
+        + fmtMoney(p86)
+        + (isBtBlank(L.markupType) ? '' : '. Buildertrend records its markup type as "' + norm(L.markupType) + '"') };
+  }
+  // A ZERO COST IS NOT A DISAGREEMENT, IT IS AN IMPOSSIBILITY, and the two
+  // must not be worded the same. No markup percent can carry a price over a
+  // cost of $0.00 — 0 x k is $0.00 for every k — so quoting a tolerance "a
+  // markup percent rounded to two decimals can explain" describes a limit
+  // that was never the binding one. A line reaching here has already been
+  // offered a promised price and could not take one, which leaves exactly one
+  // shape: a quantity of zero.
+  if (base === 0) {
+    return { tol, why: 'Buildertrend says the owner pays ' + fmtMoney(owner) + ' for it over a builder cost of ' + fmtMoney(0)
+      + ', and no markup percent can express that — 0 x k is ' + fmtMoney(0) + ' for every k. A price like this can only be carried '
+      + 'by stating it on the line rather than deriving it'
+      + (Number(line.qty) === 0
+        ? ', and this line’s quantity is 0, so a stated unit price cannot reach it either: 0 x any unit price is ' + fmtMoney(0)
+        : '')
+      + (isBtBlank(L.markupType) ? '' : '. Buildertrend records its markup type as "' + norm(L.markupType) + '"') };
+  }
   return { tol, why: 'Buildertrend says the owner pays ' + fmtMoney(owner) + ' for it, and Project 86 prices the same quantity, unit cost and '
     + line.markup + '% markup at ' + fmtMoney(p86) + ' — ' + fmtMoney(Math.abs(diff)) + (diff > 0 ? ' more' : ' less')
     + ', which is more than the ' + fmtTol(tol) + ' that a markup percent rounded to two decimals can explain'
     + (rounded
       ? '. Buildertrend’s unit cost on it is ' + exactCost + ' and a Project 86 line carries cents, so this line cannot be carried at Buildertrend’s price at all'
       : (isBtBlank(L.markupType) ? '' : '. Buildertrend records its markup type as "' + norm(L.markupType) + '"')) };
+}
+
+// ── THE PROMOTION ─────────────────────────────────────────────────────────
+//
+// The per-unit promised price that would make this line worth exactly what
+// Buildertrend says the owner pays — or NOTHING, which is the answer far more
+// often than it is not.
+//
+// ⚠⚠ THE GATE IS "NO PERCENT EXISTS", NOT "THE PERCENT DISAGREES". Those are
+// different facts and conflating them destroys the check this sits inside.
+//
+//   * A line whose cost base is NOT zero can always be reached by SOME
+//     percent — p = ownerPrice/base − 1 exists — so when Buildertrend's own
+//     percent does not reach its own owner price, the two figures Buildertrend
+//     sent DISAGREE WITH EACH OTHER. Importing that at the owner price would
+//     bury the disagreement under a promise and hand the estimator a document
+//     nobody can reconcile. It stays refused, and the refusal still names both
+//     figures. Line B of the tolerance suite — $770 at 88.69% against an owner
+//     price of $1,452.83, eight cents out against a $0.0435 tolerance — is
+//     exactly this, and it must stay red.
+//   * A line whose cost base IS zero can be reached by no percent at all:
+//     0 x k is 0 for every k. There is nothing to disagree with, because there
+//     is no arithmetic that could have produced the owner price in the first
+//     place. That — and only that — is what the promised price is for, and it
+//     is what all 19 of the live offenders are: markup type "2", a price typed
+//     for the owner with the builder cost left at zero.
+//
+// So: base must be exactly zero, and the quantity must not be, because
+// qty x unitSell is $0.00 for every unitSell when qty is 0 — the one shape a
+// promise cannot express either.
+//
+// TWO CANDIDATES, IN ORDER, and the caller verifies whichever comes back
+// through lineAgreesWithBuildertrend like any other line:
+//   * owner / qty ROUNDED to six decimals — what markupPercentFor already
+//     does to a percent, and what keeps the stored number a figure a person
+//     can read in the editor's Unit Sell box rather than 6666.666666666667;
+//   * the exact quotient, when the rounded one would not reproduce the owner
+//     price to the cent. A quantity of 10,000 turns a rounding of 5e-7 into
+//     half a cent, which is exactly the tolerance, so the rounded candidate
+//     cannot simply be trusted at every quantity.
+//
+// An owner price that is not readable money returns nothing: there is no
+// figure to promise, and lineAgreesWithBuildertrend has already agreed about
+// it because nothing compared it (btOwnerTotal counts those separately).
+function promisedCandidates(line, L) {
+  const q = Number(line.qty);
+  const c = Number(line.unitCost);
+  if (!Number.isFinite(q) || !Number.isFinite(c)) return [];
+  if (q === 0) return [];          // qty x anything is $0.00
+  if (q * c !== 0) return [];      // a percent CAN reach it — see the gate above
+  const m = parseMoney(L.ownerPrice);
+  if (m.kind !== 'value' && m.kind !== 'blank') return [];
+  const owner = m.kind === 'value' ? m.value : 0;
+  const exact = owner / q;
+  if (!Number.isFinite(exact)) return [];
+  const rounded = Math.round(exact * 1e6) / 1e6;
+  return rounded === exact ? [exact] : [rounded, exact];
 }
 
 // ── THE LINE ARRAY ────────────────────────────────────────────────────────
@@ -384,6 +503,9 @@ function idMaker(prefix) {
 //   tolerance — the sum of the lines' own tolerances, which is what the
 //               worksheet TOTAL may differ by for the same reason one line may.
 //   negatives — the lines Buildertrend prices below cost, named on the row.
+//   promised  — the lines whose owner price no markup percent could express,
+//               imported carrying that price in `unitSell`. Named on the row:
+//               a price P86 was told rather than derived is a thing to SEE.
 //   described — how many lines carried a Buildertrend description as well as a
 //               title, which a P86 line has no second text field for.
 function buildLines(live, wsId) {
@@ -439,6 +561,7 @@ function buildLines(live, wsId) {
   const lines = [];
   const refusals = [];
   const negatives = [];
+  const promised = [];
   let tolerance = 0;
   let described = 0;
   for (const g of groups) {
@@ -481,15 +604,34 @@ function buildLines(live, wsId) {
       // THE PRICE IS CHECKED BEFORE THE LINE EXISTS. A refused line must not
       // mint an id: idMaker's `used` set is what keeps the array deterministic,
       // so a line that is not written must not consume a seed either.
-      const agrees = lineAgreesWithBuildertrend(line, L, exactCost);
+      let agrees = lineAgreesWithBuildertrend(line, L, exactCost);
+      // ── THE PROMOTION, and ONLY after the percent has already failed ──
+      // A line the percent reaches is untouched: same keys, same fingerprint,
+      // same arithmetic as before this existed. A line it cannot reach — the
+      // zero-cost flat rate, markup type "2" — carries the owner's price
+      // directly instead of refusing the whole worksheet, and is then put
+      // back through the SAME check, which for a promise is exact.
+      if (agrees.why) {
+        for (const cand of promisedCandidates(line, L)) {
+          line.unitSell = cand;
+          const retry = lineAgreesWithBuildertrend(line, L, exactCost);
+          if (!retry.why) { agrees = retry; break; }
+          agrees = retry;            // keep the PROMISED refusal sentence
+        }
+        if (agrees.why) delete line.unitSell;   // refused — carry no half-promise
+      }
       if (agrees.why) { refusals.push({ line: line.description, lineId: L.lineId, why: agrees.why }); continue; }
       tolerance += agrees.tol;
-      if (line.markup < 0) negatives.push({ line: line.description, pct: line.markup });
+      if (pricing.sellLocked(line)) {
+        promised.push({ line: line.description, price: Number(line.qty) * Number(line.unitSell), cost: Number(line.qty) * Number(line.unitCost) });
+      } else if (line.markup < 0) {
+        negatives.push({ line: line.description, pct: line.markup });
+      }
       if (!isBtBlank(L.itemTitle) && !isBtBlank(L.description)) described++;
       lines.push(Object.assign({ id: lineId(L.lineId) }, line));
     }
   }
-  return { lines, groups, refusals, tolerance, negatives, described };
+  return { lines, groups, refusals, tolerance, negatives, promised, described };
 }
 
 // What P86 will actually charge for these lines, computed by P86's OWN pricing
@@ -649,6 +791,23 @@ function negativeSentence(ws) {
   return list.length + ' of this worksheet’s lines ' + (list.length === 1 ? 'carries' : 'carry') + ' a NEGATIVE Buildertrend markup (' + shown.join(', ')
     + (list.length > shown.length ? ', and ' + (list.length - shown.length) + ' more' : '') + '). Buildertrend prices them below cost — at -100% the owner '
     + 'pays nothing for a line that still costs money — and they are imported exactly that way: the cost stays in the estimate and the line’s price follows the percent.';
+}
+
+// A line whose owner price no markup percent could reach, imported carrying
+// that price directly. This is the Buildertrend flat rate — a price typed for
+// the owner with the builder cost left at zero, markup type "2" — and before
+// P86 could express it the whole worksheet was refused over it. The cost is
+// still Buildertrend's cost and the price is still Buildertrend's price; what
+// is new is that they no longer have to be reachable from one another.
+function promisedSentence(ws) {
+  const list = (ws.built && ws.built.promised) || [];
+  if (!list.length) return '';
+  const shown = list.slice(0, 3).map((n) => '“' + n.line + '” at ' + fmtMoney(n.price));
+  return list.length + ' of this worksheet’s lines ' + (list.length === 1 ? 'carries' : 'carry') + ' a price Buildertrend states outright rather than '
+    + 'deriving from a cost (' + shown.join(', ')
+    + (list.length > shown.length ? ', and ' + (list.length - shown.length) + ' more' : '') + '). No markup percent can express a price over a cost of '
+    + '$0.00, so those lines are imported carrying the owner’s price on the line itself: the cost stays exactly what Buildertrend says it is, the price '
+    + 'stays exactly what Buildertrend charges, and the markup is not consulted. Clearing that price in the estimate editor returns the line to cost x markup.';
 }
 
 // Buildertrend has a title AND a description on a line; a P86 estimate line has
@@ -860,6 +1019,8 @@ function estimateProposals(ws, v, ctx) {
     notes.push(ws.ownerUnreadable + ' of this worksheet’s lines sent an owner price that is not readable money, so nothing could check what P86 prices those '
       + 'lines at against what Buildertrend charges for them, and the comparison above counts them as nothing.');
   }
+  const promWhy = promisedSentence(ws);
+  if (promWhy) notes.push(promWhy);
   const negWhy = negativeSentence(ws);
   if (negWhy) notes.push(negWhy);
   const descWhy = describedSentence(ws);
@@ -1049,6 +1210,8 @@ function matchEstimates(btValues, p86) {
       out.notes.push(ws.ownerUnreadable + ' of this worksheet’s lines sent an owner price that is not readable money, so nothing could check what P86 prices those '
         + 'lines at against what Buildertrend charges for them, and the comparison below counts them as nothing.');
     }
+    const promNew = promisedSentence(ws);
+    if (promNew) out.notes.push(promNew);
     const negNew = negativeSentence(ws);
     if (negNew) out.notes.push(negNew);
     const descNew = describedSentence(ws);
@@ -1117,5 +1280,6 @@ module.exports = {
   markupPercentFor, priceTolerance, lineAgreesWithBuildertrend, buildLines, headerNameFor, lineDescription,
   worksheetTitle, groupWorksheets, WS_FACTS,
   p86EstimateView, linesFingerprint, lifecycleLock, lockSentence, noLineIdSentence,
+  promisedCandidates, promisedSentence,
   p86PricedTotal, btOwnerTotal, btCostTotal, num, numExact, EPS,
 };

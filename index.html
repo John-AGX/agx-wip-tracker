@@ -251,7 +251,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=322">
+    <link rel="stylesheet" href="css/styles.css?v=323">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=70">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -3684,7 +3684,7 @@
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
-    <script src="js/pricing-pipeline.js?v=10"></script>
+    <script src="js/pricing-pipeline.js?v=11"></script>
     <!-- ONE COMPLETION CLOCK. progress-core.js is the pure math that used to be
          welded to appData inside progress.js; co-completion.js is HOW A CHANGE
          ORDER EARNS, the body that used to live inside js/jobs.js. Both are
@@ -3743,9 +3743,9 @@
          Scope / Terms / notes / proposals / reports. Load before the editors
          that mount it. -->
     <script src="js/rich-text.js?v=1"></script>
-    <script src="js/estimates.js?v=67"></script>
+    <script src="js/estimates.js?v=68"></script>
     <script src="js/proposal.js?v=27"></script>
-    <script src="js/estimate-editor.js?v=114"></script>
+    <script src="js/estimate-editor.js?v=115"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
@@ -3753,8 +3753,8 @@
     <script src="js/change-order-editor.js?v=37"></script>
     <script src="js/materials-drawer.js?v=15"></script>
     <script src="js/estimate-doc-layouts.js?v=1"></script>
-    <script src="js/estimate-preview.js?v=18"></script>
-    <script src="js/bt-export.js?v=6b"></script>
+    <script src="js/estimate-preview.js?v=19"></script>
+    <script src="js/bt-export.js?v=7"></script>
     <!-- Payload inline approval card (used by ai-panel.js). Must load
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
          panel mounts. -->
@@ -3767,7 +3767,7 @@
     <!-- The Live Writer ENGINE — ingest + dedupe + the one differ + the one
          estimate row model, plus surface B (the docked notification). Every
          other surface registers against it. It DRAWS; the model above decides. -->
-    <script src="js/live-writer.js?v=19"></script>
+    <script src="js/live-writer.js?v=20"></script>
     <!-- Surface A — the Cowork page. Consumes the engine, so it must load
          AFTER it (live-writer is idempotent-by-existence: a re-load is a
          no-op, so registration has to go through registerSurface). -->

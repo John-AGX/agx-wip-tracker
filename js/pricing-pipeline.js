@@ -35,7 +35,8 @@
 //   clientPriceState(rec, lines) → null | { ok, reason, target, markedUp,
 //                                           scale, sells[], … }
 //                                  ⚠ `lines` is REQUIRED — see below
-//   resolveMarkedUp(per, rec) → markedUp
+//   resolveTargetMargin(per, rec) → markedUp  (target margin ONLY)
+//   resolveMarkedUp(per, rec) → markedUp      (typed price, then the above)
 //   sumOfPriced([per, …]) → a decision for a total summed from several
 //                           priced sets (every estimate total is one)
 //   applyFeesAndTax(markedUp, rec, priced) → { feeFlat, feePctAmount, preTax,
@@ -78,6 +79,27 @@
 // price. When set, the line's contribution to the marked-up total is
 // qty × unitSell and its markup is not consulted. `unitCost` still
 // means cost, so the line's profit is finally expressible.
+//
+// ESTIMATES CARRY IT TOO, and the document-level typed price still does
+// not. The two are not the same kind of thing and only one of them is
+// safe on an estimate:
+//   • `unitSell` is a PER-LINE fact. An estimate total sums a per-group
+//     resolve, and a per-line fact sums correctly however many groups
+//     there are, because each line is counted exactly once.
+//   • `targetPrice` is a DOCUMENT absolute. Summed over groups it is
+//     applied once PER INCLUDED GROUP and silently multiplies the
+//     proposal — the measured $39,285.71 → $196,428.57 at five groups
+//     that clientPriceRequested refuses `alternates` for.
+// That is why resolveTargetMargin below is split out of resolveMarkedUp:
+// the estimate paths want the promised-price carve-out and must NOT
+// acquire the typed-price door along with it.
+//
+// A Buildertrend worksheet is where estimates meet this field in the
+// wild. Buildertrend lets an estimator type what the OWNER PAYS with the
+// builder cost left at zero (markup type "2"), and 0 x k is 0 for every
+// k, so no percent can express it — see
+// server/services/clickr/estimate-match.js, which imports exactly those
+// lines carrying a promised price instead of refusing the worksheet.
 //
 // THE DISCRIMINATOR IS THE ABSENCE OF THE KEY — the same mechanism the
 // per-line `markup` field has used since this module was written, and
@@ -160,6 +182,17 @@
   //     action, not a migration.
   function sellLocked(line) {
     return !!(line && line.unitSell !== '' && line.unitSell != null);
+  }
+
+  // The per-line promised money, for a reader that wants the pair without
+  // the markup branch. Exported because js/estimate-preview.js prints a
+  // UNIT price and had grown its own presence test —
+  // `typeof line.unitSell === 'number'` — which disagrees with sellLocked
+  // on a string: an editor input hands back "2750", the pipeline locks the
+  // line at $2,750.00 and that reader quietly printed the marked-up cost
+  // instead. One rule, one answer.
+  function promisedUnitSell(line) {
+    return sellLocked(line) ? num(line.unitSell) : null;
   }
 
   // The money one CONTENT line contributes.
@@ -744,6 +777,42 @@
     // `per` from computeForLines(rec, lines) on the line immediately above.
     var cp = p.clientPrice;
     if (cp && cp.ok) return cp.markedUp;
+    return resolveTargetMargin(p, rec);
+  }
+
+  // THE TARGET-MARGIN HALF OF THE ABOVE, WITHOUT THE TYPED-PRICE DOOR.
+  //
+  // Identical arithmetic — resolveMarkedUp is now literally the typed-price
+  // branch in front of a call to this — and it exists as its own name for
+  // ONE reason: the estimate paths need the promised-price carve-out and
+  // must NOT acquire `targetPrice` on the way in.
+  //
+  // That is not hypothetical and it is not a matter of taste.
+  // clientPriceRequested refuses a record carrying `alternates` — but an
+  // estimate blob with NO `alternates` key at all is the legacy arm both
+  // computeEstimateTotals implementations still price, and on that shape
+  // clientPriceRequested returns TRUE (measured; the note over
+  // applyFeesAndTax in server/services/money/estimate-totals.js says so in
+  // as many words). Pointing the four estimate call sites at
+  // resolveMarkedUp would therefore have honoured a document client price
+  // on every legacy estimate blob carrying one, which is a change to the
+  // estimate lock wearing the clothes of a promised-price port. The lock
+  // stays exactly where it was; this function is how.
+  //
+  // Target margin back-solves a marked-up total from COST. A promised
+  // price is not derived from cost, so it may not be restated by a margin
+  // target: the locked lines are carved out at face value and only the
+  // remaining cost is back-solved.
+  //
+  //   income = Σ promised sell + applyTargetMargin(unlocked cost)
+  //
+  // WHAT THE TARGET THEREFORE MEANS once a document holds a promise: it is
+  // the margin asked of the work whose price has NOT been promised, not a
+  // property of the whole document. The document's own margin is then
+  // whatever the promise and that back-solve produce together, and it is
+  // grossMarginPct(subtotal, markedUp) that states it.
+  function resolveTargetMargin(per, rec) {
+    var p = per || {};
     if (!targetMarginActive(rec)) return p.markedUp;
     var lockedSell = num(p.lockedSell);
     var lockedSubtotal = num(p.lockedSubtotal);
@@ -754,11 +823,54 @@
     // degrades to 0 rather than dividing `undefined` into NaN and
     // poisoning totalIncome, revisedProfit, revisedMargin and backlog.
     var subtotal = typeof p.subtotal === 'number' ? p.subtotal : num(p.subtotal);
-    // Nothing promised on this record — which is EVERY change order that
-    // exists today — takes the original expression, character for
-    // character. It does not so much as re-associate an operation.
+    // Nothing promised on this record takes the original expression,
+    // character for character. It does not so much as re-associate an
+    // operation.
     if (!lockedSell && !lockedSubtotal) return applyTargetMargin(subtotal, rec);
     return lockedSell + applyTargetMargin(subtotal - lockedSubtotal, rec);
+  }
+
+  // The ONE uniform factor a target margin prices an UNPROMISED line by, for
+  // the row paints that show a per-line price. Every row painter used to
+  // derive this as `applyTargetMargin(Σ every line's cost) / Σ every line's
+  // cost`, which marks a promised line up to hit the target and makes the
+  // rows sum to something the Proposal Total does not.
+  //
+  // THE IDENTITY IT EXISTS TO HOLD. With `free` standing for the unpromised
+  // cost (per.subtotal − per.lockedSubtotal):
+  //     Σ rows = lockedSell + free x factor
+  //            = lockedSell + applyTargetMargin(free, rec)
+  //            = resolveTargetMargin(per, rec)
+  // so a row walk and the Proposal Total cannot disagree, for any promise mix
+  // including none at all.
+  //
+  // ⚠ IT IS MEASURED OVER THE UNIT, NOT OVER A POOL, AND THAT IS THE WHOLE
+  // CORRECTNESS OF IT. applyTargetMargin is LINEAR — mk/sub is 1/(1 − t/100)
+  // for every sub — so measuring it over a pool cannot make it more accurate
+  // and can only make it WRONG when the pool is an awkward number.
+  //
+  // This shipped for one mutation run as `if (!(free > 0)) return 1` over
+  // `applyTargetMargin(free)/free`, and a mutation that replaced the
+  // denominator with the whole subtotal did not bite — because it cannot:
+  // the two are the same number. What that non-biting mutation was actually
+  // pointing at is the `free > 0` guard, which is NOT scale-invariant and is
+  // simply false for a NEGATIVE free pool. Measured on a group holding a
+  // $2,750 promise, $1,250 of unpromised cost and a $2,000 credit at a 30%
+  // target: free is −$750, the guard returned a factor of 1, the rows came to
+  // $2,000.00 and the Proposal Total said $1,678.57 — $321.43 apart, with the
+  // rows the thing the estimator reads. A credit line beside a promise is
+  // ordinary.
+  //
+  // free == 0 needs no special case either: 0 x anything is 0, and
+  // applyTargetMargin(0) is 0, so the identity holds by arithmetic rather
+  // than by a branch.
+  function targetFactorFor(rec) {
+    if (!targetMarginActive(rec)) return 1;
+    // applyTargetMargin's own sanity guard returns its argument when the
+    // divisor is not positive, so an impossible target degrades to 1 here
+    // rather than to Infinity — and it degrades the same way for the total.
+    var f = applyTargetMargin(1, rec);
+    return isFinite(f) ? f : 1;
   }
 
   // Apply fees, tax, and round-up on top of an already-marked-up
@@ -1009,6 +1121,7 @@
     sectionMarkupForLine: sectionMarkupForLine,
     effectiveMarkupForLine: effectiveMarkupForLine,
     sellLocked: sellLocked,
+    promisedUnitSell: promisedUnitSell,
     lineMoney: lineMoney,
     computeForLines: computeForLines,
     targetMarginActive: targetMarginActive,
@@ -1018,6 +1131,8 @@
     clientPriceInForce: clientPriceInForce,
     clientPriceState: clientPriceState,
     resolveMarkedUp: resolveMarkedUp,
+    resolveTargetMargin: resolveTargetMargin,
+    targetFactorFor: targetFactorFor,
     sumOfPriced: sumOfPriced,
     applyFeesAndTax: applyFeesAndTax
   };

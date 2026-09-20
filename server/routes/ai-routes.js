@@ -41,6 +41,12 @@ const JOB_TYPE_LABELS = jobTypes.DEFAULT_JOB_TYPES.map((t) => t.label);
 // COs/POs/invoices live in their own tables; this reads them and derives CO
 // money through the same pricing pipeline the browser uses.
 const jobMoney = require('../services/money/change-order-totals');
+// THE pricing pipeline — the same dual-target module the estimate editor, the
+// proposal preview and services/money/estimate-totals.js all run. The estimate
+// blocks below used to hand-roll the markup cascade three times over; every
+// copy was blind to a line's promised `unitSell`, so a Buildertrend flat-rate
+// line (zero cost, stated price) was reported to 86 as being worth $0.00.
+const pricing = require('../../js/pricing-pipeline.js');
 // The shared write layer for a job's money records. Only its pure helpers are
 // used here (read_change_orders resolves a CO NUMBER the same way the write
 // door does, so a change order the model can read is always one it can name).
@@ -1735,36 +1741,27 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
     alternates.forEach(a => {
       const isActive = a.id === blob.activeAlternateId;
       const isExcluded = !!a.excludeFromTotal;
-      // Per-group cost-side subtotal so 86 can see what's already in
-      // each group without having to switch into it. This is the cost
-      // side (qty * unitCost * (1 + markup/100)) — the same math
-      // the editor uses for the headline number.
+      // Per-group marked-up subtotal so 86 can see what's already in each
+      // group without having to switch into it.
+      //
+      // ⚠ THE SHARED CASCADE, NOT A COPY OF IT. This walked the section
+      // headers itself and applied `qty * unitCost * (1 + markup/100)` per
+      // line — which is blind to a section's override/dollar mode and, since
+      // the promised-price field reached estimates, blind to a line whose
+      // price was STATED rather than derived. A $20,000 flat-rate line
+      // imported from Buildertrend sits at $0 cost, so that walk reported it
+      // as $0 and 86 would have advised on a group it believed was empty.
+      // p86Pricing.computeForLines is the same code the editor's chip and
+      // the server's proposal total run.
       const groupLines = allLines.filter(l => l.alternateId === a.id);
       const itemLines = groupLines.filter(l => l.section !== '__section_header__');
-      let subtotal = 0;
-      // Build a markup map from the section headers in this group.
-      const sectionMarkupById = {};
-      groupLines.forEach(l => {
-        if (l.section === '__section_header__') {
-          sectionMarkupById[l.id] = (l.markup === '' || l.markup == null)
-            ? ((blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0)
-            : parseFloat(l.markup);
-        }
-      });
-      // Walk lines in order; track which section we're under so each
-      // line can fall back to its section's markup if it doesn't override.
-      let curSectionMarkup = (blob.defaultMarkup != null && blob.defaultMarkup !== '') ? parseFloat(blob.defaultMarkup) : 0;
-      groupLines.forEach(l => {
-        if (l.section === '__section_header__') {
-          curSectionMarkup = sectionMarkupById[l.id];
-          return;
-        }
-        const qty = parseFloat(l.qty) || 0;
-        const cost = parseFloat(l.unitCost) || 0;
-        const m = (l.markup === '' || l.markup == null) ? curSectionMarkup : parseFloat(l.markup);
-        subtotal += qty * cost * (1 + (m / 100));
-      });
-      const subtotalStr = '$' + Math.round(subtotal).toLocaleString();
+      const groupPer = pricing.computeForLines(blob, groupLines);
+      // resolveTargetMargin, not resolveMarkedUp: a document `targetPrice` is
+      // change-order-only and must never price an estimate.
+      const subtotal = pricing.resolveTargetMargin(groupPer, blob);
+      const promisedHere = groupPer.promisedCount || 0;
+      const subtotalStr = '$' + Math.round(subtotal).toLocaleString()
+        + (promisedHere ? ' (' + promisedHere + ' at a promised price)' : '');
       const sectionNames = groupLines
         .filter(l => l.section === '__section_header__')
         .map(l => l.description || 'subgroup');
@@ -1838,25 +1835,23 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
         const subMarkup = (currentHeader.markup === '' || currentHeader.markup == null)
           ? groupDefaultMarkup
           : parseFloat(currentHeader.markup);
-        let cost = 0;
+        // ONE walk through the shared rule — the cost AND the marked-up
+        // figure both come from p86Pricing.lineMoney, so a promised line
+        // reports the price it was promised at instead of its $0 cost times
+        // a markup that is never applied to it.
+        let cost = 0, markedUp = 0, promised = 0;
         groupRows.forEach(l => {
-          const qty = parseFloat(l.qty) || 0;
-          const uc = parseFloat(l.unitCost) || 0;
-          cost += qty * uc;
-        });
-        // Marked-up subtotal — apply per-line override when set, else subgroup markup.
-        let markedUp = 0;
-        groupRows.forEach(l => {
-          const qty = parseFloat(l.qty) || 0;
-          const uc = parseFloat(l.unitCost) || 0;
-          const lineMarkup = (l.markup === '' || l.markup == null) ? subMarkup : parseFloat(l.markup);
-          markedUp += (qty * uc) * (1 + (lineMarkup / 100));
+          const mm = pricing.lineMoney(l, activeLines, blob);
+          cost += mm.ext;
+          markedUp += mm.sell;
+          if (mm.locked) promised++;
         });
         lines.push('- ' + (currentHeader.description || 'subgroup') +
           ' (subgroup_id=' + currentHeader.id + '): ' +
           groupRows.length + ' line' + (groupRows.length === 1 ? '' : 's') +
           ', cost $' + cost.toFixed(2) +
           ', markup ' + subMarkup + '%' +
+          (promised ? ', ' + promised + ' at a promised price' : '') +
           ' → marked-up $' + markedUp.toFixed(2));
         groupRows = [];
       }
@@ -1890,9 +1885,17 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
           const unit = l.unit || 'ea';
           const cost = parseFloat(l.unitCost) || 0;
           const ext = qty * cost;
+          // A PROMISED LINE SAYS SO, and says its price. Printing "markup 0%"
+          // over a $20,000 flat-rate line — which is what the cascade alone
+          // produced — tells 86 the line is worth nothing and invites it to
+          // "fix" the markup, which would do nothing at all.
+          const mmL = pricing.lineMoney(l, activeLines, blob);
           const markup = (l.markup === '' || l.markup == null) ? currentSubgroupMarkup : parseFloat(l.markup);
           const markupNote = (l.markup === '' || l.markup == null) ? '' : ' [overrides subgroup]';
-          lines.push(`${lineNumInSubgroup}. ${l.description || '(no description)'} — qty ${qty} ${unit} @ $${cost.toFixed(2)} = $${ext.toFixed(2)}; markup ${markup}%${markupNote} [line_id=${l.id}]`);
+          const priceNote = mmL.locked
+            ? `; PROMISED unitSell $${pricing.num(l.unitSell).toFixed(2)} → $${mmL.sell.toFixed(2)} (markup not applied)`
+            : `; markup ${markup}%${markupNote}`;
+          lines.push(`${lineNumInSubgroup}. ${l.description || '(no description)'} — qty ${qty} ${unit} @ $${cost.toFixed(2)} = $${ext.toFixed(2)}${priceNote} [line_id=${l.id}]`);
         }
       });
       lines.push('');
@@ -10007,9 +10010,15 @@ async function execStaffTool(name, input, ctx) {
           const ext = qty * cost;
           const mk = (l.markup === '' || l.markup == null) ? currentMarkup : parseFloat(l.markup);
           const mkNote = (l.markup === '' || l.markup == null) ? '' : ' [overrides subgroup]';
+          // Twin of the turn-context render above: a promised line reports
+          // its promise, not a markup nothing applies.
+          const mmR = pricing.lineMoney(l, activeLines, blob);
+          const priceNote = mmR.locked
+            ? '; PROMISED unitSell $' + pricing.num(l.unitSell).toFixed(2) + ' → $' + mmR.sell.toFixed(2) + ' (markup not applied)'
+            : '; markup ' + mk + '%' + mkNote;
           out.push(lineNum + '. ' + (l.description || '(no description)') +
             ' — qty ' + qty + ' ' + unit + ' @ $' + cost.toFixed(2) +
-            ' = $' + ext.toFixed(2) + '; markup ' + mk + '%' + mkNote +
+            ' = $' + ext.toFixed(2) + priceNote +
             ' [line_id=' + l.id + ']');
           shown++;
         }

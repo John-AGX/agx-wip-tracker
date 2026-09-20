@@ -526,9 +526,23 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.35';
+const APP_VERSION = '1.36';
 
 const releases = [
+  {
+    version: '1.36',
+    date: '2026-09-20',
+    name: 'An estimate line can carry the price you promised',
+    summary: 'A line can hold what the client pays outright, instead of a cost with a markup on top — so a Buildertrend line priced with no cost behind it comes across at its real price. Every place an estimate is priced now agrees on the same number.',
+    changes: [
+      { type: 'new', text: 'An estimate line can carry a promised price. Type what the client pays and that is the price: the line’s markup is not consulted, and a target margin does not mark it up. It is the same field change orders have always had. A promised price of $0.00 is a real promise — a line given away — and is not the same as leaving the field empty.' },
+      { type: 'new', text: 'Buildertrend estimate lines priced with no cost behind them now import. Buildertrend lets an estimator type what the owner pays with the builder cost left at zero, and Project 86 used to refuse the whole worksheet because no markup on a zero cost can reach that price. Those lines now come in carrying the price itself. A line whose cost is not zero is still checked against Buildertrend’s own figure and still refuses if the two disagree — that is Buildertrend contradicting itself, and importing it at the owner price would bury the contradiction.' },
+      { type: 'improved', text: 'The target margin says what it means on a document that is partly fixed. The target is the margin asked of the work whose price has NOT been promised; the promised lines keep their promise and are carved out. The chip in the estimate editor now shows both the target you typed and the margin the document actually achieves, because on a mixed estimate those are different numbers and only one of them is a fact.' },
+      { type: 'fixed', text: 'Every place an estimate is priced now uses the same pricing. Eleven paths turned lines into a total and four of them did it by hand: the Buildertrend export had a complete second cascade and never applied a target margin at all, the lead editor’s Preview modal filed every line under a section named after the section marker itself, the estimate editor rebuilt its totals in a way that dropped promised lines, and the four places 86 is told about an estimate reported a flat-rate line as $0.00.' },
+      { type: 'fixed', text: 'The Buildertrend export priced every line against all of its groups at once, so a section’s markup leaked into the lines of other sections. Each line’s price and markup percent were wrong on any estimate with more than one group — the total happened to come out right, which is why nobody saw it — and the export is what Buildertrend receives.' },
+      { type: 'fixed', text: 'A promised price typed into a line reads as a promise everywhere. The proposal used to test it in a way that disagreed with the totals, so a figure typed into the box printed the marked-up cost on the page while the total honoured the promise. Scribe’s change preview also ignored promised prices, on change orders as well as estimates.' },
+    ],
+  },
   {
     version: '1.35',
     date: '2026-09-20',

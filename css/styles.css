@@ -9853,7 +9853,27 @@ body.light-mode .p86-pv-tag-modal-chip {
 /* Horizontal scroll when the editor pane is narrower than the row — keeps the
    Description column usable instead of collapsing to one character per line. */
 .ee-line-tbl-scroll { overflow-x: auto; overflow-y: visible; }
-.ee-line-tbl { min-width: 880px; }
+/* A PROMISED LINE IS VISIBLY A PROMISED LINE.
+   Same vocabulary the change-order editor uses for the same fact
+   (.p86-co-line-locked / .p86-co-lockdot): the Marked-Up figure turns blue
+   and carries a dot, because that money was STATED rather than derived from
+   the cost beside it. A markup box that still took keystrokes while nothing
+   read them is what this replaces. */
+.ee-line-tbl .ee-line-amount.ee-line-amount-promised { color: #7eb0ff; }
+.ee-line-tbl .ee-line-lockdot { margin-left: 5px; color: #7eb0ff; font-size: 9px; }
+/* The Margin chip's companion read-out: the document's achieved margin,
+   shown beside the target whenever a promise makes the two different
+   numbers. Muted, so it reads as a fact about the estimate and not as a
+   second editable control. */
+.ee-margin-promised {
+  margin-left: 7px; font-size: 10px; font-weight: 600; letter-spacing: 0.2px;
+  color: var(--text-dim, #8b90a5); white-space: nowrap; cursor: help;
+}
+/* 990, not 880: the Unit Sell column (110px) joined the row when the
+   promised-price field reached estimates. The header and the data row share
+   these widths, so the min-width has to grow with them or the labels drift
+   off the cells they name. */
+.ee-line-tbl { min-width: 990px; }
 .ee-line-tbl .ee-line-tbl-head {
   display: flex;
   align-items: center;
@@ -9884,6 +9904,7 @@ body.light-mode .p86-pv-tag-modal-chip {
 .ee-line-tbl [data-cell="unit"],
 .ee-line-tbl [data-cell="unitCost"],
 .ee-line-tbl [data-cell="markup"],
+.ee-line-tbl [data-cell="unitSell"],
 .ee-line-tbl .ee-line-ext,
 .ee-line-tbl input,
 .ee-section-total,
@@ -9940,9 +9961,12 @@ body.light-mode .p86-pv-tag-modal-chip {
   .ee-line-tbl [data-row-edit-gate] [data-cell="qty"],
   .ee-line-tbl [data-row-edit-gate] [data-cell="unit"],
   .ee-line-tbl [data-row-edit-gate] [data-cell="unitCost"],
-  .ee-line-tbl [data-row-edit-gate] [data-cell="markup"] { flex: none !important; padding: 0 !important; min-width: 0; }
-  /* markup on its own full-width row so it never crams a 4th column */
+  .ee-line-tbl [data-row-edit-gate] [data-cell="markup"],
+  .ee-line-tbl [data-row-edit-gate] [data-cell="unitSell"] { flex: none !important; padding: 0 !important; min-width: 0; }
+  /* markup and unit sell each get their own full-width row so neither crams
+     a 4th column onto the phone card */
   .ee-line-tbl [data-row-edit-gate] [data-cell="markup"] { grid-column: 1 / 4; }
+  .ee-line-tbl [data-row-edit-gate] [data-cell="unitSell"] { grid-column: 1 / 4; }
 
   /* persistent, content-driven field labels (header row is hidden) */
   .ee-line-tbl [data-row-edit-gate] [data-label]::before {

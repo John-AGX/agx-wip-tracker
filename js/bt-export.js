@@ -16,6 +16,26 @@
 //     the export total matches the proposal exactly without leaking a
 //     pseudo "income" row.
 //
+// WHAT CHANGED WHEN unitSell REACHED ESTIMATES
+//   This file used to carry a COMPLETE second copy of the markup cascade:
+//   its own effectiveMarkup(), its own per-line `ext * (1 + m/100)`, and its
+//   own group walk. That copy had already drifted — it never applied a
+//   TARGET MARGIN, so an estimate priced by a target exported at its
+//   bottom-up markup total and the spreadsheet disagreed with the proposal
+//   the client had been sent — and it would have drifted again the moment a
+//   line carried a promised price, because a fork cannot learn a field.
+//
+//   The cascade now comes from window.p86Pricing: computeForLines for the
+//   per-line prices, resolveTargetMargin for the group total. What is
+//   deliberately NOT taken from there is applyFeesAndTax — the fee/tax/
+//   round-up arithmetic below is character-identical to the pipeline's with
+//   the client-price pause off, and a change order's typed price is a
+//   document absolute that must never reach an estimate (see
+//   test/co-client-price.test.js, which pins that this file has never heard
+//   of it BY NAME — which is why it is not written here). One rule for the
+//   markup, one local ceiling, and the
+//   reason for the split written down rather than rediscovered.
+//
 // SheetJS (XLSX global) is loaded by js/proposal.js, so it's already
 // available by the time this module is invoked from the editor.
 (function () {
@@ -93,6 +113,12 @@
   // Walks lines in stored order; each line inherits the btCategory of
   // the most recent section header above it. Spans every INCLUDED
   // group so a multi-deck estimate exports as one cost-line list.
+  //
+  // `lines` is that concatenation and is the RIGHT array for the row LIST.
+  // It is the WRONG array for PRICING, so `byGroup` is returned beside it
+  // and no caller has to rebuild the boundary this walk already knows:
+  // currentCat and currentSection both reset per group, because a section
+  // header belongs to its own group and to nothing after it.
   function buildLineCategoryMap(estimate) {
     var includedIds = includedGroupIds(estimate);
     var altById = {};
@@ -125,33 +151,34 @@
     });
     return {
       lines: orderedLines,
+      byGroup: byGroup,
       byLineId: byLineId,
       sectionByLineId: sectionByLineId,
       groupNameByLineId: groupNameByLineId
     };
   }
 
-  // Per-line percent markup. Mirrors the editor pipeline. Returns a
-  // plain percent (e.g. 35 = 35%). Dollar-mode sections return 0 here;
-  // the section-flat-$ is folded into the per-line markup later by
-  // pro-rata distribution.
-  function effectiveMarkup(line, section, estimate) {
-    var inDollar = section && section.markupMode === 'dollar';
-    if (section && section.overrideLineMarkups) {
-      if (inDollar) return 0;
-      if (section.markup !== '' && section.markup != null) return num(section.markup);
-      if (estimate && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') return num(estimate.defaultMarkup);
-      return 0;
+  // THE pricing module, or nothing. A fallback that re-implements the
+  // cascade when it is missing is the fork this file just deleted, wearing a
+  // guard clause; an export that silently prices an estimate by a second
+  // rule is worse than one that does not run.
+  function P() {
+    var p = window.p86Pricing;
+    if (!p || !p.computeForLines || !p.resolveTargetMargin) {
+      throw new Error('p86Pricing (js/pricing-pipeline.js) is not loaded — the Buildertrend export cannot price an estimate without it.');
     }
-    if (line && line.markup !== '' && line.markup != null) return num(line.markup);
-    if (inDollar) return 0;
-    if (section && section.markup !== '' && section.markup != null) return num(section.markup);
-    if (estimate && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') return num(estimate.defaultMarkup);
-    return 0;
+    return p;
   }
 
-  // Final client total — must match the editor's pricing pipeline so
-  // the BT export totals match the proposal exactly.
+  // The local effectiveMarkup() that stood here is GONE rather than left
+  // delegating: a wrapper with no caller is a second name for the rule, and
+  // the next person to need a markup here would have reached for it instead
+  // of for p86Pricing.lineMoney, which is what carries the promised price.
+  //
+  // Final client total — the editor's own pricing pipeline, so the BT export
+  // total matches the proposal exactly. It picks up two things the fork here
+  // never had: a TARGET MARGIN (applied per included group, which is how the
+  // editor applies it) and the promised-price carve-out.
   function computeClientTotal(estimate) {
     var includedIds = includedGroupIds(estimate);
     var allLines = (window.appData && window.appData.estimateLines || []).filter(function (l) {
@@ -160,19 +187,7 @@
     var markedUp = 0;
     includedIds.forEach(function (gid) {
       var group = allLines.filter(function (l) { return l.alternateId === gid; });
-      var currentSection = null;
-      group.forEach(function (l) {
-        if (l.section === '__section_header__') {
-          currentSection = l;
-          if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
-            markedUp += num(l.markup);
-          }
-          return;
-        }
-        var ext = num(l.qty) * num(l.unitCost);
-        var m = effectiveMarkup(l, currentSection, estimate);
-        markedUp += ext * (1 + m / 100);
-      });
+      markedUp += P().resolveTargetMargin(P().computeForLines(estimate, group), estimate);
     });
     var feeFlat = num(estimate.feeFlat);
     var feePct = num(estimate.feePct) / 100;
@@ -217,10 +232,21 @@
       sectionTotals[key].bcTotal += num(l.qty) * num(l.unitCost);
     });
 
+    // PER GROUP, NEVER THE CONCATENATION. p86Pricing.sectionHeaderFor walks
+    // BACKWARDS from a line's index and cannot see a group boundary, so
+    // handing it catMap.lines lets a line that leads its own group inherit
+    // the PREVIOUS group's last section header - a markup the editor never
+    // showed it under. catMap.byGroup holds the same object references in
+    // the same order as the array computeClientTotal prices below, so the
+    // rows and the total now read one array per line instead of two.
+    //
+    // There is NO `|| catMap.lines` fallback here on purpose: it would read
+    // as defence and behave as a silent reinstatement of the bug. Every
+    // nonHeaderLine came out of byGroup's own walk, so the key is present.
     var lineRows = nonHeaderLines.map(function (l) {
-      var bc = num(l.qty) * num(l.unitCost);
+      var mm = P().lineMoney(l, catMap.byGroup[l.alternateId], estimate);
+      var bc = mm.ext;
       var section = catMap.sectionByLineId[l.id];
-      var pctMarkup = effectiveMarkup(l, section, estimate);
       var sectionFlatShare = 0;
       if (section) {
         var st = sectionTotals[section.id];
@@ -228,17 +254,44 @@
           sectionFlatShare = st.flatDollars * (bc / st.bcTotal);
         }
       }
-      var baseRev = bc * (1 + pctMarkup / 100) + sectionFlatShare;
-      return { line: l, bc: bc, baseRev: baseRev };
+      // A PROMISED line does not take a share of the section's flat-$ pool
+      // either. The pool is markup being spread across derived prices; a
+      // stated price is not a derived price, so there is nothing of it to
+      // restate. (It still counts toward st.bcTotal, so the share the other
+      // lines take is unchanged — the promise absorbs none of the pool and
+      // steals none of it.)
+      var baseRev = mm.locked ? mm.sell : (mm.sell + sectionFlatShare);
+      return { line: l, bc: bc, baseRev: baseRev, promised: mm.locked };
     });
 
-    // Pass 2: scale all line revenues so they sum to the editor's
-    // computed client total. This bakes in feeFlat + feePct + taxPct
-    // + round-up automatically. Lines with $0 builder cost still get
+    // Pass 2: scale line revenues so they sum to the editor's computed
+    // client total. This bakes in a target margin + feeFlat + feePct +
+    // taxPct + round-up automatically. Lines with $0 builder cost still get
     // their baseRev (which is just sectionFlatShare) preserved.
-    var subtotal = lineRows.reduce(function (s, r) { return s + r.baseRev; }, 0);
+    //
+    // ⚠ A PROMISED LINE IS CARVED OUT OF THE SCALE, exactly as
+    // p86Pricing.allocateFreePool carves it out of a typed client price, and
+    // for the identical reason: the pool being spread is markup, fees and a
+    // round-up, and none of those may restate a price that was PROMISED to
+    // the owner. Scaling every line instead — which is what this did before
+    // the field reached estimates — hands a $20,000 flat-rate line a share
+    // of the tax on somebody else's work and exports it at a number nobody
+    // quoted.
+    //
+    // THE ONE CASE THAT CANNOT CARVE: a worksheet whose lines are ALL
+    // promised has no free revenue to absorb the fees, so there is nothing
+    // to scale and the columns could not add up to the total whatever this
+    // did. It falls back to scaling everything — the old behaviour — because
+    // a spreadsheet whose Client Price column does not sum to its own total
+    // is rejected by Buildertrend's import, and that is a worse answer than
+    // a promise carrying its share of a fee the estimator chose to charge.
+    var promisedRev = lineRows.reduce(function (s, r) { return s + (r.promised ? r.baseRev : 0); }, 0);
+    var freeRev = lineRows.reduce(function (s, r) { return s + (r.promised ? 0 : r.baseRev); }, 0);
     var target = computeClientTotal(estimate);
-    var scale = (subtotal > 0) ? (target / subtotal) : 1;
+    var carve = freeRev > 0;
+    var scale = carve
+      ? ((target - promisedRev) / freeRev)
+      : ((promisedRev + freeRev) > 0 ? (target / (promisedRev + freeRev)) : 1);
 
     // Header row — exact column order from BT's ProposalReport sample.
     var headers = [
@@ -255,7 +308,7 @@
       var qty = num(l.qty);
       var unitCost = num(l.unitCost);
       var bc = r.bc;
-      var clientPrice = r.baseRev * scale;
+      var clientPrice = (carve && r.promised) ? r.baseRev : r.baseRev * scale;
       var profit = clientPrice - bc;
       var margin = (clientPrice > 0) ? (profit / clientPrice * 100) : 0;
       // Derive the effective % markup so BT shows it on each line.

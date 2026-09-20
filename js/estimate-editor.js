@@ -1861,7 +1861,10 @@
   function sectionMarkupForLine(line, allLines, est) { return _P.sectionMarkupForLine(line, allLines, est); }
   function effectiveMarkupForLine(line, allLines, est) { return _P.effectiveMarkupForLine(line, allLines, est); }
   function targetMarginActive(est)              { return _P.targetMarginActive(est); }
-  function applyTargetMargin(subtotal, est)     { return _P.applyTargetMargin(subtotal, est); }
+  // applyTargetMargin was aliased here too and is gone for the same reason as
+  // in js/estimate-preview.js: nothing in this file may apply a target margin
+  // by hand any more. _P.resolveTargetMargin does it for the totals and
+  // _P.targetFactorFor for the rows, and both carve out a promised price.
 
   // Marked-up subtotal for a single alternate (group). The estimate
   // model still owns the alternate concept — COs are flat — so we
@@ -1886,38 +1889,50 @@
     var includedGroups = [];
     var excludedGroups = [];
     var targetMode = targetMarginActive(est);
+    // The promised half of the included total. A promised line is carved out
+    // of the target-margin back-solve, so the Margin chip has to be able to
+    // say what the target was actually asked of.
+    var promisedSell = 0, promisedSubtotal = 0, promisedCount = 0;
     // Every priced set summed into the proposal total. applyFeesAndTax reads
     // its round-to pause from these — the line sets that were actually priced
     // — rather than re-deciding from est.lines, which is a DIFFERENT array
     // than the appData.estimateLines slices this loop prices. See the note
     // above applyFeesAndTax in js/pricing-pipeline.js.
     var parts = [];
+    // THE DAY ARRIVED. `unitSell` reaches estimates, so the fresh-literal
+    // rebuild that used to stand here is gone, in both places, and the whole
+    // `per` object survives. (It replaced `per` with a two-key literal
+    // holding the subtotal and a hand-applied target margin, which dropped
+    // p86Pricing's lockedSubtotal/lockedSell and therefore discarded every
+    // promised price on the estimate. The expression itself is deliberately
+    // NOT reproduced here: the guard in test/co-income-call-sites.test.js
+    // reads RAW source — the comment stripper eats most of this file — so a
+    // comment quoting the dead shape would make that guard fail on its own
+    // explanation.)
+    //
+    // It is resolveTargetMargin and NOT resolveMarkedUp. The two differ by
+    // the CHANGE-ORDER document-price door, which an estimate must never
+    // open: a document absolute is applied once PER INCLUDED GROUP and
+    // multiplies the proposal. See the note over resolveTargetMargin in
+    // js/pricing-pipeline.js, which is the only file that may name that
+    // field — test/co-client-price.test.js holds this one to never
+    // mentioning it, and that guard is why the word is not written here.
     (est.alternates || []).forEach(function(alt) {
       var per = markedUpForGroup(est, alt);
-      // Captured BEFORE the target-margin rebuild below, which replaces `per`
-      // with a bare {subtotal, markedUp} literal carrying no decision.
-      if (!alt.excludeFromTotal) parts.push(per);
-      // While target-margin is locked, every included group's markedUp
-      // gets rebuilt off subtotal so the per-group breakdown sums to
-      // the override total. Excluded groups keep their natural markup.
-      // ⚠ THIS REBUILDS `per` AS A FRESH LITERAL, dropping p86Pricing's
-      // lockedSubtotal/lockedSell keys. Harmless today because the
-      // promised-price field (`unitSell`) is change-order-only, so no
-      // estimate line is ever locked and the carve-out is always zero.
-      // The day `unitSell` reaches estimates, this line and its twin
-      // below silently discard every promised price under a target
-      // margin — call p86Pricing.resolveMarkedUp(per, est) instead of
-      // re-deriving here, and keep the whole `per` object.
-      if (targetMode && !alt.excludeFromTotal) {
-        per = { subtotal: per.subtotal, markedUp: applyTargetMargin(per.subtotal, est) };
-      }
+      // An excluded group keeps its bottom-up markup — including the
+      // promise on any line that carries one, which per.markedUp holds.
       if (alt.excludeFromTotal) {
         excludedGroups.push({ alt: alt, subtotal: per.subtotal, markedUp: per.markedUp });
-      } else {
-        includedGroups.push({ alt: alt, subtotal: per.subtotal, markedUp: per.markedUp });
-        subtotal += per.subtotal;
-        markedUp += per.markedUp;
+        return;
       }
+      parts.push(per);
+      var groupMarkedUp = _P.resolveTargetMargin(per, est);
+      includedGroups.push({ alt: alt, subtotal: per.subtotal, markedUp: groupMarkedUp });
+      subtotal += per.subtotal;
+      markedUp += groupMarkedUp;
+      promisedSell += num(per.lockedSell);
+      promisedSubtotal += num(per.lockedSubtotal);
+      promisedCount += num(per.promisedCount);
     });
     // Fees + tax + round → shared p86Pricing.applyFeesAndTax
     var fees = _P.applyFeesAndTax(markedUp, est, _P.sumOfPriced(parts));
@@ -1926,12 +1941,11 @@
     }).length;
     var activeAlt = getActiveAlternate();
     var activePer = activeAlt ? markedUpForGroup(est, activeAlt) : { subtotal: 0, markedUp: 0 };
-    // ⚠ Same fresh-literal rebuild as above — see the note there. It
-    // drops lockedSubtotal/lockedSell and is only safe while `unitSell`
-    // is change-order-only.
-    if (targetMode && activeAlt && !activeAlt.excludeFromTotal) {
-      activePer = { subtotal: activePer.subtotal, markedUp: applyTargetMargin(activePer.subtotal, est) };
-    }
+    // Same resolve as the loop above, on the active group alone — the whole
+    // `per` again, never a rebuilt literal.
+    var activeMarkedUp = (activeAlt && !activeAlt.excludeFromTotal)
+      ? _P.resolveTargetMargin(activePer, est)
+      : activePer.markedUp;
     return {
       subtotal: subtotal,
       markupAmount: markedUp - subtotal,
@@ -1946,10 +1960,13 @@
       lineCount: lineCount,
       includedGroups: includedGroups,
       excludedGroups: excludedGroups,
-      activeGroupSubtotal: activePer.markedUp,
+      activeGroupSubtotal: activeMarkedUp,
       activeGroupExcluded: !!(activeAlt && activeAlt.excludeFromTotal),
       targetMarginLocked: targetMode,
-      targetMargin: num(est.targetMargin)
+      targetMargin: num(est.targetMargin),
+      promisedSell: promisedSell,
+      promisedSubtotal: promisedSubtotal,
+      promisedCount: promisedCount
     };
   }
 
@@ -2178,8 +2195,38 @@
   // taps again re-lock it. Clearing the input (or typing 0) drops back
   // to the computed-margin state. So users "play with the %" until
   // they're happy, then the pencil lock makes it stick.
+  // ⚠ WHAT THE TARGET MARGIN MEANS ONCE A LINE CARRIES A PROMISE.
+  //
+  // It stops being a property of the whole document, because part of the
+  // document is no longer the target's to set: a price that was PROMISED to
+  // the owner cannot be marked up to hit a margin. resolveTargetMargin
+  // carves those lines out at face value and back-solves only the remaining
+  // cost, so the number typed here is the margin asked of THE UNPROMISED
+  // WORK. The document's own gross margin is then whatever the promise and
+  // that back-solve come to together, and it is very often not the target.
+  //
+  // Printing the target alone and calling it "Target Margin" would be true
+  // about the instruction and misleading about the estimate, so when a
+  // promise is present the chip prints BOTH: the target the user typed, in
+  // the editable input, and the document's achieved margin beside it. The
+  // tooltip names the money that was carved out.
   function renderMarginChip(t, computedMarginPct) {
     var hasTarget = !!t.targetMarginLocked; // == targetMargin > 0 from computeTotals
+    var promisedSell = num(t.promisedSell);
+    var promisedCount = num(t.promisedCount);
+    var promisedNote = '';
+    if (hasTarget && promisedCount > 0) {
+      var achieved = (computedMarginPct == null) ? '—' : (computedMarginPct.toFixed(1) + '%');
+      promisedNote =
+        '<span class="ee-margin-promised" title="' + escapeHTML(
+          promisedCount + ' line' + (promisedCount === 1 ? '' : 's') + ' on this estimate carr' +
+          (promisedCount === 1 ? 'ies' : 'y') + ' a promised Unit Sell worth ' + fmtCurrency(promisedSell) + '. ' +
+          'A promised price is not derived from cost, so a target margin may not restate it: those lines are ' +
+          'carved out at face value and the target applies to the remaining cost. ' +
+          'This estimate\'s own gross margin is ' + achieved + '.') + '">' +
+          '&#9679;&nbsp;' + achieved + ' doc' +
+        '</span>';
+    }
     var displayPct = hasTarget
       ? Number(t.targetMargin || 0).toFixed(1)
       : (computedMarginPct == null ? '' : computedMarginPct.toFixed(1));
@@ -2207,6 +2254,7 @@
         '<input id="ee-margin-input" type="text" inputmode="decimal" value="' + displayPct + '" placeholder="' + placeholder + '" readonly' +
           ' style="width:54px;background:transparent;border:1px solid transparent;color:inherit;font-size:13px;font-weight:700;border-radius:4px;padding:0 4px;outline:none;text-align:right;font-family:inherit;" />' +
         '<span>%</span>' +
+        promisedNote +
       '</div>' +
       // Inline scoped style for the unlocked state — gives the input a
       // soft outline ring + matching caret so it visually signals "this
@@ -3114,9 +3162,9 @@
     // Header columns must mirror the DATA row's cells one-for-one — same
     // count, same order, same flex widths — or the labels drift and sit
     // over the wrong column (the "Description overlaps Unit Cost" bug).
-    // The row is: handle · desc · Qty · Unit · Unit Cost · Markup % · Ext ·
-    // Marked-Up · delete. min-width:0 lets a <80px basis win over the
-    // .ee-th-num class's min-width:80px.
+    // The row is: handle · desc · Qty · Unit · Unit Cost · Markup % ·
+    // Unit Sell · Ext · Marked-Up · delete. min-width:0 lets a <80px basis
+    // win over the .ee-th-num class's min-width:80px.
     var headerHTML =
       '<div class="ee-line-tbl-head">' +
         '<div class="ee-th-handle"></div>' +
@@ -3125,6 +3173,7 @@
         '<div class="ee-th-num" style="flex:0 0 70px;min-width:0;">Unit</div>' +
         '<div class="ee-th-num" style="flex:0 0 110px;min-width:0;">Unit Cost</div>' +
         '<div class="ee-th-num" style="flex:0 0 90px;min-width:0;">Markup %</div>' +
+        '<div class="ee-th-num" style="flex:0 0 110px;min-width:0;" title="The price promised to the owner, per unit. Blank derives it from cost x markup.">Unit Sell</div>' +
         '<div class="ee-th-num" style="flex:0 0 110px;min-width:0;">Ext.</div>' +
         '<div class="ee-th-num" style="flex:0 0 120px;min-width:0;">Marked-Up</div>' +
         '<div class="ee-th-del" style="flex:0 0 36px;"></div>' +
@@ -3221,25 +3270,55 @@
     var a = getActiveAlternate();
     return !(a && a.excludeFromTotal);
   }
-  // When a target margin is active it is the SINGLE pricing driver: every
-  // line in the group is marked up by ONE uniform factor so the line prices +
-  // section subtotals sum EXACTLY to the target-driven group total (the same
-  // number computeTotals derives via applyTargetMargin). factor = target
-  // marked-up total ÷ raw cost subtotal of the group.
-  function eeTargetFactor(est, lines) {
-    var sub = 0;
-    (lines || []).forEach(function(L) { if (L && L.section !== '__section_header__') sub += num(L.qty) * num(L.unitCost); });
-    if (sub <= 0) return 1;
-    var mk = applyTargetMargin(sub, est);
-    return (sub > 0 && isFinite(mk)) ? (mk / sub) : 1;
+  // When a target margin is active it is the SINGLE pricing driver for the
+  // work whose price has NOT been promised: every UNPROMISED line in the
+  // group is marked up by ONE uniform factor so the line prices + section
+  // subtotals sum EXACTLY to the target-driven group total (the same number
+  // computeTotals derives via resolveTargetMargin).
+  //
+  // ⚠ IT APPLIES TO THE UNPROMISED LINES ONLY, and the callers below are
+  // what enforce that — this returns the factor, not the decision. It used to
+  // sum every line's qty x unitCost, promised ones included, and then price
+  // every line by the result, which marks a promised line up to hit a target
+  // (the one thing a promise may not be) AND makes the rows sum to a number
+  // the Proposal Total chip does not print. The factor now comes from
+  // p86Pricing.targetFactorFor, whose contract is exactly
+  // "Σ rows === resolveTargetMargin(per, rec)" — see the identity written out
+  // over that function.
+  //
+  // It takes no line array any more, because it never needed one:
+  // applyTargetMargin is linear, so the factor is 1/(1 − t/100) whatever pool
+  // it is measured over.
+  function eeTargetFactor(est) {
+    return _P.targetFactorFor(est);
   }
+  // ONE line's money for the row paints. A promised line is its promise —
+  // the markup cascade and the target factor are both stood down, exactly as
+  // p86Pricing.lineMoney stands them down for the total.
   function eeLineMath(line) {
     var lines = getLines(), est = getEstimate();
-    var ext = num(line.qty) * num(line.unitCost);
-    var m = eeTargetDrives(est)
-      ? (eeTargetFactor(est, lines) - 1) * 100
-      : effectiveMarkupForLine(line, lines, est);
-    return { ext: ext, client: ext * (1 + m / 100), markupEff: m };
+    var mm = _P.lineMoney(line, lines, est);
+    if (mm.locked) {
+      // The percent this promise IMPLIES over its cost, for the greyed
+      // read-out. null on a zero-cost line — where there is no cost to
+      // imply a percent over, which is the Buildertrend flat-rate shape
+      // this field exists for.
+      var implied = mm.ext ? ((mm.sell / mm.ext) - 1) * 100 : null;
+      return { ext: mm.ext, client: mm.sell, markupEff: implied, promised: true };
+    }
+    // Unpromised, no target: mm.ext * (1 + mm.markup/100) IS mm.sell —
+    // character for character the number this returned before.
+    var m = eeTargetDrives(est) ? (eeTargetFactor(est) - 1) * 100 : mm.markup;
+    return { ext: mm.ext, client: mm.ext * (1 + m / 100), markupEff: m, promised: false };
+  }
+  // The Marked-Up cell's contents, built in ONE place so the render walk and
+  // the surgical refresh cannot paint a promised row two different ways (the
+  // refresh writes this with innerHTML; a textContent write would silently
+  // drop the mark on the first keystroke).
+  function eeAmountHTML(m) {
+    return fmtCurrency(m.client) + (m.promised
+      ? '<span class="ee-line-lockdot" title="Promised price — stated, not derived from cost">&#9679;</span>'
+      : '');
   }
 
   // Capture-phase tap handler so a card tap pre-empts the inline edit
@@ -3276,7 +3355,10 @@
       if (eeSameId(lines[i].id, id)) break;
     }
     var math = eeLineMath(line);
-    var _tmSheet = eeTargetDrives(getEstimate()); // target margin owns pricing → Markup is read-only
+    // A promise outranks a target margin on the row it sits on, so it is
+    // asked first — the sheet has to say which rule actually priced this line.
+    var _promisedSheet = !!math.promised;
+    var _tmSheet = !_promisedSheet && eeTargetDrives(getEstimate()); // target margin owns pricing → Markup is read-only
     var bd = document.createElement('div');
     bd.id = 'ee-line-sheet-backdrop';
     bd.className = 'ee-line-sheet-backdrop';
@@ -3297,10 +3379,14 @@
           '<label class="ee-sheet-field"><span>Unit Cost</span>' +
             '<input data-f="unitCost" type="text" inputmode="decimal" value="' + escapeHTML(line.unitCost == null ? '' : String(line.unitCost)) + '" /></label>' +
         '</div>' +
-        '<label class="ee-sheet-field"><span>Markup %' + (_tmSheet ? ' &#x1F3AF;' : '') + '</span>' +
-          (_tmSheet
+        '<label class="ee-sheet-field"><span>Markup %' + (_promisedSheet ? ' &#9679;' : (_tmSheet ? ' &#x1F3AF;' : '')) + '</span>' +
+          (_promisedSheet
+            ? '<input data-f="markup" type="text" value="' + (math.markupEff == null ? 'promised' : (Math.round(math.markupEff * 10) / 10)) + '" readonly title="This line has a promised Unit Sell, so its markup is implied rather than applied. Clear Unit Sell to price it from cost x markup." style="opacity:.6;" /></label>'
+            : _tmSheet
             ? '<input data-f="markup" type="text" value="' + (Math.round(math.markupEff * 10) / 10) + '" readonly title="Driven by the target margin — set it on the Margin chip" style="opacity:.6;" /></label>'
             : '<input data-f="markup" type="text" inputmode="decimal" value="' + escapeHTML(line.markup == null ? '' : String(line.markup)) + '" placeholder="blank = section (' + escapeHTML(String(Math.round(eeInheritedMarkup(line) * 10) / 10)) + '%)" /></label>') +
+        '<label class="ee-sheet-field"><span>Unit Sell</span>' +
+          '<input data-f="unitSell" type="text" inputmode="decimal" value="' + escapeHTML(line.unitSell == null ? '' : String(line.unitSell)) + '" placeholder="blank = cost x markup" title="The price promised to the owner, per unit. Leave blank to derive it from cost x markup." /></label>' +
         '<div class="ee-sheet-readouts">' +
           '<div><span>Extension</span><strong data-ro="ext">' + fmtCurrency(math.ext) + '</strong></div>' +
           '<div class="accent"><span>Client price</span><strong data-ro="client">' + fmtCurrency(math.client) + '</strong></div>' +
@@ -3320,9 +3406,19 @@
       var uc = num(sheet.querySelector('[data-f="unitCost"]').value);
       var ext = q * uc;
       var client;
+      // THE PROMISE IS READ OFF THE BOX, not off the stored line: the whole
+      // point of a live readout is to answer for what is typed in front of
+      // you. sellLocked's own rule, applied to the field's current value.
+      var usRaw = sheet.querySelector('[data-f="unitSell"]');
+      var usVal = usRaw ? usRaw.value : '';
+      if (_P.sellLocked({ unitSell: usVal })) {
+        sheet.querySelector('[data-ro="ext"]').textContent = fmtCurrency(ext);
+        sheet.querySelector('[data-ro="client"]').textContent = fmtCurrency(q * num(usVal));
+        return;
+      }
       if (_tmSheet) {
         // Target margin drives price — same uniform factor as the desktop table.
-        client = ext * eeTargetFactor(getEstimate(), getLines());
+        client = ext * eeTargetFactor(getEstimate());
       } else {
         var mkRaw = sheet.querySelector('[data-f="markup"]').value;
         var mk = (mkRaw === '' || mkRaw == null) ? eeInheritedMarkup(eeFindLine(id) || line) : num(mkRaw);
@@ -3412,7 +3508,7 @@
     // (per John), showing the target-implied % as a read-out. Mirrors how the
     // per-line markup cell greys in place.
     var tmA = eeTargetDrives(getEstimate());
-    var tmEffMarkup = tmA ? (Math.round(((eeTargetFactor(getEstimate(), getLines()) - 1) * 100) * 10) / 10) : 0;
+    var tmEffMarkup = tmA ? (Math.round(((eeTargetFactor(getEstimate()) - 1) * 100) * 10) / 10) : 0;
     var markupControlHTML = tmA
       ? '<div title="A target margin is driving every price — edit it on the Margin chip above. Clear the target to price by section markups." ' +
           'style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,0.18);padding:4px 10px;border-radius:14px;border:1px solid var(--border,#333);opacity:0.55;">' +
@@ -3468,7 +3564,12 @@
   }
 
   function renderLineItemRow(line, allLines, est) {
-    var ext = num(line.qty) * num(line.unitCost);
+    // ONE rule for this row's money — the same p86Pricing.lineMoney the
+    // totals run, so a promised line cannot be painted at a price the
+    // Proposal Total does not contain.
+    var mm = _P.lineMoney(line, allLines, est);
+    var promised = mm.locked;
+    var ext = mm.ext;
     var section = sectionHeaderFor(line, allLines);
     var sectionDollarMode = !!(section && section.markupMode === 'dollar');
     var sectionOverride = !!(section && section.overrideLineMarkups);
@@ -3478,10 +3579,21 @@
     // Override-on section: forced section %.
     // Otherwise: per-line override > section > est default.
     // When target margin is the driver, every line uses the one group factor.
-    var tmActive = eeTargetDrives(est);
-    var effective = tmActive ? (eeTargetFactor(est, allLines) - 1) * 100 : effectiveMarkupForLine(line, allLines, est);
-    var clientPrice = ext * (1 + effective / 100);
+    // A PROMISED line is priced by neither: not by the cascade, and not by
+    // the target factor. It is worth what it was promised at.
+    var tmActive = !promised && eeTargetDrives(est);
+    var effective = promised
+      ? (ext ? ((mm.sell / ext) - 1) * 100 : null)
+      : (eeTargetDrives(est) ? (eeTargetFactor(est) - 1) * 100 : mm.markup);
+    var clientPrice = promised ? mm.sell : ext * (1 + effective / 100);
     var inherited = sectionMarkupForLine(line, allLines, est);
+    // The per-unit price this line WOULD carry if the promise were cleared,
+    // shown greyed in the Unit Sell box so the derived answer stays visible
+    // beside the field that overrides it. Taken from the price this row
+    // actually paints and divided back out, never re-derived.
+    var derivedUnitSell = num(line.qty)
+      ? clientPrice / num(line.qty)
+      : num(line.unitCost) * (1 + (promised ? 0 : effective) / 100);
     // Placeholder hint for the per-line markup field.
     // - Override on: line markup is ignored either way; show "(forced)"
     //   with the section's % (or 0 in $ mode).
@@ -3563,14 +3675,27 @@
     // Markup cell: a live input in bottom-up mode; a greyed read-out of the
     // target-implied % when a target margin is the driver (you edit the target
     // on the Margin chip, not per line).
-    var markupCellHTML = tmActive
+    // Three arms now. A PROMISED line's markup is not merely overridden, it
+    // is not consulted at all — so the field is a read-out of the percent the
+    // promise implies (or the word, on a zero-cost line where no percent can
+    // be implied), with the reason on the tooltip. A markup box that still
+    // takes keystrokes while nothing reads them is the shape this arm exists
+    // to end.
+    var markupCellHTML = promised
+      ? '<div data-cell="markup" data-label="Markup %" title="This line has a promised Unit Sell, so its markup is implied rather than applied. Clear Unit Sell to price it from cost x markup." style="flex:0 0 90px;padding:4px 6px;">' +
+          '<div class="ee-markup-ro" style="width:100%;padding:6px 8px;font-size:12px;border:1px dashed var(--border,#333);border-radius:4px;text-align:right;font-variant-numeric:tabular-nums;color:#7eb0ff;background:rgba(126,176,255,0.07);">' +
+            (effective == null ? 'promised' : (Math.round(effective * 10) / 10) + '%') +
+          '</div>' +
+        '</div>'
+      : tmActive
       ? '<div data-cell="markup" data-label="Markup %" title="Driven by the target margin — clear the target on the Margin chip to edit markups" style="flex:0 0 90px;padding:4px 6px;">' +
-          '<div style="width:100%;padding:6px 8px;font-size:12px;border:1px dashed var(--border,#333);border-radius:4px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-dim,#888);background:rgba(251,191,36,0.06);">' +
+          '<div class="ee-markup-ro" style="width:100%;padding:6px 8px;font-size:12px;border:1px dashed var(--border,#333);border-radius:4px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-dim,#888);background:rgba(251,191,36,0.06);">' +
             (Math.round(effective * 10) / 10) + '%' +
           '</div>' +
         '</div>'
       : input('markup', line.markup, { flex: '0 0 90px', type: 'number', align: 'right', mono: true, placeholder: markupPlaceholder, label: 'Markup %' });
     return '<div data-line-id="' + idAttr + '" data-ee-row="line" ' +
+        (promised ? 'class="ee-line-promised" ' : '') +
         (_gated ? 'data-row-edit-gate data-editing="false" ' : '') +
         'style="display:flex;align-items:flex-start;border-bottom:1px solid var(--border,#333);">' +
       dragHandleHTML(line.id) +
@@ -3579,8 +3704,15 @@
       input('unit', line.unit, { flex: '0 0 70px', label: 'Unit' }) +
       input('unitCost', line.unitCost, { flex: '0 0 110px', type: 'number', align: 'right', mono: true, label: 'Unit Cost' }) +
       markupCellHTML +
+      // UNIT SELL — the price promised to the owner, per unit. Blank means
+      // "derive my price from cost x markup"; 0 is a REAL promise at $0, so
+      // nothing here ever writes 0 on the user's behalf and a new line is
+      // born with no key at all rather than with a '' one.
+      input('unitSell', line.unitSell, { flex: '0 0 110px', type: 'number', align: 'right', mono: true,
+        placeholder: fmtCurrency(derivedUnitSell).replace('$', ''), label: 'Unit Sell' }) +
       readOnly(fmtCurrency(ext), '0 0 110px', null, 'ee-line-ext') +
-      readOnly(fmtCurrency(clientPrice), '0 0 120px', null, 'ee-line-amount') +
+      readOnly(eeAmountHTML({ client: clientPrice, promised: promised }), '0 0 120px', null,
+        'ee-line-amount' + (promised ? ' ee-line-amount-promised' : '')) +
       '<div data-cell="delete" data-edit-gate-passthrough style="flex:0 0 36px;text-align:center;padding-top:5px;">' +
         '<button class="ee-btn ee-icon-btn danger" data-ee-act="line-delete" title="Delete line">&#x1F5D1;</button>' +
       '</div>' +
@@ -3611,6 +3743,7 @@
       '<div style="flex:0 0 70px;"></div>' +
       '<div style="flex:0 0 110px;"></div>' +
       '<div style="flex:0 0 90px;"></div>' +
+      '<div style="flex:0 0 110px;"></div>' +   /* Unit Sell */
       '<div style="flex:0 0 110px;text-align:right;font-variant-numeric:tabular-nums;font-size:12px;color:var(--text,#fff);padding:0 10px;">' + fmtCurrency(rawSum) + '</div>' +
       '<div class="ee-section-total" style="flex:0 0 120px;text-align:right;font-variant-numeric:tabular-nums;font-size:12px;font-weight:700;padding:0 10px;">' + fmtCurrency(markedUp) + '</div>' +
       '<div style="flex:0 0 36px;"></div>' +
@@ -3625,14 +3758,19 @@
     // group factor — the section markup + dollar-flat are ignored so the
     // subtotals sum to the target total.
     var tm = eeTargetDrives(est);
-    var f = tm ? eeTargetFactor(est, lines) : 1;
+    var f = tm ? eeTargetFactor(est) : 1;
     var sum = 0, marked = 0;
     for (var i = startIdx + 1; i < endIdx; i++) {
       var L = lines[i];
       if (!L || L.section === '__section_header__') continue;
-      var ext = num(L.qty) * num(L.unitCost);
-      sum += ext;
-      marked += tm ? (ext * f) : (ext * (1 + effectiveMarkupForLine(L, lines, est) / 100));
+      var mm = _P.lineMoney(L, lines, est);
+      sum += mm.ext;
+      // A promise is not scaled by the target factor and not re-derived from
+      // the cascade — it is the number it was promised at, which is exactly
+      // what lineMoney already returned. Summed this way the section
+      // subtotals still add to resolveTargetMargin's group total, because
+      // that is the identity targetFactorFor is built on.
+      marked += mm.locked ? mm.sell : (tm ? (mm.ext * f) : mm.sell);
     }
     // Dollar-mode section: tack on the flat $ once (bottom-up mode only).
     if (!tm && header && header.markupMode === 'dollar' && header.markup !== '' && header.markup != null) marked += num(header.markup);
@@ -3664,7 +3802,16 @@
       if (!row || !line) return;
       var m = eeLineMath(line);
       var extCell = row.querySelector('.ee-line-ext'); if (extCell) extCell.textContent = fmtCurrency(m.ext);
-      var amtCell = row.querySelector('.ee-line-amount'); if (amtCell) amtCell.textContent = fmtCurrency(m.client);
+      // innerHTML, not textContent: the promised row's mark lives in this
+      // cell and a text write would delete it on the first keystroke.
+      var amtCell = row.querySelector('.ee-line-amount'); if (amtCell) amtCell.innerHTML = eeAmountHTML(m);
+      // The greyed markup read-out — a promised line's IMPLIED percent moves
+      // when its cost does, and a target-driven row's percent moves when any
+      // line in the group does. An editable markup input is left alone.
+      var ro = row.querySelector('.ee-markup-ro');
+      if (ro) ro.textContent = (m.markupEff == null)
+        ? 'promised'
+        : (Math.round(m.markupEff * 10) / 10) + '%';
     };
     if (eeTargetDrives(est)) {
       // Target margin drives the WHOLE group via one factor, so editing any
@@ -3676,6 +3823,16 @@
       (appData.estimateLines || []).forEach(function(l) { if (l && l.id != null) byKey[eeKey(l.id)] = l; });
       container.querySelectorAll('[data-line-id]').forEach(function(row) {
         var L = byKey[row.getAttribute('data-line-id')];
+        if (L && L.section !== '__section_header__') updateRow(row, L);
+      });
+    } else if (_P.sellLocked(eeResolveLine(lineId) || {})) {
+      // A promised line is carved out of the target factor, so editing its
+      // COST moves every other line's price in the group even with no target
+      // set — repaint them all rather than the one row.
+      var byKeyP = Object.create(null);
+      (appData.estimateLines || []).forEach(function(l) { if (l && l.id != null) byKeyP[eeKey(l.id)] = l; });
+      container.querySelectorAll('[data-line-id]').forEach(function(row) {
+        var L = byKeyP[row.getAttribute('data-line-id')];
         if (L && L.section !== '__section_header__') updateRow(row, L);
       });
     } else {
@@ -3715,8 +3872,19 @@
     // clear-to-retype doesn't flash a 0 the user has to reselect.
     if (field === 'qty' || field === 'unitCost') line[field] = (value === '' || value == null) ? '' : num(value);
     else if (field === 'markup') line.markup = (value === '' || value == null) ? '' : num(value);
+    // BLANK STAYS BLANK, and that is load-bearing for unitSell exactly as it
+    // is in the CO editor: blank means "no promise, price me from cost" and 0
+    // means "promised at $0". Coercing a cleared field to 0 would lock the
+    // line at free, which is a price nobody typed.
+    else if (field === 'unitSell') line.unitSell = (value === '' || value == null) ? '' : num(value);
     else line[field] = value;
     debouncedSave();
+    // A promise is not a per-row edit. It changes this row's own chrome (the
+    // markup box becomes a read-out), it changes the Marked-Up cell's mark,
+    // and — because promised cost is carved out of the target-margin
+    // back-solve — it moves the price of every OTHER line in the group. None
+    // of that is reachable from the surgical path, so repaint.
+    if (field === 'unitSell') { renderLineItems(); renderTotals(); return; }
     // Assembly rollup lines carry an expanded breakdown strip whose component
     // qtys/costs derive from this line's qty — the surgical path can't refresh
     // that strip, so fall back to a full render for them (they're rare and not

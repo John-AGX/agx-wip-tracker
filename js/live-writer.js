@@ -212,7 +212,29 @@
     if (typeof l.id === 'string' && /^s\d/.test(l.id)) return true;
     return false;
   }
+  // The money one line is worth, for the diff's impact figure.
+  //
+  // A PROMISED unitSell wins outright, exactly as it does in
+  // js/pricing-pipeline.js: a line whose price was stated is worth qty x that
+  // price and its markup is not consulted. Without this, a Scribe write that
+  // sets a $20,000 flat rate on a zero-cost line reported an impact of $0.00
+  // and the person approving it was shown nothing to approve.
+  //
+  // THE PRESENCE TEST IS sellLocked'S, spelled out here rather than called,
+  // and the markup cascade is deliberately NOT shared. This function runs
+  // over BEFORE/AFTER snapshots of estimates AND change orders, it has no
+  // record to resolve a section or document default against, and its null
+  // return means "no number to show" — which p86Pricing's lenient num() does
+  // not have. Borrowing computeForLines here would change every existing
+  // impact figure in the panel to chase a fidelity a diff does not need.
+  // What it DOES need is to not be wrong by the whole line, which is what a
+  // promise silently ignored costs.
   function lineCost(l) {
+    if (l && l.unitSell !== '' && l.unitSell != null) {
+      var qp = num(l.qty), sp = num(l.unitSell);
+      if (qp == null || sp == null) return null;
+      return qp * sp;
+    }
     var q = num(l && l.qty), c = num(l && l.unitCost);
     if (q == null || c == null) return null;
     var base = q * c;
@@ -380,7 +402,7 @@
   function lineFieldChanges(b, a) {
     var out = [];
     var fields = [
-      ['qty', 'qty'], ['unit', 'unit'], ['unitCost', 'unit $'],
+      ['qty', 'qty'], ['unit', 'unit'], ['unitCost', 'unit $'], ['unitSell', 'unit sell'],
       ['markup', 'markup'], ['description', 'desc']
     ];
     fields.forEach(function (f) {
@@ -389,8 +411,12 @@
       var bn = num(bv), an = num(av);
       var same = (bn != null && an != null) ? (bn === an) : (String(bv == null ? '' : bv) === String(av == null ? '' : av));
       if (same) return;
-      var fb = (key === 'unitCost') ? usd(bn) : (bv == null || bv === '' ? '∅' : bv);
-      var fa = (key === 'unitCost') ? usd(an) : (av == null || av === '' ? '∅' : av);
+      // MONEY IS FORMATTED AS MONEY, and a cleared money field is ∅ rather
+      // than "$0.00" — on unitSell those are two different facts: ∅ means
+      // "no promise, price me from cost" and $0.00 means "promised at free".
+      var isMoney = (key === 'unitCost' || key === 'unitSell');
+      var fb = isMoney ? (bv == null || bv === '' ? '∅' : usd(bn)) : (bv == null || bv === '' ? '∅' : bv);
+      var fa = isMoney ? (av == null || av === '' ? '∅' : usd(an)) : (av == null || av === '' ? '∅' : av);
       out.push(label + ' ' + fb + '→' + fa);
     });
     return out;

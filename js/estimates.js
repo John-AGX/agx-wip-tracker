@@ -59,11 +59,16 @@ function computeEstimateTotals(est) {
         var sub0 = 0;
         allLines.forEach(function(l) { if (l.section !== '__section_header__') sub0 += num(l.qty) * num(l.unitCost); });
         return { baseCost: sub0, markedUp: sub0, blendedMarkup: 0, clientPrice: sub0, proposalTotal: sub0,
-                 feeFlat: 0, feePctAmount: 0, taxAmount: 0, lineCount: lineCount, sectionCount: sectionCount, targetMarginActive: false };
+                 feeFlat: 0, feePctAmount: 0, taxAmount: 0, lineCount: lineCount, sectionCount: sectionCount, targetMarginActive: false,
+                 promisedSell: 0, promisedSubtotal: 0, promisedCount: 0 };
     }
 
     var targetActive = P.targetMarginActive(est);
     var subtotal = 0, markedUp = 0;
+    // The promised half of the priced total, reported so a caller can say
+    // what the target margin was actually asked of. Summed over INCLUDED
+    // groups only, exactly like subtotal and markedUp.
+    var promisedSell = 0, promisedSubtotal = 0, promisedCount = 0;
     // Every priced set that went into `markedUp` — see the twin note in
     // server/services/money/estimate-totals.js. An estimate total is a SUM,
     // so applyFeesAndTax gets the PARTS and reads its pause from the lines
@@ -78,14 +83,30 @@ function computeEstimateTotals(est) {
             var per = P.computeForLines(est, allLines.filter(function(l) { return l.alternateId === alt.id; }));
             parts.push(per);
             subtotal += per.subtotal;
-            markedUp += targetActive ? P.applyTargetMargin(per.subtotal, est) : per.markedUp;
+            promisedSell += num(per.lockedSell); promisedSubtotal += num(per.lockedSubtotal);
+            promisedCount += num(per.promisedCount);
+    // ⚠ resolveTargetMargin, NOT resolveMarkedUp, and NOT the ternary this
+    // replaced. Three different numbers:
+    //   • the ternary discards a promised price under a target margin — it
+    //     back-solves the WHOLE group's cost, including the cost of lines
+    //     whose price was already promised;
+    //   • resolveMarkedUp would ALSO honour a document `targetPrice`, and on
+    //     a blob with no `alternates` key clientPriceRequested returns true
+    //     — so it would move the estimate lock this call site is not allowed
+    //     to touch (see the note over applyFeesAndTax below);
+    //   • resolveTargetMargin is the carve-out alone. On a group with no
+    //     promised line it returns the ternary's number character for
+    //     character, which is every estimate that exists today.
+            markedUp += P.resolveTargetMargin(per, est);
         });
     } else {
         // Legacy estimate with no alternates[] — one implicit group of all lines.
         var per = P.computeForLines(est, allLines);
         parts.push(per);
         subtotal = per.subtotal;
-        markedUp = targetActive ? P.applyTargetMargin(per.subtotal, est) : per.markedUp;
+        promisedSell = num(per.lockedSell); promisedSubtotal = num(per.lockedSubtotal);
+        promisedCount = num(per.promisedCount);
+        markedUp = P.resolveTargetMargin(per, est);   // see the note above
     }
 
     var fees = P.applyFeesAndTax(markedUp, est, P.sumOfPriced(parts));
@@ -101,7 +122,10 @@ function computeEstimateTotals(est) {
         taxAmount: fees.taxAmount,
         lineCount: lineCount,
         sectionCount: sectionCount,
-        targetMarginActive: targetActive
+        targetMarginActive: targetActive,
+        promisedSell: promisedSell,
+        promisedSubtotal: promisedSubtotal,
+        promisedCount: promisedCount
     };
 }
 
@@ -1486,18 +1510,42 @@ function renderEstimatesList() {
     if (!estimate) { alert('Estimate not found'); return; }
 
     const lineItems = appData.estimateLines.filter(line => line.estimateId === estId);
+    // ⚠ SECTION MEMBERSHIP IS ARRAY ORDER, HEADER-DELIMITED — it is not a
+    // section NAME on each line. This walk used to bucket on `line.section`
+    // as a string, which on every estimate written since the section-header
+    // model landed files each real line under the literal name
+    // "__section_header__" and prints the header rows as line items. It now
+    // walks in order, exactly as js/estimate-preview.js's groupSections does.
     const sections = {};
+    const sectionOrder = [];
     let unsectionedItems = [];
+    let curSection = null;
     lineItems.forEach(line => {
-      if (line.section) { if (!sections[line.section]) sections[line.section] = []; sections[line.section].push(line); }
+      if (line.section === '__section_header__') {
+        curSection = line.description || 'Section';
+        if (!sections[curSection]) { sections[curSection] = []; sectionOrder.push(curSection); }
+        return;
+      }
+      if (curSection) sections[curSection].push(line);
       else unsectionedItems.push(line);
     });
-    let totalBaseCost = 0, totalClientPrice = 0;
+    // ⚠ ONE CASCADE, THE SHARED ONE. Every figure below now comes from
+    // window.p86Pricing (per line) and computeEstimateTotals (the footer), so
+    // this modal cannot quote a different price from the Proposal Total chip,
+    // the proposal document or the Buildertrend export. It hand-rolled
+    // `base * (1 + (line.markup||0)/100)` — which ignores section markups,
+    // the estimate default, the target margin, fees, tax, the round-up and a
+    // promised unitSell — and it is a CLIENT-FACING price.
+    const _P = window.p86Pricing;
+    const lineSell = (l) => _P.lineMoney(l, lineItems, estimate).sell;
+    const linePromised = (l) => _P.sellLocked(l);
+    const _t = (typeof computeEstimateTotals === 'function') ? computeEstimateTotals(estimate) : null;
+    let totalBaseCost = 0;
     lineItems.forEach(line => {
-      const base = (line.qty || 0) * (line.unitCost || 0);
-      totalBaseCost += base;
-      totalClientPrice += base * (1 + (line.markup || 0) / 100);
+      if (line.section === '__section_header__') return;
+      totalBaseCost += (parseFloat(line.qty) || 0) * (parseFloat(line.unitCost) || 0);
     });
+    const totalClientPrice = _t ? _t.proposalTotal : 0;
     let h = '';
     h += '<div style="text-align:center;margin-bottom:30px;border-bottom:2px solid #ddd;padding-bottom:15px;">';
     h += '<h1 style="margin:0 0 5px 0;font-size:24px;">Project 86 Central Florida</h1>';
@@ -1521,25 +1569,30 @@ function renderEstimatesList() {
     h += '<th style="border:1px solid #ccc;padding:8px;text-align:right;width:100px;">Unit Price</th>';
     h += '<th style="border:1px solid #ccc;padding:8px;text-align:right;width:110px;">Total</th></tr></thead><tbody>';
     const renderLine = (line) => {
-      const base = (line.qty || 0) * (line.unitCost || 0);
-      const client = base * (1 + (line.markup || 0) / 100);
-      return '<tr><td style="border:1px solid #ccc;padding:8px;">' + escapeHTML(line.description || '') + '</td>' +
+      const client = lineSell(line);
+      return '<tr><td style="border:1px solid #ccc;padding:8px;">' + escapeHTML(line.description || '') +
+        (linePromised(line) ? '<span title="Promised price — stated, not derived from cost" style="margin-left:6px;color:#2f6fd0;font-size:10px;">&#9679;</span>' : '') + '</td>' +
         '<td style="border:1px solid #ccc;padding:8px;text-align:center;">' + (line.qty || 0) + '</td>' +
         '<td style="border:1px solid #ccc;padding:8px;text-align:center;">' + (line.unit || '') + '</td>' +
         '<td style="border:1px solid #ccc;padding:8px;text-align:right;">' + formatCurrency(line.unitCost || 0) + '</td>' +
         '<td style="border:1px solid #ccc;padding:8px;text-align:right;">' + formatCurrency(client) + '</td></tr>';
     };
     unsectionedItems.forEach(l => { h += renderLine(l); });
-    Object.keys(sections).forEach(name => {
-      h += '<tr style="background:#f9f9f9;font-weight:bold;"><td colspan="5" style="border:1px solid #ccc;padding:10px 8px;">' + name + '</td></tr>';
+    sectionOrder.forEach(name => {
+      h += '<tr style="background:#f9f9f9;font-weight:bold;"><td colspan="5" style="border:1px solid #ccc;padding:10px 8px;">' + escapeHTML(name) + '</td></tr>';
       let secTotal = 0;
-      sections[name].forEach(l => { h += renderLine(l); const b = (l.qty||0)*(l.unitCost||0); secTotal += b*(1+(l.markup||0)/100); });
+      sections[name].forEach(l => { h += renderLine(l); secTotal += lineSell(l); });
       h += '<tr style="background:#f0f0f0;font-weight:bold;"><td colspan="4" style="border:1px solid #ccc;padding:8px;text-align:right;">Section Subtotal:</td>';
       h += '<td style="border:1px solid #ccc;padding:8px;text-align:right;">' + formatCurrency(secTotal) + '</td></tr>';
     });
     h += '</tbody></table>';
     h += '<div style="text-align:right;margin-top:20px;">';
     h += '<div style="margin-bottom:10px;">Base Cost: <span style="margin-left:50px;">' + formatCurrency(totalBaseCost) + '</span></div>';
+    // The PROPOSAL TOTAL — target margin, fees, tax and round-up included, so
+    // it is the same number the editor's chip and the proposal print. The
+    // per-line prices above are the marked-up line extensions, which do not
+    // include the document-level fees; that is how a schedule of values
+    // reconciles and it is what js/estimate-preview.js does too.
     h += '<div style="font-size:16pt;color:#2ecc71;font-weight:bold;">Client Price: <span style="margin-left:30px;">' + formatCurrency(totalClientPrice) + '</span></div></div>';
     document.getElementById('estimatePreview_content').innerHTML = h;
     openModal('estimatePreviewModal');
