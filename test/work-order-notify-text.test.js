@@ -425,6 +425,7 @@ describe('crew activity', () => {
 describe('digest and waiting reminder', () => {
   const t2 = { id: 'st2', job_id: 'j2', title: 'Second job punch' };
   const sections = {
+    your_buildings: [{ ticket: t2, jobLine: 'M1002 · Pines', count: 3, nextDue: '2026-09-21' }],
     approvals: [{ ticket: TICKET, site: SITE, daysWaiting: 3, over: true }],
     flags: [{ ticket: t2, jobLine: 'M1002 · Pines', category: 'no_access', flaggedAt: '2026-09-14T15:00:00Z' }],
     overdue: [{ ticket: t2, jobLine: 'M1002 · Pines', dueDate: '2026-09-12', done: 1, total: 3 }],
@@ -440,6 +441,9 @@ describe('digest and waiting reminder', () => {
     expect(m.text).toBe([
       'Good morning, Paula',
       '2 work orders need your attention.',
+      // FIRST: since 1.33 a building is on no task list, so for the person it
+      // is assigned to this row is the only place the work is named.
+      'Buildings assigned to you (1)\n- Second job punch\n  M1002 · Pines · 3 buildings still open · next due Mon Sep 21\n  ' + L2,
       'Ready for your approval (1)\n- Latitude 28 punch list\n  M1001 · BH Management Latitude · waiting 3 days · over 2 business days\n  ' + LINK,
       'Problems flagged by crews (1)\n- Second job punch\n  M1002 · Pines · No access · flagged Mon Sep 14\n  ' + L2,
       'Overdue (1)\n- Second job punch\n  M1002 · Pines · due Sat Sep 12 · 1 of 3 buildings done\n  ' + L2,
@@ -453,11 +457,37 @@ describe('digest and waiting reminder', () => {
     expect(m.html).toContain('>Open Service Tickets</a>');
     expect(m.push).toEqual({
       title: '🛠 Work orders need you',
-      body: '1 to approve · 1 problem flagged · 1 overdue · 1 link not opened · 1 link expiring · 1 suggestion waiting',
+      body: '1 work order with your buildings · 1 to approve · 1 problem flagged · 1 overdue · 1 link not opened · 1 link expiring · 1 suggestion waiting',
       url: 'https://project86.net/service-tickets',
       tag: 'work_order_digest',
     });
     expect(m.subject + m.text + m.html).not.toMatch(MONEY);
+  });
+
+  test('buildings assigned to you: the heading, the count, the day, the push fragment, and nothing priced', () => {
+    const m = T.digestMessage({
+      recipient: { name: 'Carl Crew' }, zone: 'America/New_York',
+      sections: {
+        your_buildings: [
+          { ticket: TICKET, site: SITE, count: 1, nextDue: '2026-09-18' },
+          { ticket: t2, jobLine: 'M1002 · Pines', count: 4, nextDue: null },
+        ],
+      },
+    });
+    // A crew lead with nothing but buildings still gets a digest, and no
+    // "[N to approve]" prefix: the subject keys on approvals alone.
+    expect(m.subject).toBe('Work orders needing you today (2)');
+    expect(m.text).toContain('Buildings assigned to you (2)');
+    expect(m.text).toContain('M1001 · BH Management Latitude · 1 building still open · next due Fri Sep 18');
+    // No due date on any of them: the count alone, never "next due " with nothing after it.
+    expect(m.text).toContain('M1002 · Pines · 4 buildings still open\n');
+    expect(m.text).not.toContain('next due \n');
+    expect(m.html).toContain('Buildings assigned to you (2)');
+    expect(m.html).toContain('4 buildings still open');
+    expect(m.push.body).toBe('2 work orders with your buildings');
+    // The widening is the job line and the title, and stops there.
+    expect(m.subject + m.text + m.html).not.toMatch(MONEY);
+    expect(m.subject + m.text + m.html).not.toMatch(/[$£€]\s?\d|\b\d+\.\d{2}\b/);
   });
 
   test('no approvals: no prefix; one ticket reads singular; no link sent', () => {
@@ -487,6 +517,73 @@ describe('digest and waiting reminder', () => {
     const one = T.waitingReminderMessage({ items: [{ ticket: TICKET, site: SITE, businessDays: 3 }], overDays: 1 });
     expect(one.subject).toBe('Still waiting for approval: 1 work order');
     expect(one.push.body).toBe('1 work order has waited more than 1 business day.');
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * THE SETTINGS ROW DESCRIBES WHAT THE DIGEST ACTUALLY SENDS.
+ *
+ * server/notify-events.js work_order_digest carries an EXHAUSTIVE trigger list
+ * ("only when a work order needs you: …"), and it is the row people land on to
+ * turn the digest off — the 1.33 release note sends them there by name. When
+ * DIGEST_SECTIONS gained `your_buildings`, the digest started reaching people
+ * it had never reached (a crew lead on none of the other six, holding no job
+ * grant), and the row they land on still listed six things.
+ *
+ * So: every key in DIGEST_SECTIONS must be named in that sentence, and the map
+ * below must cover exactly those keys — a new section with no phrase fails
+ * here, in the file that added it, instead of shipping a description of
+ * something other than what people receive.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('the work_order_digest settings description', () => {
+  // DIGEST_SECTIONS is module-private (it is render order, not API), so its
+  // keys are read from the source rather than re-typed here.
+  const digestSectionKeys = () => {
+    const src = fs.readFileSync(REAL, 'utf8').replace(/\r\n/g, '\n');
+    const a = src.indexOf('const DIGEST_SECTIONS = Object.freeze([');
+    expect(a).toBeGreaterThan(-1);
+    const block = src.slice(a, src.indexOf(']);', a));
+    return (block.match(/key: '([a-z_]+)'/g) || []).map((s) => s.slice(6, -1));
+  };
+
+  // What each section's trigger is CALLED in the settings sentence. Plain
+  // words, because the sentence is read by the person deciding whether to
+  // keep the email — not by a developer.
+  const PHRASES = {
+    your_buildings: 'a building on it assigned to you and still open',
+    approvals: 'waiting for your approval',
+    flags: 'flagged problems waiting',
+    overdue: 'overdue',
+    unopened: 'scheduled today or tomorrow with the crew link not opened',
+    expiring: 'a crew link about to expire',
+    suggestions: 'suggestions',
+  };
+
+  const descOf = (key) => {
+    const { NOTIFY_EVENTS } = require('../server/notify-events');
+    const row = NOTIFY_EVENTS.find((e) => e.key === key);
+    expect(row).toBeDefined();
+    return row.desc;
+  };
+
+  test('the phrase map covers exactly the sections the digest renders', () => {
+    expect(digestSectionKeys().slice().sort()).toEqual(Object.keys(PHRASES).sort());
+  });
+
+  test('every section the digest can hold is named in the settings row', () => {
+    const desc = descOf('work_order_digest');
+    for (const key of digestSectionKeys()) {
+      expect([key, desc]).toEqual([key, expect.stringContaining(PHRASES[key])]);
+    }
+  });
+
+  test("MUTANT: drop the buildings phrase and the row describes something the digest isn't", () => {
+    const desc = descOf('work_order_digest').replace(PHRASES.your_buildings + ', ', '');
+    expect(desc).not.toContain(PHRASES.your_buildings);
+    // Red exactly where 1.33 was: six of the seven still named.
+    const named = digestSectionKeys().filter((k) => desc.indexOf(PHRASES[k]) !== -1);
+    expect(named).not.toContain('your_buildings');
+    expect(named).toHaveLength(digestSectionKeys().length - 1);
   });
 });
 

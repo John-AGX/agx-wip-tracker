@@ -1103,12 +1103,22 @@
 
   // The ticket's child tasks — what makes this the tier ABOVE tasks.
   //
-  // These are real org tasks, not a private sub-list: each one keeps its
-  // entity_type='job' / entity_id, so it ALSO appears on the job's Tasks panel
-  // and in the My Tasks "Job" column. That is the entire reason the ticket got
-  // its own column on tasks rather than claiming the polymorphic slot, and the
-  // note below says so on screen because it is otherwise invisible and someone
-  // will eventually "tidy it up".
+  // HOW THEY ARE STORED is unchanged, and still right: each building is a real
+  // org task that keeps its entity_type='job' / entity_id alongside its
+  // service_ticket_id. That is the entire reason the ticket got its own column
+  // on tasks rather than claiming the polymorphic slot — a building survives
+  // any job-scoped join, and a ticket can later be re-pointed at a different
+  // job without orphaning its punch list. Do not "tidy" that away.
+  //
+  // WHAT CHANGED IN 1.33 IS THE READ RULE. A building is not a to-do, so it no
+  // longer shows up on any general task list: every one of them now excludes
+  // these rows through server/services/service-ticket-subtask-door.js
+  // notAWorkOrderBuildingSql (a row is NOT a building when service_ticket_id
+  // IS NULL OR scope = 'personal'). Nobody lost sight of work assigned to
+  // them — the replacements are Service Tickets → My work (the assignee-based
+  // door, which deliberately ignores job access), the work-orders strip on My
+  // Day, the buildings line in the job and lead Tasks panel headers, and the
+  // morning digest. The note under the Add box says this on screen.
   //
   // Each task is a work-order SUBTASK: one per building, with its own before
   // and completion photos, crew notes, and a complete box. Completing needs at
@@ -1154,8 +1164,9 @@
           '<input type="text" class="p86-st-task-new" placeholder="Add a subtask — e.g. Bldg 790 — Side A: …" />' +
           '<button class="ee-btn secondary p86-st-task-go">Add</button>' +
         '</div>' +
-        '<div class="p86-st-task-note">Subtasks stay on the job\'s Tasks list and in My Tasks — ' +
-          'the work order groups them, it does not hide them.</div>'
+        '<div class="p86-st-task-note">Buildings live on the work order. They are not on the ' +
+          'job\'s Tasks list or in My Tasks — whoever a building is assigned to finds it under ' +
+          'Service Tickets → My work.</div>'
       : '';
   }
 

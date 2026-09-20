@@ -35,6 +35,10 @@
 const { pool } = require('./db');
 const { sendEmail } = require('./email');
 const tz = require('./timezone');
+// "A building on a work order is not a task" — the ONE predicate, shared with
+// GET /api/tasks and 86's task reads so the morning email and the screen can
+// never disagree about what is on someone's list.
+const subtaskDoor = require('./services/service-ticket-subtask-door');
 
 var ONE_DAY_MS = 24 * 60 * 60 * 1000;
 var TICK_MS = 10 * 60 * 1000;          // 10-minute cadence
@@ -111,6 +115,25 @@ function pruneFireLog(log) {
 // "today" is missed near the date boundary), grouped by assignee, with the
 // assignee's resolved timezone. Per-user local-day filtering happens in
 // runOnce against each user's own zone.
+// TWO FIXES, 1.33.
+//
+// 1. THE MISSING ORGANIZATION PREDICATE. This statement had none at all. It
+//    joined users on assignee_user_id and never asked whether the task's org
+//    is the user's — the same false premise 86's today-digest was built on.
+//    `users.organization_id` is MUTABLE, so someone who moved companies stayed
+//    the assignee on their old company's tasks and kept receiving that
+//    company's task titles by email, every morning, forever.
+//    `t.organization_id = u.organization_id` is the whole fix: the digest is a
+//    letter to a person about their own tenant's work.
+//
+// 2. A BUILDING ON A WORK ORDER IS NOT A TASK, so it is not in this email.
+//    A job's twelve buildings used to fill the morning mail and bury the real
+//    to-dos. They did not go silent: buildings are reported by the WORK ORDERS
+//    morning digest (server/work-order-notify-cron.js, which knows about the
+//    photo rule, approvals and flags) and are reachable from Service Tickets →
+//    My work. The rule is the one predicate in
+//    server/services/service-ticket-subtask-door.js so it cannot drift from
+//    the one GET /api/tasks applies.
 async function gatherTaskDigests() {
   var sql = [
     'SELECT t.assignee_user_id AS uid, u.email, u.name, u.notification_prefs,',
@@ -121,6 +144,8 @@ async function gatherTaskDigests() {
     'JOIN users u ON u.id = t.assignee_user_id',
     'LEFT JOIN organizations o ON o.id = u.organization_id',
     "WHERE t.archived_at IS NULL AND t.status <> 'done' AND t.scope = 'org'",
+    '  AND t.organization_id = u.organization_id',
+    '  AND ' + subtaskDoor.notAWorkOrderBuildingSql('t'),
     "  AND t.due_date IS NOT NULL AND t.due_date <= CURRENT_DATE + INTERVAL '1 day'",
     '  AND u.active = TRUE AND u.email IS NOT NULL AND u.email <> %3',
     'ORDER BY t.assignee_user_id, t.due_date ASC'
@@ -474,4 +499,9 @@ function start() {
   console.log('[reminders] scanner armed; tick every ' + Math.round(TICK_MS / 60000) + ' min');
 }
 
-module.exports = { start: start, runOnce: runOnce };
+// gatherTaskDigests is exported for the same reason the read doors elsewhere
+// are: the two rules it carries — the organization predicate and "a building
+// is not a task" — are held by RUNNING the statement against rows, not by
+// reading the string. runOnce() cannot be driven for that (it gates on each
+// recipient's local clock and then sends mail), so the query is exported.
+module.exports = { start: start, runOnce: runOnce, gatherTaskDigests: gatherTaskDigests };

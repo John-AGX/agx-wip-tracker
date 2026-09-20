@@ -63,6 +63,68 @@ function isWorkOrderSubtask(task) {
     String(task.service_ticket_id) !== '' && !task.archived_at);
 }
 
+// ── THE SAME RULE IN SQL (1.33) ────────────────────────────────────────────
+//
+// The owner's rule for this release: "service tickets are not to be confused
+// with tasks, they are two different things; the subtasks in a service ticket
+// shouldn't show up on any task lists separately." A building is not a to-do,
+// so every task-list READ subtracts the buildings — and the only way SQL and
+// isWorkOrderSubtask above cannot drift apart is for both to live here.
+//
+//   notAWorkOrderBuildingSql(alias)   the negation, for a task list's WHERE
+//   myOpenBuildingSql(t, $n)          "this ticket has a live org building,
+//                                      not done, assigned to me" — the
+//                                      replacement read's whole predicate
+//
+// Buildings leaving the task lists is only SAFE because myOpenBuildingSql
+// gives their assignee somewhere else to see and reach them
+// (GET /api/service-tickets/my-buildings).
+
+// The SQL negation of isWorkOrderSubtask, for the WHERE of a task list.
+//
+// The `scope` arm is LOAD-BEARING, not belt-and-braces. server/routes/
+// tasks-routes.js (the POST handler's `onWorkOrder` branch) treats a PERSONAL
+// to-do carrying a service_ticket_id as its owner's own and never a subtask —
+// it is not on the punch list and no work-order rule touches it. So a bare
+// `service_ticket_id IS NULL` here would hide a private to-do from the only
+// person who can see it at all: its owner.
+//
+// `archived_at IS NULL` is deliberately NOT repeated. It is already in the
+// base WHERE of every list that will use this, and a second copy would read
+// as though this predicate were the one deciding it.
+function notAWorkOrderBuildingSql(alias) {
+  const t = String(alias == null ? 't' : alias);
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(t)) throw new Error('notAWorkOrderBuildingSql: bad table alias');
+  return '(' + t + '.service_ticket_id IS NULL OR ' + t + ".scope = 'personal')";
+}
+
+// "This ticket has a live org building, not done, assigned to me."
+//
+// Assignment is the ONLY key. This is deliberately NOT the job-access rule
+// (services/service-ticket-access.js listVisibility): doneVerdict above lets a
+// task's assignee finish a building on a job they cannot otherwise open, so a
+// replacement gated on job access would show that person nothing — which is
+// exactly the regression removing buildings from the task lists must not
+// cause. It is also deliberately NOT an arm on work-order-recipients.js
+// myTicketRelationSql: that SQL's only consumer is the board's "My approvals",
+// and an arm there would make every building assignee an approver.
+//
+// Every column is pinned to the TICKET's own organization, so a building can
+// never be reached on the ticket id alone.
+function myOpenBuildingSql(ticketAlias, meRef) {
+  const t = String(ticketAlias == null ? 't' : ticketAlias);
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(t)) throw new Error('myOpenBuildingSql: bad table alias');
+  const me = String(meRef);
+  if (!/^\$\d+$/.test(me)) throw new Error('myOpenBuildingSql: the user must be a $n parameter');
+  return 'EXISTS (SELECT 1 FROM tasks wob' +
+    ' WHERE wob.service_ticket_id = ' + t + '.id' +
+    ' AND wob.organization_id = ' + t + '.organization_id' +
+    ' AND wob.archived_at IS NULL' +
+    " AND wob.scope = 'org'" +
+    " AND wob.status <> 'done'" +
+    ' AND wob.assignee_user_id = ' + me + ')';
+}
+
 // Tickets are always locked in sorted id order, so two requests moving tasks
 // between the same two tickets cannot deadlock. Every door locks the ticket
 // before it touches a task.
@@ -176,6 +238,8 @@ function notifyMoves(list, actor, sharedBy, db) {
 module.exports = {
   MSG,
   isWorkOrderSubtask,
+  notAWorkOrderBuildingSql,
+  myOpenBuildingSql,
   lockTickets,
   doneVerdict,
   structureVerdict,

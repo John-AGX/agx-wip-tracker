@@ -30,7 +30,12 @@ const NOTIFY_EVENTS = [
   { key: 'ticket_assignment',    group: 'Work orders', label: 'Work order assignments',     desc: 'When someone assigns a work order to you.', channels: { email: true, push: true } },
   { key: 'ticket_problem',       group: 'Work orders', label: 'Problems flagged by crews',  desc: 'Right away, when a crew flags a problem on a work order you run, sent the link for, are assigned to or are watching: no access, extra damage, material short, a safety issue or something else.', channels: { email: true, push: true } },
   { key: 'ticket_crew_activity', group: 'Work orders', label: 'Crew activity',              desc: 'What crews do on the crew link: opening it the first time, starting work, finishing or reopening buildings, photos, notes and suggestions. At most one notice per work order every 30 minutes.', channels: { email: true, push: true } },
-  { key: 'work_order_digest',    group: 'Work orders', label: 'Work orders morning digest', desc: 'One message on weekday mornings, only when a work order needs you: waiting for your approval, overdue, scheduled today or tomorrow with the crew link not opened, a crew link about to expire, suggestions or flagged problems waiting.', channels: { email: true, push: true } },
+  // THE DESC IS THE WHOLE TRIGGER LIST, and people turn the digest off from
+  // this row — so it has to name every section the digest can hold. 1.33 added
+  // the first one: a building assigned to you now reaches you here instead of
+  // on a task list. test/work-order-notify-text.test.js holds every key in
+  // DIGEST_SECTIONS against this sentence so the next one cannot slip in.
+  { key: 'work_order_digest',    group: 'Work orders', label: 'Work orders morning digest', desc: 'One message on weekday mornings, only when a work order needs you: a building on it assigned to you and still open, waiting for your approval, overdue, scheduled today or tomorrow with the crew link not opened, a crew link about to expire, suggestions or flagged problems waiting.', channels: { email: true, push: true } },
   { key: 'job_assignment',      label: 'Job assignments',        desc: 'When you’re assigned (or reassigned) as the PM on a job.',             channels: { email: true, push: false } },
   { key: 'password_reset',      label: 'Password resets',        desc: 'When an admin resets your password. Recommended to leave on.',              channels: { email: true, push: false } }
 ];

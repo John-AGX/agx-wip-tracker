@@ -2,10 +2,19 @@
 // calendar events, their field-schedule assignments, and their tasks due
 // today/overdue into one "here's your day" hub.
 //
-// Read-only aggregation over existing APIs (calendar / schedule / tasks);
-// no new server surface. Each row deep-links back to its source (event →
-// Schedule, task → task detail). Painted by renderMyDayTab() into the
+// Read-only aggregation over existing APIs (calendar / schedule / tasks /
+// service-ticket "my buildings"); no new server surface of its own. Each row
+// deep-links back to its source (event → Schedule, task → task detail,
+// building → its task detail). Painted by renderMyDayTab() into the
 // #my-day tab-content pane (wired in app.js switchTab).
+//
+// WHY THE WORK-ORDERS STRIP EXISTS. Release 1.33 took work-order buildings off
+// every task list — a building is not a to-do, it is a line on a work order.
+// That removal would otherwise strand the person the building is assigned to,
+// so this strip is where their buildings surface instead: fed by the
+// assignee-based my-buildings door (NOT job access — a crew lead is
+// deliberately allowed to finish a building on a job they cannot open), and
+// each building row opens its task detail so it can still be finished.
 //
 // Scope: personal. Events + tasks are owner-scoped server-side; schedule
 // entries are filtered client-side to ones whose crew includes the user.
@@ -170,21 +179,38 @@
       ? window.p86Api.tasks.list({ assignee: 'me', exclude_done: 1, limit: 200 })
       : Promise.resolve({ tasks: [] })).catch(function () { return { tasks: [] }; });
 
+    // Work orders where I am the assignee of a live building. Its own narrow,
+    // assignee-based door — deliberately NOT gated on job access. Guarded for
+    // an older cached api.js that predates the endpoint, and failure-isolated
+    // like every other feed: no strip, never a broken day.
+    var pWorkOrders = (function () {
+      var p = null;
+      try {
+        if (window.p86Api.serviceTickets && typeof window.p86Api.serviceTickets.myBuildings === 'function') {
+          p = window.p86Api.serviceTickets.myBuildings({ limit: 100 });
+        }
+      } catch (e) { p = null; }
+      if (!p || typeof p.then !== 'function') return Promise.resolve({ tickets: [] });
+      return p.then(function (r) { return r; }, function () { return { tickets: [] }; });
+    })();
+
     // H4 — email layer: the user's dropbox conversations, so the day
     // starts with "what came in overnight / what needs a reply".
     var pEmail = fetch('/api/email-inbox/threads?limit=50', { credentials: 'include' })
       .then(function (r) { return r.ok ? r.json() : { threads: [] }; })
       .catch(function () { return { threads: [] }; });
 
-    Promise.all([pEvents, pSchedule, pTasks, pEmail]).then(function (res) {
+    Promise.all([pEvents, pSchedule, pTasks, pEmail, pWorkOrders]).then(function (res) {
       var events = (res[0] && (res[0].events || res[0])) || [];
       var sched = (res[1] && (res[1].entries || res[1].schedule || res[1])) || [];
       var tasks = (res[2] && (res[2].tasks || res[2])) || [];
       var emailThreads = (res[3] && res[3].threads) || [];
+      var woTickets = (res[4] && res[4].tickets) || [];
       if (!Array.isArray(events)) events = [];
       if (!Array.isArray(sched)) sched = [];
       if (!Array.isArray(tasks)) tasks = [];
       if (!Array.isArray(emailThreads)) emailThreads = [];
+      if (!Array.isArray(woTickets)) woTickets = [];
 
       var today = todayISO();
 
@@ -210,6 +236,21 @@
         return dateOnly(t.due_date) <= today;
       }).sort(function (a, b) { return dateOnly(a.due_date) < dateOnly(b.due_date) ? -1 : 1; });
 
+      // Work orders that need me today. Bare YYYY-MM-DD string comparison via
+      // dateOnly(), never new Date() arithmetic: a DATE column compared as an
+      // instant flips a day for anyone east or west of UTC late in the evening
+      // (test/calendar-dates-vs-instants.test.js audits this file for exactly
+      // that). Any one of: my next building is due on or before today, the work
+      // order itself is due on or before today, or it is scheduled for today.
+      var workOrders = woTickets.filter(function (w) {
+        if (!w) return false;
+        var nd = dateOnly(w.my_next_due);
+        if (nd && nd <= today) return true;
+        var dd = dateOnly(w.due_date);
+        if (dd && dd <= today) return true;
+        return !!dateOnly(w.scheduled_for) && dateOnly(w.scheduled_for) === today;
+      });
+
       // Email summary: overnight (last ~18h) + threads that need a reply.
       // Exclude threads whose newest message is my OWN captured reply — those
       // aren't newly-arrived mail (their received_at is my send time), so they
@@ -222,17 +263,18 @@
       var needsReply = emailThreads.filter(function (t) { return t.needs_reply; });
       var email = { total: emailThreads.length, overnight: overnight.length, needsReply: needsReply, top: needsReply.slice(0, 3) };
 
-      renderDay(body, evToday, schToday, tasksDue, email, opts);
+      renderDay(body, evToday, schToday, tasksDue, workOrders, email, opts);
     }).catch(function (err) {
       body.innerHTML = '<div class="myday-err">Could not load your day: ' + esc(err && err.message || '') + '</div>';
     });
   }
 
-  function renderDay(body, events, sched, tasks, email, opts) {
+  function renderDay(body, events, sched, tasks, workOrders, email, opts) {
     opts = opts || {};
+    workOrders = Array.isArray(workOrders) ? workOrders : [];
     email = email || { total: 0, overnight: 0, needsReply: [], top: [] };
     var emailHtml = (opts.showEmail === false) ? '' : renderEmailBlock(email);
-    var total = events.length + sched.length + tasks.length;
+    var total = events.length + sched.length + tasks.length + workOrders.length;
     if (!total) {
       if (emailHtml) {
         body.innerHTML = emailHtml +
@@ -256,6 +298,7 @@
     var bits = [];
     if (events.length) bits.push(events.length + ' event' + (events.length === 1 ? '' : 's'));
     if (sched.length) bits.push(sched.length + ' field assignment' + (sched.length === 1 ? '' : 's'));
+    if (workOrders.length) bits.push(workOrders.length + ' work order' + (workOrders.length === 1 ? '' : 's'));
     if (tasks.length) bits.push(tasks.length + ' task' + (tasks.length === 1 ? '' : 's') + ' due');
     // Email block leads the day (first-line-of-contact context).
     var html = emailHtml + '<div class="myday-summary">' + esc(bits.join(' · ')) + '</div>';
@@ -306,6 +349,56 @@
             '<span class="myday-chip" style="background:rgba(251,191,36,0.16);color:#fbbf24;">' + esc(s.status || 'planned') + '</span></div>' +
             (s.notes ? '<div class="myday-meta">' + esc(String(s.notes).slice(0, 120)) + '</div>' : '<div class="myday-meta">Field assignment</div>') +
           '</div></div>';
+      });
+      html += '</div>';
+    }
+
+    // ── Work orders ──
+    // Above the tasks section on purpose: a building is field work with a
+    // crew standing on it, and since 1.33 it is the only place its assignee
+    // can still see it. Crew-safe projection only — no prices, no internal
+    // notes; we render exactly the keys my-buildings promises.
+    if (workOrders.length) {
+      html += '<div class="myday-sec"><div class="myday-sec-h">Work orders</div>';
+      workOrders.forEach(function (w) {
+        var open = Number(w.my_buildings_open);
+        if (!isFinite(open) || open < 0) open = 0;
+        var metaBits = [open + ' building' + (open === 1 ? '' : 's') + ' open'];
+        var due = dateOnly(w.my_next_due) || dateOnly(w.due_date);
+        if (due) metaBits.push('due ' + dueLabel(due));
+        var where = '';
+        if (w.job_number || w.job_title) {
+          where = [w.job_number, w.job_title].filter(function (x) { return !!x; }).join(' — ');
+        } else if (w.lead_title) {
+          where = w.lead_title;
+        }
+        html += '<div class="myday-card" data-kind="workorder" data-id="' + esc(w.id) + '">' +
+          '<span class="myday-dot" style="background:#a78bfa;"></span>' +
+          '<div class="myday-body">' +
+            '<div class="myday-title">' + esc(w.title || '(untitled work order)') +
+              (w.ticket_number
+                ? '<span class="myday-chip" style="background:rgba(167,139,250,0.18);color:#a78bfa;">' + esc(w.ticket_number) + '</span>'
+                : '') +
+              (w.is_overdue
+                ? '<span class="myday-chip" style="background:rgba(248,113,113,0.18);color:#f87171;">overdue</span>'
+                : '') +
+            '</div>' +
+            '<div class="myday-meta">' + esc(metaBits.join(' · ')) + '</div>' +
+            (where ? '<div class="myday-meta">' + esc(where) + '</div>' : '') +
+          '</div></div>';
+        // The caller's own open buildings, each a tappable row that opens the
+        // task detail — the one way left to finish one.
+        var bs = Array.isArray(w.buildings) ? w.buildings : [];
+        bs.forEach(function (b) {
+          if (!b || b.completed_at || b.status === 'done') return;
+          html += '<div class="myday-card" data-kind="building" data-id="' + esc(b.id) + '" ' +
+              'style="margin-left:20px;padding:8px 13px;">' +
+            '<span class="myday-dot" style="background:#60a5fa;"></span>' +
+            '<div class="myday-body">' +
+              '<div class="myday-title" style="font-size:13px;">' + esc(b.title || '(untitled building)') + '</div>' +
+              (b.due_date ? '<div class="myday-meta">Due ' + esc(dueLabel(b.due_date)) + '</div>' : '') +
+            '</div></div>';
+        });
       });
       html += '</div>';
     }
@@ -391,6 +484,14 @@
           if (typeof window.switchTab === 'function') window.switchTab('schedule');
         } else if (kind === 'schedule') {
           if (typeof window.switchTab === 'function') window.switchTab('schedule');
+        } else if (kind === 'building') {
+          // A building is finished from its task detail — GET/PATCH
+          // /api/tasks/:id still answer its assignee, and since 1.33 this row
+          // is how they reach it.
+          var bid = card.getAttribute('data-id');
+          if (window.p86Tasks && typeof window.p86Tasks.openDetail === 'function') window.p86Tasks.openDetail(bid);
+        } else if (kind === 'workorder') {
+          if (typeof window.switchTab === 'function') window.switchTab('service-tickets');
         }
       });
     });

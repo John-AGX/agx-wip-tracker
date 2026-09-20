@@ -819,8 +819,25 @@ describe('saved views', () => {
     const p = makePage({ tickets: MIXED(), serve: { counts: { my_approvals: 2, overdue: 0, flagged: 1, unassigned: 5 } } });
     p.render();
     await flush();
+    // 'my_work' (1.33) is FIRST and is the one view with NO server
+    // counterpart: server/services/service-ticket-board.js VIEWS are ANDed
+    // onto access.listVisibility (service-ticket-routes.js puts it in the
+    // WHERE before runBoard), and My work exists precisely to bypass that —
+    // a building is assigned to a person, and its assignee is deliberately
+    // allowed to finish it on a job they cannot otherwise open. So it reads
+    // GET /api/service-tickets/my-buildings from the client instead, and it
+    // is excluded from the board's enumeration here on purpose.
+    expect(board.VIEWS.my_work).toBeUndefined();
     expect(Array.from(p.host.querySelectorAll('.p86-wob-views .p86-st-pill')).map((b) => b.getAttribute('data-view')))
-      .toEqual(['my_approvals', 'overdue', 'due_week', 'mine', 'unassigned', 'no_link', 'flagged', 'suggestions']);
+      .toEqual(['my_work', 'my_approvals', 'overdue', 'due_week', 'mine', 'unassigned', 'no_link', 'flagged', 'suggestions']);
+    // Every OTHER client view is a real server board view.
+    expect(Array.from(p.host.querySelectorAll('.p86-wob-views .p86-st-pill'))
+      .map((b) => b.getAttribute('data-view'))
+      .filter((id) => id !== 'my_work')
+      .every((id) => Object.prototype.hasOwnProperty.call(board.VIEWS, id))).toBe(true);
+    // The stub here has no myBuildings (an older cached js/api.js), so the
+    // My work pill degrades to no number instead of throwing.
+    expect(p.view('my_work').textContent).toBe('My work');
     expect(p.view('my_approvals').firstChild.textContent.trim()).toBe('My approvals');
     expect([p.count(p.view('my_approvals')), p.count(p.view('overdue')), p.count(p.view('unassigned'))]).toEqual([2, 0, 5]);
     expect(['my_approvals', 'overdue', 'flagged', 'unassigned'].map((v) => p.view(v).classList.contains('is-attention')))

@@ -5682,12 +5682,22 @@ async function dispatchServiceTicket(dbClient, target, refTable, ctx) {
     }
   }
 
-  // CHILD TASKS. Filed under the ticket (service_ticket_id) AND on the ticket's
-  // parent (entity_type/entity_id), because tasks has exactly one polymorphic
-  // parent pointer and the job overview, My Tasks and read_entity(job,
-  // include:['tasks']) all read it. entity_type 'service_ticket' would take
-  // that pointer and the task would vanish from all of them (server/db.js, the
-  // service_ticket_id column comment).
+  // CHILD TASKS — the BUILDINGS on the ticket's punch list. Filed under the
+  // ticket (service_ticket_id) AND on the ticket's parent
+  // (entity_type/entity_id), because tasks has exactly one polymorphic parent
+  // pointer and entity_type 'service_ticket' would consume it: the row would
+  // stop being a row about a job, drop out of every job-scoped join and the
+  // idx_tasks_entity path, and a ticket could never be re-pointed at another
+  // job without orphaning its buildings. Keeping the job pointer is a storage
+  // decision (server/db.js, the service_ticket_id column comment) and it
+  // stands.
+  //
+  // WHAT IT IS NOT, as of 1.33: it is NOT so these rows appear on the job
+  // overview Tasks panel or in My Tasks. A building is not a to-do, and it is
+  // deliberately excluded from every general task list by the one predicate in
+  // services/service-ticket-subtask-door.js (notAWorkOrderBuildingSql). It
+  // shows on its work order, on Service Tickets → My work, on the My Day
+  // work-orders strip and in the work-orders morning digest.
   const parentType = parent.job_id ? 'job' : 'lead';
   const parentId = parent.job_id || parent.lead_id;
   const changesetRows = [];

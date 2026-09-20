@@ -671,7 +671,12 @@ function workOrdersUrl() {
   return appUrl() + '/service-tickets';
 }
 
+// FIRST, deliberately: since 1.33 a building is off every task list, so for a
+// crew lead this row is the only place the work assigned to them is named — and
+// it is the most actionable thing in the email for everyone else too.
 const DIGEST_SECTIONS = Object.freeze([
+  { key: 'your_buildings', label: 'Buildings assigned to you',
+    push: function (n) { return plural(n, 'work order') + ' with your buildings'; } },
   { key: 'approvals', label: 'Ready for your approval', push: function (n) { return n + ' to approve'; } },
   { key: 'flags', label: 'Problems flagged by crews', push: function (n) { return plural(n, 'problem') + ' flagged'; } },
   { key: 'overdue', label: 'Overdue', push: function (n) { return n + ' overdue'; } },
@@ -688,11 +693,16 @@ const DIGEST_SECTIONS = Object.freeze([
 //   unopened    {when:'today'|'tomorrow', linkSent}
 //   expiring    {crewName, expiresAt}
 //   suggestions {count}
+//   your_buildings {count, nextDue}   a count and a calendar day, never a price
 function digestSubLine(key, item, ctx) {
   const it = item || {};
   const parts = [lineFor(it)];
   const red = [];
-  if (key === 'approvals') {
+  if (key === 'your_buildings') {
+    parts.push(plural(Number(it.count) || 0, 'building') + ' still open');
+    const due = calendarDayLabel(it.nextDue);
+    if (due) parts.push('next due ' + due);
+  } else if (key === 'approvals') {
     const d = Number(it.daysWaiting) || 0;
     parts.push('waiting ' + plural(d, 'day'));
     if (it.over) red.push('over ' + plural(ctx.overDays, 'business day'));
@@ -719,9 +729,12 @@ function digestSubLine(key, item, ctx) {
 }
 
 /**
- * digestMessage({recipient, sections:{approvals, flags, overdue, unopened,
- *   expiring, suggestions}, overDays, zone, total?}) -> {subject, html, text, push}
+ * digestMessage({recipient, sections:{your_buildings, approvals, flags, overdue,
+ *   unopened, expiring, suggestions}, overDays, zone, total?})
+ *   -> {subject, html, text, push}
  * total defaults to the number of distinct tickets across the sections.
+ * The subject's "[N to approve]" prefix keys on `approvals` only — buildings
+ * assigned to you are not something to approve.
  */
 function digestMessage(o) {
   const opts = o || {};

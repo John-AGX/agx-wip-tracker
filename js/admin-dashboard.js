@@ -80,10 +80,23 @@
         .catch(function () {}).then(done);
     } catch (e) { done(); }
 
+    // "Open tasks" is a real COUNT(*) now, not the length of a capped page —
+    // it used to read 200 for any org with more than 200 open tasks — and it
+    // no longer counts work-order buildings, which are not tasks. So the
+    // number drops the day 1.33 ships: that drop is the number becoming true.
     try {
-      window.p86Api.tasks.list({ exclude_done: 1, limit: 200 })
-        .then(function (r) { var a = (r && (r.tasks || r)) || []; out.tasks = Array.isArray(a) ? a.length : null; })
-        .catch(function () {}).then(done);
+      var tapi = window.p86Api.tasks;
+      if (tapi && typeof tapi.count === 'function') {
+        tapi.count({ exclude_done: 1 })
+          .then(function (r) { out.tasks = (r && Number.isFinite(Number(r.count))) ? Number(r.count) : null; })
+          .catch(function () {}).then(done);
+      } else {
+        // Older cached api.js with no count(): the capped page length is wrong
+        // but survivable, and far better than a dashboard that throws.
+        tapi.list({ exclude_done: 1, limit: 200 })
+          .then(function (r) { var a = (r && (r.tasks || r)) || []; out.tasks = Array.isArray(a) ? a.length : null; })
+          .catch(function () {}).then(done);
+      }
     } catch (e) { done(); }
   }
 

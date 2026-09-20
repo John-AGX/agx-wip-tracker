@@ -776,6 +776,83 @@ describe('task link', () => {
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * THE FIFTH DOOR, CLOSED RATHER THAN TAUGHT (1.33)
+ *
+ * Every door above was taught the work order's rules. Minting a NEW single-task
+ * guest link on a building is the one that is shut instead: the page it opens
+ * is task-shaped, and the work order already has its own crew link that carries
+ * the photo rule, the ticket's status and the rest of the punch list. Sending
+ * the task-shaped one is the mistake, so the answer says which link to send.
+ *
+ * The rest of this file is untouched by that — every WRITE door above still
+ * behaves exactly as it did, which is the point of running these together.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('POST /api/tasks/:id/share — minting a link on a building', () => {
+  const mintShare = (as, id, body, router) =>
+    drive(router || shareRouter, 'post', '/tasks/:id/share',
+      { as, params: { id }, body: body || { email: 'crew@sub.test' } });
+  const shareRowsFor = (taskId) => eng.all('SELECT * FROM task_shares WHERE task_id = ?', taskId);
+
+  test('refused 409 naming the work order, and nothing is written or sent', async () => {
+    const before = shareRowsFor('k1').length;
+    const res = await mintShare(WIDE, 'k1');
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toEqual({
+      error: 'This is a building on Latitude punch list — send the work-order link.',
+      code: 'work_order_building',
+    });
+    expect(shareRowsFor('k1').length).toBe(before);
+  });
+
+  test('CONTROL: a plain task still mints one', async () => {
+    const res = await mintShare(WIDE, 'plain');
+    expect(res.statusCode).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  test('the EXISTING guest link on a building is untouched — it still works, under the door', async () => {
+    // Closing the mint must not strand a link already in a sub's inbox. tsh_1
+    // points at k1 and goes through the work-order door exactly as before.
+    photo('att_k1', 'k1', ['completion']);
+    const res = await sharePatch(TOKEN, { status: 'done' });
+    expect(res.statusCode).toBe(200);
+    expect(task('k1').status).toBe('done');
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * A BUILDING IS NOT ON A TASK LIST (1.33) — the read side of the same rule.
+ *
+ * Asserted here, beside the write doors, because the two halves are one
+ * decision: the doors make a building follow the work order, and this makes it
+ * stop pretending to be a to-do. The full read surface (86, the daily email,
+ * the KPI count, the photo-count org predicate) is in
+ * test/work-order-buildings-off-task-lists.test.js.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('GET /api/tasks — the read side', () => {
+  const listTasks = (as, query) => drive(tasksRouter, 'get', '/', { as, query: query || {} });
+  const getTask = (as, id) => drive(tasksRouter, 'get', '/:id', { as, params: { id } });
+  const ids = (res) => (res.body && res.body.tasks ? res.body.tasks.map((t) => t.id) : []);
+
+  test('no building is on the list, and the ordinary rows still are', async () => {
+    const out = ids(await listTasks(WIDE));
+    expect(out).toContain('plain');
+    expect(out).toContain('todo');
+    for (const b of ['k1', 'k2', 'w1', 'w2', 'a1', 'a2', 'o1', 'lk1']) expect(out).not.toContain(b);
+  });
+
+  test('the assignee is not an exception — and that is why she still has GET /:id', async () => {
+    expect(ids(await listTasks(CREW, { assignee: 'me' }))).not.toContain('k1');
+    const one = await getTask(CREW, 'k1');
+    expect([one.statusCode, one.body.task.id]).toEqual([200, 'k1']);
+  });
+
+  test("a ticket's own punch list is still served from here", async () => {
+    expect(ids(await listTasks(WIDE, { service_ticket_id: 'st_ip' })).sort()).toEqual(['k1', 'k2']);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * MUTANTS — each door call removed, the bypass shown
  * ══════════════════════════════════════════════════════════════════════════*/
 describe('MUTANTS', () => {

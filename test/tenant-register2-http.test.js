@@ -423,14 +423,40 @@ describe('REGISTER 2 — the route population', () => {
     //      so it is waived here and driven instead by test/client-merge.test.js,
     //      which names another organization's client as each side in turn and
     //      asserts the 404 AND that no row moved. No new router.
-    expect(R.routes).toBe(616);
+    //      616 -> 618: the two Work Orders (1.33) reads that replace the
+    //      buildings this release took off every task list, both on
+    //      service-ticket-routes.js — no new router:
+    //        GET /api/service-tickets/my-buildings
+    //        GET /api/service-tickets/building-counts
+    //      Both are param-less GETs, so unlike the 1.30 ten they are DRIVEN
+    //      here, not waived, and the split below moves with them.
+    //      MY-BUILDINGS is deliberately NOT gated on listVisibility: a
+    //      building's assignee may finish it on a job they cannot otherwise
+    //      open, so the key is `k.assignee_user_id = $2` on the caller's own
+    //      id, beside `k.organization_id = $1`, with no usable identity
+    //      answering EMPTY rather than everything. The projection is the
+    //      MY_BUILDING_ROW_KEYS whitelist — job number and title, site,
+    //      ticket title, counts and dates — so no price, scope text or
+    //      internal note rides out to a crew lead.
+    //      BUILDING-COUNTS is an office surface instead: entity_type is job or
+    //      lead and nothing else (404), the parent is proved in the caller's
+    //      org by assertEntityInOrg BEFORE anything is counted, and the caller
+    //      is then held to ticketAccessOk in READ mode — another tenant's job
+    //      id and one this caller cannot open are the same 404 as an absent
+    //      one. Its two COUNT()s carry `k.organization_id = $1` and join the
+    //      ticket on `s.organization_id = k.organization_id`, and the answer
+    //      is two integers: nothing about the buildings themselves.
+    expect(R.routes).toBe(618);
     expect(R.routers).toBe(79);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (139 driven, 477 counted)', () => {
+  test('the DRIVEN / COUNTED-WAIVED split is committed (141 driven, 477 counted)', () => {
     // 466 -> 476: the ten Work Orders (1.30) routes above, every one waived.
     // 476 -> 477: POST /api/clients/merge, a write (see the note above).
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 139, waived: 477 });
+    // 139 -> 141: the two Work Orders (1.33) reads above. Both are GETs with
+    // no path parameter, so they are driven here — the waived side does not
+    // move, and the param-less-GET predicate below still holds at zero.
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 141, waived: 477 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

@@ -526,9 +526,26 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.33';
+const APP_VERSION = '1.34';
 
 const releases = [
+  {
+    version: '1.34',
+    date: '2026-09-20',
+    name: 'Buildings live on the work order, not on your task list',
+    summary: 'A building on a work order’s punch list is not a to-do, so it has left My Tasks, Team Tasks, the Tasks panels, the Schedule, the Summary dashboard, the daily task email and 86’s answer about your plate — and in its place there is a My work view on the Service Tickets page, a Work orders strip on My Day, a line on each Tasks panel pointing to where the buildings went, and a Buildings assigned to you section in the morning digest, every one of them following who a building is assigned to rather than who can open the job.',
+    changes: [
+      { type: 'new', text: 'Your buildings live on the work order now. A building on a work order’s punch list is a piece of that work order, not a to-do, so it no longer turns up where tasks turn up: not on My Tasks or Team Tasks, not in a job’s or a lead’s Tasks panel, not on the Schedule calendar, not on the Summary dashboard, not in the daily “Your tasks for today” email, and 86 no longer lists one when you ask what is on your plate. Your task counts will drop the day this lands, and the old counts were the wrong ones — every building on every punch list was being counted as a to-do it never was. Two things did not change. Opening a building by its own link still works exactly as before. And a private to-do you made for yourself on a work order is yours, not part of the punch list, so it stays on your own list where you put it.' },
+      { type: 'new', text: 'Service Tickets → My work. A new view, first in the row of views under the status pills, listing every work order that has a building still open and assigned to you — including work orders on jobs you cannot otherwise open, which is the whole point: a building is assigned to a person, not to whoever can see the job. Your buildings are listed under each work order; tap one to open it, add its completion photo and mark it done, exactly as you did from My Tasks. The view is ordered by due date, soonest first. The status pills, the priority and job filters and the search do not apply to it — it is your open buildings, all of them, in one place. There are no prices on it.' },
+      { type: 'new', text: 'A Work orders strip on My Day. Above your tasks, My Day now shows the work orders that have a building of yours due today or already overdue, with those buildings listed under each one. Tap a building to open it and finish it. The strip is not there on a day when you have none.' },
+      { type: 'new', text: 'A job’s and a lead’s Tasks panel says where the buildings went. A line at the top of the panel — “4 buildings open across 2 work orders →” — opens the Service Tickets page, so the work is one tap from where you went looking for it. It counts the open buildings on that job or lead, whoever they belong to.' },
+      { type: 'improved', text: 'The morning work-orders digest carries your buildings. A new Buildings assigned to you section says how many of yours are still open and which one is due next. It reaches you whether or not you can open the job, so what left the daily task email arrives here instead. Like the rest of the digest it carries no prices, it only turns up when there is something in it, and it can be turned off in My Account → Notifications under Work orders.' },
+      { type: 'fixed', text: 'A building can’t be sent as a single-task link any more. Sharing one now refuses, with “This is a building on WO-1041 — send the work-order link.” There were two crew doors into the same punch list, and only one of them had the work-order rules on it; this closes the other. The work order’s own crew link is unchanged and is the one to send.' },
+      { type: 'fixed', text: 'The daily “Your tasks for today” email only ever reaches your own company’s tasks. It had no company check on it at all, so somebody who moved from one company to another kept getting the old company’s tasks in their morning email.' },
+      { type: 'fixed', text: 'Photo counts on task lists are counted inside your company. The number of photos shown beside a task had no company check on it either, so a photo filed under another company could be counted into it.' },
+      { type: 'fixed', text: 'The admin console’s Open tasks is a real count. It was the length of a list that stops at 200, so every company with more open tasks than that read exactly 200. It is now the true number — and, like every other list, it no longer counts work-order buildings, so expect it to come down.' },
+    ],
+  },
   {
     version: '1.33',
     date: '2026-09-20',

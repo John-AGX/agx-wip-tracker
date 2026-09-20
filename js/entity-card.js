@@ -256,16 +256,28 @@
           '><i class="ti ti-plus" aria-hidden="true"></i>Add follow-up</button>'
       : '';
 
-    var tasks = '';
-    if (!(vm.tasks && vm.tasks.length) && addBtn) {
-      tasks = '<div class="p86-ecard-tasks">' + addBtn + '</div>';
-    } else if (vm.tasks && vm.tasks.length) {
-      tasks = '<div class="p86-ecard-tasks">';
+    // vm.buildings:{open,workOrders} — a summary line, not a task row and not
+    // a link. Since 1.33 a work-order building is not a task and never appears
+    // above; this says how much of the work on this entity lives on a work
+    // order instead, so a short follow-up list is not read as "nothing owed".
+    // The card is a summary surface: the way in is the Service Tickets page.
+    var buildingsLine = '';
+    if (vm.buildings && Number(vm.buildings.open) > 0) {
+      var bo = Number(vm.buildings.open);
+      var bw = Number(vm.buildings.workOrders);
+      if (!isFinite(bw) || bw < 0) bw = 0;
+      buildingsLine = '<div class="p86-ecard-task-more">' +
+        esc(bo + ' building' + (bo === 1 ? '' : 's') + ' open across ' +
+            bw + ' work order' + (bw === 1 ? '' : 's')) + '</div>';
+    }
+
+    var tasksInner = '';
+    if (vm.tasks && vm.tasks.length) {
       for (var t = 0; t < vm.tasks.length; t++) {
         var tk = vm.tasks[t];
         if (!tk || !tk.title) continue;
         var ttone = tk.tone === 'overdue' ? ' overdue' : tk.tone === 'soon' ? ' soon' : '';
-        tasks += '<div class="p86-ecard-task">' +
+        tasksInner += '<div class="p86-ecard-task">' +
           '<span class="p86-ecard-task-dot' + ttone + '"></span>' +
           '<span class="p86-ecard-task-t">' + esc(tk.title) + '</span>' +
           (tk.due ? '<span class="p86-ecard-task-due' + (tk.tone === 'overdue' ? ' overdue' : '') + '">' +
@@ -273,11 +285,12 @@
           '</div>';
       }
       if (vm.tasksMore > 0) {
-        tasks += '<div class="p86-ecard-task-more">+' + vm.tasksMore + ' more</div>';
+        tasksInner += '<div class="p86-ecard-task-more">+' + vm.tasksMore + ' more</div>';
       }
-      if (addBtn) tasks += addBtn;
-      tasks += '</div>';
     }
+    tasksInner += buildingsLine;
+    if (addBtn) tasksInner += addBtn;
+    var tasks = tasksInner ? '<div class="p86-ecard-tasks">' + tasksInner + '</div>' : '';
 
     var actions = '';
     if (!compact && vm.actions && vm.actions.length) {
@@ -387,16 +400,54 @@
   }
 
   /**
+   * How many work-order buildings are open on this entity — jobs and leads
+   * only, since nothing else carries a work order. Its own narrow door, and
+   * a strictly optional one: resolves to null (never rejects, never throws)
+   * for any other type, an api.js too old to have the endpoint, or a refusal.
+   */
+  function loadBuildingCounts(entityType, entityId) {
+    if (entityType !== 'job' && entityType !== 'lead') return Promise.resolve(null);
+    var p = null;
+    try {
+      if (entityId && window.p86Api && window.p86Api.serviceTickets
+        && typeof window.p86Api.serviceTickets.buildingCounts === 'function') {
+        p = window.p86Api.serviceTickets.buildingCounts(entityType, String(entityId));
+      }
+    } catch (e) { p = null; }
+    if (!p || typeof p.then !== 'function') return Promise.resolve(null);
+    return p.then(function (r) {
+      var open = Number(r && r.buildings_open);
+      var wo = Number(r && r.work_orders);
+      if (!isFinite(open) || open <= 0) return null;
+      return { open: open, workOrders: (isFinite(wo) && wo > 0) ? wo : 0 };
+    }, function () { return null; });
+  }
+
+  /**
    * Fetch the open org Tasks linked to one entity and shape them for the
    * card. Soonest due first, undated last (an undated task is a someday,
    * and it should never outrank something with a real deadline).
+   *
+   * Since 1.33 the callback also carries `buildings` — {open,workOrders} or
+   * null — because work-order buildings are no longer tasks and would
+   * otherwise be invisible here. The key is ADDITIVE and optional: a caller
+   * that only reads .tasks/.more is unaffected.
    *
    * Fully defensive: any failure calls back with an empty list, because a
    * task lookup must never be able to stop the card from rendering.
    */
   function loadTasks(entityType, entityId, max, cb) {
     max = max || 2;
-    var done = function (list, more) { try { cb({ tasks: list, more: more }); } catch (e) {} };
+    var pBuildings;
+    try { pBuildings = loadBuildingCounts(entityType, entityId); }
+    catch (e) { pBuildings = Promise.resolve(null); }
+    var done = function (list, more) {
+      var deliver = function (b) {
+        try { cb({ tasks: list, more: more, buildings: b || null }); } catch (e) {}
+      };
+      try { pBuildings.then(deliver, function () { deliver(null); }); }
+      catch (e) { deliver(null); }
+    };
     if (!entityType || !entityId || !window.p86Api || !window.p86Api.tasks) return done([], 0);
     var p;
     try {
@@ -429,6 +480,7 @@
     dueChip: dueChip,
     shortDate: shortDate,
     loadTasks: loadTasks,
+    loadBuildingCounts: loadBuildingCounts,
     jobStatusColor: jobStatusColor,
     leadStatusColor: leadStatusColor,
     estimateStatusColor: estimateStatusColor,

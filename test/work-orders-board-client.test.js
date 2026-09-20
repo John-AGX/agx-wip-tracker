@@ -59,6 +59,7 @@ const STATUS_COUNTS = { all: 20, active: 12, draft: 1, scheduled: 2, in_progress
 const FIRST = { board: 1, view: 'all', sort: 'created', limit: 50, offset: 0, include_counts: 1 };
 
 let calls;
+let myCalls;
 let responder;
 let host;
 
@@ -73,7 +74,18 @@ function boot(opts) {
   window.p86JobLabel = JOB_LABEL;
   calls = [];
   responder = o.responder || (() => Promise.resolve({ tickets: [row()], today: '2026-09-19', has_more: false, next_offset: null, total: 1, counts: COUNTS, status_counts: STATUS_COUNTS }));
-  window.p86Api = { serviceTickets: { list: jest.fn((p) => { calls.push(Object.assign({}, p)); return responder(p, calls.length); }) } };
+  // 1.33: the page also holds GET /api/service-tickets/my-buildings for its
+  // client-only My work view, and fires a count_only call beside every reset
+  // load. This file never presses My work — test/work-orders-board-my-work.js
+  // does — so the default body carries no total and the My work pill shows no
+  // number, leaving every assertion below about the board door alone.
+  myCalls = [];
+  window.p86Api = {
+    serviceTickets: {
+      list: jest.fn((p) => { calls.push(Object.assign({}, p)); return responder(p, calls.length); }),
+      myBuildings: jest.fn((p) => { myCalls.push(Object.assign({}, p)); return Promise.resolve({}); }),
+    },
+  };
   window.p86ServiceTickets = o.noOpenTicket ? { refresh: () => {} } : { openTicket: jest.fn(() => true) };
   window.p86Router = { go: jest.fn(() => true) };
   window.p86Toast = jest.fn();
@@ -148,6 +160,25 @@ describe('requests, views and counts', () => {
     b = boot({ storedView: 'flagged' });
     await b.render(host);
     expect(calls[0].view).toBe('flagged');
+    // 1.33: my_work is a real id now, so it survives readSaved — but it is a
+    // CLIENT-only view, so the page must go to my-buildings, not this door.
+    b = boot({ storedView: 'my_work' });
+    await b.render(host);
+    await flush();
+    expect(calls).toHaveLength(0);
+    expect(myCalls).toContainEqual({ limit: 50, offset: 0 });
+  });
+
+  test('the board door is the default: My work is a pill, not the first request', async () => {
+    const b = boot();
+    await b.render(host);
+    await flush();
+    expect(calls[0]).toEqual(FIRST);
+    expect(pill('my_work')).not.toBeNull();
+    expect(pill('my_work').getAttribute('aria-pressed')).toBe('false');
+    // An empty count body leaves the pill with no number and nothing broken.
+    expect(pill('my_work').textContent).toBe('My work');
+    expect(myCalls).toEqual([{ count_only: 1 }]);
   });
 
   test('?view= on a full load of /work-orders wins over the stored view', async () => {
@@ -469,7 +500,7 @@ describe('mutants', () => {
   });
 
   test('without the row whitelist, an office-only column is kept on the page', async () => {
-    const src = mutate(SRC, 'var rows = Array.isArray(body.tickets) ? body.tickets.map(pick) : [];', 'var rows = Array.isArray(body.tickets) ? body.tickets.slice() : [];');
+    const src = mutate(SRC, 'body.tickets.map(mine ? pickMyWork : pick)', 'body.tickets.slice()');
     const b = boot({ src, responder: () => Promise.resolve({ tickets: [row({ scope_approved: '$48,000', internal_notes: 'OFFICE ONLY' })], today: '2026-09-19' }) });
     await b.render(host);
     await flush();

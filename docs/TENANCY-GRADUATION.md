@@ -192,7 +192,7 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**554** occurrences of `organization_id IS NULL` across `server/`.
+**557** occurrences of `organization_id IS NULL` across `server/`.
 
 551 → 554: the Buildertrend BILLS sync, on exactly the terms the change-order
 and purchase-order sync already took (see below). Three statements:

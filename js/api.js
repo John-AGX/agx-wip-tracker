@@ -602,6 +602,31 @@
     assignees: function(kind, parentId) {
       return get('/api/service-tickets/assignees/' + encodeURIComponent(kind) + '/' + encodeURIComponent(parentId));
     },
+    // Every work order where you are the assignee of an open building — the
+    // one list that is NOT filtered by whether you can open the job, because a
+    // building is assigned to a PERSON. A crew lead is deliberately allowed to
+    // finish a building on a job they cannot otherwise see, so this door asks
+    // who the building belongs to and nothing else (1.33).
+    // opts: { limit, offset, count_only }. count_only answers
+    // { total, buildings_open }; otherwise { tickets, today, total,
+    // buildings_open, has_more, next_offset }, crew-safe by construction —
+    // no prices, no internal notes, no scope text.
+    myBuildings: function(opts) {
+      var o = opts || {};
+      var qs = [];
+      if (o.limit != null) qs.push('limit=' + encodeURIComponent(o.limit));
+      if (o.offset != null) qs.push('offset=' + encodeURIComponent(o.offset));
+      if (o.count_only) qs.push('count_only=1');
+      return get('/api/service-tickets/my-buildings' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    // "4 buildings open across 2 work orders" for one job or lead, for the
+    // line that replaced the buildings on its Tasks panel. entityType is
+    // 'job' or 'lead'. 404 when the parent is not the caller's or not
+    // reachable. Answers { buildings_open, work_orders }.
+    buildingCounts: function(entityType, entityId) {
+      return get('/api/service-tickets/building-counts?entity_type=' + encodeURIComponent(entityType) +
+        '&entity_id=' + encodeURIComponent(entityId));
+    },
     // Send the "waiting for your approval" notice again, now.
     notifyApprovers: function(id) {
       return post('/api/service-tickets/' + encodeURIComponent(id) + '/notify-approvers', {});
@@ -1110,33 +1135,51 @@
   // Tasks — polymorphic to-do entity. See server/routes/tasks-routes.js.
   // list() filters mirror the GET query params exactly; create/update
   // accept the body fields the route's EDITABLE_FIELDS allowlist permits.
+  //
+  // ONE query-string builder for list() and count(), so a KPI can never be
+  // counting a different list from the one it sits above.
+  function taskListQuery(opts) {
+    opts = opts || {};
+    var qs = [];
+    // 3-tier scope: 'org' (Team Tasks pane) | 'personal' (My To-Dos). Omit
+    // for both. See server/routes/tasks-routes.js.
+    if (opts.scope) qs.push('scope=' + encodeURIComponent(opts.scope));
+    if (opts.assignee) qs.push('assignee=' + encodeURIComponent(opts.assignee));
+    if (opts.status) qs.push('status=' + encodeURIComponent(opts.status));
+    if (opts.exclude_done) qs.push('exclude_done=1');
+    if (opts.kind) qs.push('kind=' + encodeURIComponent(opts.kind));
+    // entity_type can be sent alone (all tasks of a type, e.g. lead
+    // follow-ups) or with entity_id (one entity's tasks).
+    if (opts.entity_type) {
+      qs.push('entity_type=' + encodeURIComponent(opts.entity_type));
+      if (opts.entity_id) qs.push('entity_id=' + encodeURIComponent(opts.entity_id));
+    }
+    // The work order a task belongs to. Independent of entity_type/entity_id
+    // and combinable with it — a task under a ticket on a job carries BOTH,
+    // which is why the ticket got its own column instead of the polymorphic
+    // slot.
+    if (opts.service_ticket_id) qs.push('service_ticket_id=' + encodeURIComponent(opts.service_ticket_id));
+    if (opts.due_before) qs.push('due_before=' + encodeURIComponent(opts.due_before));
+    if (opts.due_after) qs.push('due_after=' + encodeURIComponent(opts.due_after));
+    if (opts.q) qs.push('q=' + encodeURIComponent(opts.q));
+    if (opts.limit) qs.push('limit=' + encodeURIComponent(opts.limit));
+    // A building on a work order is not a to-do and is excluded by default;
+    // pass this only when you really mean the punch list (1.33).
+    if (opts.include_work_orders) qs.push('include_work_orders=1');
+    return qs;
+  }
+
   var tasks = {
     list: function(opts) {
-      opts = opts || {};
-      var qs = [];
-      // 3-tier scope: 'org' (Team Tasks pane) | 'personal' (My To-Dos). Omit
-      // for both. See server/routes/tasks-routes.js.
-      if (opts.scope) qs.push('scope=' + encodeURIComponent(opts.scope));
-      if (opts.assignee) qs.push('assignee=' + encodeURIComponent(opts.assignee));
-      if (opts.status) qs.push('status=' + encodeURIComponent(opts.status));
-      if (opts.exclude_done) qs.push('exclude_done=1');
-      if (opts.kind) qs.push('kind=' + encodeURIComponent(opts.kind));
-      // entity_type can be sent alone (all tasks of a type, e.g. lead
-      // follow-ups) or with entity_id (one entity's tasks).
-      if (opts.entity_type) {
-        qs.push('entity_type=' + encodeURIComponent(opts.entity_type));
-        if (opts.entity_id) qs.push('entity_id=' + encodeURIComponent(opts.entity_id));
-      }
-      // The work order a task belongs to. Independent of entity_type/entity_id
-      // and combinable with it — a task under a ticket on a job carries BOTH,
-      // which is why the ticket got its own column instead of the polymorphic
-      // slot.
-      if (opts.service_ticket_id) qs.push('service_ticket_id=' + encodeURIComponent(opts.service_ticket_id));
-      if (opts.due_before) qs.push('due_before=' + encodeURIComponent(opts.due_before));
-      if (opts.due_after) qs.push('due_after=' + encodeURIComponent(opts.due_after));
-      if (opts.q) qs.push('q=' + encodeURIComponent(opts.q));
-      if (opts.limit) qs.push('limit=' + encodeURIComponent(opts.limit));
+      var qs = taskListQuery(opts);
       return get('/api/tasks' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    // How many tasks that same list would hold, without the rows: the caller
+    // reads res.count. A KPI asks for this instead of counting a capped page.
+    count: function(opts) {
+      var qs = taskListQuery(opts);
+      qs.push('count_only=1');
+      return get('/api/tasks?' + qs.join('&'));
     },
     get: function(id) { return get('/api/tasks/' + encodeURIComponent(id)); },
     create: function(payload) { return post('/api/tasks', payload); },

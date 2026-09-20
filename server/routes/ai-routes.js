@@ -66,6 +66,11 @@ const { resolveTz, formatInTz, isCalendarDay } = require('../timezone');
 // (share lifecycle, progress, the proposable-field whitelist).
 const ticketAccess = require('../services/service-ticket-access');
 const ticketSvc = require('../services/service-tickets');
+// "A building on a work order is not a task" — the ONE predicate, so 86's task
+// reads and GET /api/tasks hide the same rows and cannot drift apart. Used by
+// the read_tasks filtered LIST arm and by buildTodayDigest, and deliberately
+// NOT by the single-task by-id arm or readServiceTicketForAgent's punch list.
+const subtaskDoor = require('../services/service-ticket-subtask-door');
 const { deleteSkillDeep, anthropicDisplayTitle } = require('../services/anthropic-skills');
 // The client merge, shared with POST /api/clients/merge. 86's merge_clients
 // tool used to carry its own copy, which moved children and leads and left
@@ -2699,12 +2704,19 @@ async function buildTodayDigest(userId, orgId) {
   try {
     if (!userId) return '';
     const r = await pool.query(
-      "SELECT title, priority, (due_date < CURRENT_DATE) AS overdue " +
+      "SELECT tasks.title, tasks.priority, (tasks.due_date < CURRENT_DATE) AS overdue " +
       "  FROM tasks " +
-      " WHERE assignee_user_id = $1 AND archived_at IS NULL AND status <> 'done' AND scope = 'org' " +
-      "   AND (organization_id = $2 OR organization_id IS NULL) " +
-      "   AND due_date IS NOT NULL AND due_date <= CURRENT_DATE " +
-      " ORDER BY due_date ASC LIMIT 10",
+      " WHERE tasks.assignee_user_id = $1 AND tasks.archived_at IS NULL AND tasks.status <> 'done' AND tasks.scope = 'org' " +
+      "   AND (tasks.organization_id = $2 OR tasks.organization_id IS NULL) " +
+      "   AND tasks.due_date IS NOT NULL AND tasks.due_date <= CURRENT_DATE " +
+      // A BUILDING IS NOT ON THIS PLATE. This block is a task list presented to
+      // the user on the first turn of every session, so it takes the same rule
+      // as GET /api/tasks: a work order's buildings live on the work order, not
+      // in "your plate today". The assignee still hears about them — from the
+      // work-orders morning digest and Service Tickets → My work — and 86 can
+      // still read one by id or read a ticket's whole punch list.
+      '   AND ' + subtaskDoor.notAWorkOrderBuildingSql('tasks') + ' ' +
+      " ORDER BY tasks.due_date ASC LIMIT 10",
       [userId, orgId == null ? null : orgId]
     );
     if (!r.rows.length) return '';
@@ -9373,6 +9385,10 @@ async function readServiceTicketForAgent(id, depth, includes, ctx) {
   }
 
   const callerId = Number(user.id);
+  // THE WORK ORDER'S OWN PUNCH LIST — the one read where buildings MUST appear,
+  // and therefore the one `FROM tasks` in this file that deliberately carries
+  // no notAWorkOrderBuildingSql. 1.33 took buildings off every general task
+  // list; excluding them here would empty the work order of the work.
   const kr = await pool.query(
     `SELECT k.id, k.title, k.status, k.due_date, k.completed_at, k.archived_at,
             ku.name AS assignee_name
@@ -11617,16 +11633,36 @@ async function execStaffTool(name, input, ctx) {
       };
       const TASK_KINDS = new Set(['todo', 'punch', 'follow_up']);
       const TASK_STATUSES = new Set(['open', 'in_progress', 'blocked', 'done']);
-      const taskId = input && (input.id || input.entity_id);
+      // `id` AND ONLY `id` PICKS THE DETAIL ARM. `entity_id` means something
+      // else entirely here — it is the LINKED entity, the job or lead a task
+      // hangs off, and the list arm below pairs it with entity_type as a
+      // filter. Reading it as a task id made read_entity(<job>, include:
+      // ['tasks']) — which delegates as {entity_type, entity_id} — walk into
+      // the single-task arm and answer "Task not found: <the job's id>", so
+      // "what's open on this job" has never worked through 86. read_entity
+      // normalizes its own id before dispatching (`inp.id || inp.entity_id`),
+      // so read_entity('task', {entity_id}) still arrives here as `id`.
+      const taskId = input && input.id;
 
       // ── single-task detail (read_entity by id) ──
+      // NO BUILDING EXCLUSION HERE, DELIBERATELY. The filtered list below hides
+      // a work order's buildings; a read BY ID must still answer with one, or
+      // 86 goes blind the moment someone pastes a building's id or follows a
+      // link from Service Tickets → My work. Mirrors GET /api/tasks/:id, which
+      // is open for the same reason.
       if (taskId && !(input && (input.q || input.filter))) {
+        // The photo count carries the company. The tolerance arm is required,
+        // not optional: attachments.organization_id is nullable and only as
+        // current as the last boot's backfill (see the header of
+        // server/services/attachment-org-scope.js), so bare equality would
+        // silently zero the completion-photo count on legacy rows.
         const r = await pool.query(
           `SELECT t.*,
                   au.name AS assignee_name,
                   cu.name AS created_by_name,
                   (SELECT COUNT(*)::int FROM attachments a
-                     WHERE a.entity_type = 'task' AND a.entity_id = t.id) AS photo_count
+                     WHERE a.entity_type = 'task' AND a.entity_id = t.id
+                       AND (a.organization_id = t.organization_id OR a.organization_id IS NULL)) AS photo_count
              FROM tasks t
              LEFT JOIN users au ON au.id = t.assignee_user_id
              LEFT JOIN users cu ON cu.id = t.created_by
@@ -11671,6 +11707,20 @@ async function execStaffTool(name, input, ctx) {
         "(t.scope = 'org' OR (t.scope = 'personal' AND t.owner_user_id = $2))"];
       const params = [taskOrgId, Number((ctx && ctx.userId) || 0)];
       let pn = 3;
+
+      // A BUILDING ON A WORK ORDER IS NOT A TASK, so it is not on this list —
+      // the same rule GET /api/tasks applies, from the same predicate, so 86
+      // and the UI cannot answer "what's on my list" differently.
+      // THIS ONE EDIT ALSO COVERS search_entities('task') and
+      // read_entity(<any>, include:['tasks']): both delegate to read_tasks and
+      // both land HERE — the first with `q`, the second with entity_type +
+      // entity_id, which is why the arm selector above keys on `id` alone.
+      // Buildings are still reachable — by id through the detail arm above,
+      // and as a punch list through read_service_ticket, which is the one read
+      // where they belong. include_work_order_buildings is the escape hatch.
+      const includeBuildings = !!(input && (input.include_work_order_buildings === '1' ||
+        input.include_work_order_buildings === true));
+      if (!includeBuildings) where.push(subtaskDoor.notAWorkOrderBuildingSql('t'));
 
       const q = String((input && (input.q || input.filter)) || '').trim();
       if (q) { where.push('t.title ILIKE $' + (pn++)); params.push('%' + q + '%'); }
@@ -17962,6 +18012,15 @@ module.exports.internals = {
   // body — and that needs these two callable.
   maybeGenerateSessionLabel,
   seedRecoveredSession,
+  // "The user just opened a session — this is their plate today." A TASK LIST,
+  // injected on the first turn of every session, and therefore a place the
+  // 1.33 rule has to hold: a work order's buildings are not on anyone's plate.
+  // Exported for the same stated reason as everything else here — both the
+  // organization predicate and the building exclusion are held by RUNNING the
+  // statement against rows, not by reading the string, and buildTurnContext
+  // (its only caller) cannot be driven without a whole session's worth of
+  // fixture.
+  buildTodayDigest,
   // ── THE APPROVAL-TIER EXECUTORS, EXPORTED FOR THE SAME STATED REASON ─────
   // The two-org harness waived 54 of 112 published names on the ground that
   // `execAgentTool` does not dispatch them, and then satisfied itself with a

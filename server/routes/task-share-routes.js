@@ -116,9 +116,39 @@ async function linkedLabel(task) {
 router.post('/tasks/:id/share', requireAuth, async (req, res) => {
   try {
     const orgId = req.user && req.user.organization_id;
-    const tR = await pool.query('SELECT id, title, organization_id FROM tasks WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL', [req.params.id, orgId]);
+    // TWO STATEMENTS, NOT A JOIN, ON PURPOSE. The building check below needs
+    // the ticket's number to name it, but folding that into this read as a
+    // LEFT JOIN would rewrite the statement every OTHER path through this
+    // handler depends on — the sender identity, the sub fill-in and the org
+    // term — for a column only the refusal path ever reads. The ticket lookup
+    // is therefore a second query that only a task actually carrying a ticket
+    // id ever runs, and that path returns 409 immediately, so the ordinary
+    // share costs exactly the one read it always did.
+    const tR = await pool.query('SELECT id, title, organization_id, scope, service_ticket_id, archived_at FROM tasks WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL', [req.params.id, orgId]);
     if (!tR.rows.length) return res.status(404).json({ error: 'Task not found' });
     const task = tR.rows[0];
+
+    // A BUILDING IS NOT SHAREABLE AS A TASK. The guest page a single-task link
+    // opens is task-shaped: it knows nothing about the photo rule, the ticket's
+    // status, approvals or the rest of the punch list, and a building finished
+    // through it is a building finished behind the work order's back. The work
+    // order already has its own crew link, which carries all of that — so this
+    // door is closed rather than taught. Refused BEFORE anything is validated
+    // or written: no task_shares row, no email.
+    if (subtaskDoor.isWorkOrderSubtask(task)) {
+      // The task's OWN organization_id, the one the read above proved — so a
+      // ticket id pointing at another tenant's work order names nothing and
+      // the refusal falls back to the generic wording.
+      const stR = await pool.query(
+        'SELECT ticket_number, title FROM service_tickets WHERE id = $1 AND organization_id = $2',
+        [task.service_ticket_id, task.organization_id]);
+      const st = stR.rows[0] || {};
+      const label = st.ticket_number || st.title || 'a work order';
+      return res.status(409).json({
+        error: 'This is a building on ' + label + ' — send the work-order link.',
+        code: 'work_order_building',
+      });
+    }
 
     const body = req.body || {};
     let subId = body.sub_id ? String(body.sub_id) : null;

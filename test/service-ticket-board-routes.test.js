@@ -67,6 +67,16 @@ const USERS = {
 
 const TODAY = () => tz.localDateInTz('America/New_York', new Date());
 const day = (n) => board.addDays(TODAY(), n);
+
+// ORG 2 KEEPS ITS OWN CALENDAR. The board resolves "today" from the viewing
+// org's timezone, and org 2 below is America/Los_Angeles while org 1 (and the
+// helpers above) are America/New_York. A rival row seeded with day(-1) — New
+// York's yesterday — is NOT yesterday in Los Angeles between midnight and
+// 03:00 Eastern, when the two zones sit on different calendar days: the
+// overdue view was then correctly empty and this fixture went red for three
+// hours every night. The rival's dates come from the rival's own zone.
+const TODAY_RIVAL = () => tz.localDateInTz('America/Los_Angeles', new Date());
+const dayRival = (n) => board.addDays(TODAY_RIVAL(), n);
 const FUTURE = () => new Date(Date.now() + 3 * 86400000).toISOString();
 const PAST = () => new Date(Date.now() - 3 * 86400000).toISOString();
 
@@ -229,7 +239,7 @@ function seed() {
   insert('tasks', { id: 'k3', organization_id: 1, title: 'PRIVATE', status: 'open', scope: 'personal', owner_user_id: CREW, service_ticket_id: 'st_plain', entity_type: 'job', entity_id: 'j1', created_at: '2026-09-02 08:00:03' });
 
   // ── the other tenant: overdue, a suggestion, a live link, crew activity
-  ticket('st_rival', { organization_id: 2, job_id: 'j9', status: 'in_progress', due_date: day(-1), assignee_user_id: RIVAL, title: 'RIVAL overdue gate' });
+  ticket('st_rival', { organization_id: 2, job_id: 'j9', status: 'in_progress', due_date: dayRival(-1), assignee_user_id: RIVAL, title: 'RIVAL overdue gate' });
   insert('service_ticket_revisions', { id: 'rev_r', organization_id: 2, ticket_id: 'st_rival', fields: '{}', status: 'pending', created_at: '2026-09-03 09:00:00' });
   share('sh_r', 'st_rival', { organization_id: 2, opened_at: PAST() });
   insert('service_ticket_events', { id: 'ev_r', organization_id: 2, ticket_id: 'st_rival', kind: 'note_added', actor_kind: 'share', detail: '{}', created_at: '2026-09-05 08:00:00' });

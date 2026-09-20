@@ -1455,6 +1455,7 @@
       '<div class="p86-task-panel">' +
         '<div class="p86-task-panel-head"><h4>Tasks</h4>' +
           '<button type="button" class="ee-btn secondary" data-add-task>+ Add</button></div>' +
+        '<div data-building-line></div>' +
         '<div data-task-list></div>' +
       '</div>' +
       (showAppts
@@ -1493,7 +1494,53 @@
       }
     }
 
-    var ctl = { refresh: function () { mounted.refresh(); appts.refresh(); } };
+    // ── "N buildings open across M work orders →" ────────────────────
+    // Since 1.33 a work-order building is NOT a task and never appears in the
+    // list above. This line is the pointer that replaces it, so nobody thinks
+    // an empty Tasks panel means there is no work on this job. It is a count
+    // and a link only — the buildings themselves live on the work order.
+    // Silence is a valid answer: nothing open, a refusal, or an entity type
+    // that cannot carry a work order all render an empty element, never a
+    // spinner and never a "none".
+    var buildingLine = container.querySelector('[data-building-line]');
+    var CAN_HAVE_BUILDINGS = (entityType === 'job' || entityType === 'lead');
+    function refreshBuildingLine() {
+      if (!buildingLine) return;
+      if (!CAN_HAVE_BUILDINGS) { buildingLine.innerHTML = ''; return; }
+      var p = null;
+      try {
+        if (window.p86Api && window.p86Api.serviceTickets
+          && typeof window.p86Api.serviceTickets.buildingCounts === 'function') {
+          p = window.p86Api.serviceTickets.buildingCounts(entityType, String(entityId));
+        }
+      } catch (e) { p = null; }
+      if (!p || typeof p.then !== 'function') { buildingLine.innerHTML = ''; return; }
+      p.then(function (r) {
+        var open = Number(r && r.buildings_open);
+        var wo = Number(r && r.work_orders);
+        if (!isFinite(open) || open <= 0) { buildingLine.innerHTML = ''; return; }
+        if (!isFinite(wo) || wo < 0) wo = 0;
+        buildingLine.innerHTML =
+          '<a class="p86-task-building-line" href="/service-tickets" data-building-link ' +
+            'style="display:inline-block;margin:0 0 8px;font-size:12.5px;color:var(--accent,#22d3ee);text-decoration:none;">' +
+            esc(open + ' building' + (open === 1 ? '' : 's') + ' open across ' +
+                wo + ' work order' + (wo === 1 ? '' : 's')) + ' &rarr;' +
+          '</a>';
+        var a = buildingLine.querySelector('[data-building-link]');
+        if (a) a.addEventListener('click', function (ev) {
+          // Prefer the app router when there is one; otherwise the plain href
+          // does the navigating. No per-job filter is linked — that view does
+          // not exist, and a dead query string is worse than the page itself.
+          if (window.p86Router && typeof window.p86Router.go === 'function') {
+            ev.preventDefault();
+            window.p86Router.go('/service-tickets');
+          }
+        });
+      }).catch(function () { buildingLine.innerHTML = ''; });
+    }
+    refreshBuildingLine();
+
+    var ctl = { refresh: function () { mounted.refresh(); appts.refresh(); refreshBuildingLine(); } };
     registerTaskSurface(container, ctl);
     return ctl;
   }
@@ -1637,7 +1684,16 @@
 
   // ── Tab 1: Team Tasks (org-wide, assignable, user-filterable) ──────
   function renderTeam(body, kind) {
-    body.innerHTML = '<div id="teamBar"></div><div id="teamList"></div>';
+    // The Punch list tab filters on kind='punch', which is a DIFFERENT thing
+    // from a building on a work order — and since 1.33 took buildings off
+    // every task list, this is the first place people will come looking for
+    // them. One quiet line, no rename, no change to what the tab lists.
+    var punchNote = (kind === 'punch')
+      ? '<div class="p86-punch-wo-note" style="font-size:12.5px;color:var(--text-dim,#8a8a9a);margin:2px 0 10px;">' +
+          'Buildings on a work order are on the work order &mdash; see Service Tickets &rarr; My work.' +
+        '</div>'
+      : '';
+    body.innerHTML = '<div id="teamBar"></div>' + punchNote + '<div id="teamList"></div>';
     var barHost = body.querySelector('#teamBar');
     var listHost = body.querySelector('#teamList');
     var s = { status: _teamFilter, assignee: _teamUser, priority: _teamPriority, hasAssignee: true, users: [] };

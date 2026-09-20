@@ -4750,12 +4750,30 @@ async function initSchema() {
     --
     -- A separate column and NOT entity_type='service_ticket', which would have
     -- been free, because that would consume the task's ONLY parent pointer:
-    -- tasks has no job_id and no lead_id. A task under a ticket on a job would
-    -- then silently vanish from the job overview Tasks panel, the My Tasks
-    -- "Job" column, read_entity(job, include:['tasks']) and the idx_tasks_entity
-    -- index path. With a separate column a task keeps entity_type='job' AND
-    -- carries service_ticket_id — both facts are true at once, which is what
-    -- is actually the case.
+    -- tasks has no job_id and no lead_id. With a separate column a building
+    -- keeps entity_type='job' AND carries service_ticket_id — both facts are
+    -- true at once, which is what is actually the case. That still buys what
+    -- it always bought: the row survives every job-scoped join and the
+    -- idx_tasks_entity index path, a ticket can later be re-pointed to a
+    -- different job without orphaning its buildings, and deleting a ticket
+    -- (below) leaves the work filed under the job it was done on.
+    --
+    -- THE READ RULE REVERSED IN 1.33, AND THIS COMMENT USED TO ARGUE THE OTHER
+    -- WAY. It said a building would otherwise "silently vanish from the job
+    -- overview Tasks panel, the My Tasks 'Job' column and
+    -- read_entity(job, include:['tasks'])" — and those are now exactly the
+    -- lists a building is DELIBERATELY kept off. Service tickets are not to be
+    -- confused with tasks: a building is not a to-do, it is work on a work
+    -- order, and one job's twelve buildings buried every real to-do in the
+    -- company. The exclusion is ONE predicate, in
+    -- server/services/service-ticket-subtask-door.js (notAWorkOrderBuildingSql,
+    -- with isWorkOrderSubtask as its JS twin), applied at every general task
+    -- read. Buildings show on the work order itself, on
+    -- Service Tickets → My work, on the My Day work-orders strip and in the
+    -- work-orders morning digest.
+    --
+    -- The STORAGE decision above is untouched by that: the column is still the
+    -- right shape, and the reads that filter on it are the reads that changed.
     --
     -- ON DELETE SET NULL, not CASCADE: deleting a ticket must never delete
     -- field work a crew completed. The task survives, orphaned back to its job.

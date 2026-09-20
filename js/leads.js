@@ -2092,6 +2092,11 @@ function p86Ask(message, opts) {
         facts: facts,
         tasks: (taskVm && taskVm.tasks) || [],
         tasksMore: (taskVm && taskVm.more) || 0,
+        // 1.33: a work-order building is not a task and is not in .tasks any
+        // more, so loadTasks hands back a {open,workOrders} summary beside
+        // them. Without this key the card reads "no follow-ups" on a lead with
+        // four buildings open — the exact blind spot the line exists to close.
+        buildings: (taskVm && taskVm.buildings) || null,
         canAddTask: !!(window.p86Tasks && window.p86Tasks.openQuickAdd),
         data: { id: l.id, lat: l.latitude, lng: l.longitude }
       }, onAct);
@@ -2104,7 +2109,10 @@ function p86Ask(message, opts) {
     window.p86EntityCard.loadTasks('lead', l.id, 2, function (vm) {
       // Guard against a late response for a lead the user already left.
       if (_currentEditingLeadId && String(_currentEditingLeadId) !== String(l.id)) return;
-      if (vm && vm.tasks && vm.tasks.length) paint(vm);
+      // EITHER half is worth a repaint. Gating on tasks alone skipped exactly
+      // the lead the buildings line was written for: no follow-ups at all, and
+      // open buildings on a work order.
+      if (vm && ((vm.tasks && vm.tasks.length) || vm.buildings)) paint(vm);
     });
   }
   window.p86MountLeadCard = mountLeadCard;

@@ -360,7 +360,29 @@ function workOrderOut(ticket, moved) {
 //   due_after    — ISO date; due_date >= this  (Upcoming)
 //   q            — substring search on title
 //   limit        — max 200 (default 100)
+//   service_ticket_id — one work order's tasks (its punch list)
+//   include_work_orders — '1' → do NOT hide buildings (escape hatch)
+//   count_only   — '1' → { count } only: every filter, no limit, no joins
 // Archived tasks are always excluded.
+//
+// A BUILDING ON A WORK ORDER IS NOT A TO-DO, AND IS NOT ON THIS LIST (1.33).
+// A work order's punch list is a list of BUILDINGS, stored as ordinary org
+// tasks carrying service_ticket_id. They are not to-dos: a building lives on
+// its work order, is finished there under the photo rule, and moves the ticket
+// when the last one is done. Mixing them into My Tasks, Team Tasks, a job's
+// Tasks panel or My Day made one job's twelve buildings drown every real
+// to-do in the company. So every general task list now hides them.
+//
+// The person a building is assigned to has not lost it. They reach it from
+// Service Tickets → My work, from the work-orders strip on My Day, and from
+// the morning digest — and GET /api/tasks/:id still opens one by id, which is
+// what those surfaces link to.
+//
+// The rule is ONE predicate, in server/services/service-ticket-subtask-door.js
+// (notAWorkOrderBuildingSql / isWorkOrderSubtask), so the SQL here and the JS
+// the write doors ask cannot drift apart. Its `scope = 'personal'` arm is
+// load-bearing in the other direction: a PRIVATE to-do that happens to carry a
+// ticket id belongs to its owner and stays on their list.
 // ──────────────────────────────────────────────────────────────────
 router.get('/', requireAuth, async (req, res) => {
   try {
@@ -374,6 +396,18 @@ router.get('/', requireAuth, async (req, res) => {
       "(t.scope = 'org' OR (t.scope = 'personal' AND t.owner_user_id = $2))"];
     const params = [orgId, Number(req.user.id)];
     let pn = 3;
+
+    // BUILDINGS OFF THE LIST — the two cases that keep them, together in one
+    // place so neither can be read without the other:
+    //   1. service_ticket_id — asking for a ticket's tasks IS asking for its
+    //      buildings. The work order's own punch list is the one list they
+    //      belong on, and it is served from here.
+    //   2. include_work_orders=1 — a deliberate escape hatch. No client sends
+    //      it today; it exists so a future caller that genuinely wants both
+    //      says so out loud rather than deleting the predicate.
+    const skipBuildingRule = !!req.query.service_ticket_id ||
+      String(req.query.include_work_orders || '') === '1';
+    if (!skipBuildingRule) where.push(subtaskDoor.notAWorkOrderBuildingSql('t'));
 
     // 3-tier scope filter: scope='org' → org tasks only (the Team Tasks pane);
     // scope='personal' → the caller's OWN private to-dos only (My To-Dos). The
@@ -439,6 +473,18 @@ router.get('/', requireAuth, async (req, res) => {
       params.push('%' + String(req.query.q).trim() + '%');
     }
 
+    // count_only=1 — the SAME rows the list would return, counted in the
+    // database. The admin console's "Open tasks" KPI used to be the LENGTH OF
+    // A PAGE: it fetched limit=200 and counted the array, so an org with more
+    // than 200 open tasks read "200" forever. A count is not a page, so there
+    // is no LIMIT, no join and no photo_count subquery here — and no `tasks`
+    // key in the body, so nothing can mistake this for a truncated list.
+    if (String(req.query.count_only || '') === '1') {
+      const countSql = 'SELECT COUNT(*)::int AS count FROM tasks t WHERE ' + where.join(' AND ');
+      const cr = await pool.query(countSql, params);
+      return res.json({ count: Number((cr.rows[0] && cr.rows[0].count) || 0) });
+    }
+
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 100));
 
     // Order: incomplete first, then by due date (NULLs last), then by
@@ -448,8 +494,18 @@ router.get('/', requireAuth, async (req, res) => {
       'SELECT t.*, ' +
       '       au.name AS assignee_name, ' +
       '       cu.name AS created_by_name, ' +
+      // THE PHOTO COUNT CARRIES THE COMPANY. entity_type='task' + entity_id
+      // is a polymorphic key with no tenant in it: task ids are random, but
+      // "every query carries the organization" is the rule, not a bet on id
+      // collisions. The tolerance arm is REQUIRED, not optional —
+      // attachments.organization_id is nullable and only as current as the
+      // last boot's backfill (see the header of
+      // server/services/attachment-org-scope.js), so bare equality would
+      // silently zero the completion-photo count on legacy rows, and that
+      // count is the photo signal the whole work-order rule rests on.
       '       (SELECT COUNT(*)::int FROM attachments a ' +
-      "          WHERE a.entity_type = 'task' AND a.entity_id = t.id) AS photo_count " +
+      "          WHERE a.entity_type = 'task' AND a.entity_id = t.id " +
+      '            AND (a.organization_id = t.organization_id OR a.organization_id IS NULL)) AS photo_count ' +
       '  FROM tasks t ' +
       '  LEFT JOIN users au ON au.id = t.assignee_user_id ' +
       '  LEFT JOIN users cu ON cu.id = t.created_by ' +
@@ -473,6 +529,14 @@ router.get('/', requireAuth, async (req, res) => {
 
 // GET /api/tasks/:id — single task, hydrated with assignee + creator
 // names, linked-entity label, and photo count.
+//
+// NO BUILDING EXCLUSION HERE, DELIBERATELY. The list above hides a work
+// order's buildings; a read BY ID must still answer with one. This is the
+// door every replacement surface links to — Service Tickets → My work, the My
+// Day work-orders strip, the morning digest and window.p86Tasks.openDetail all
+// open a building by its id, and it is how the assignee reaches theirs to tick
+// it off. Adding notAWorkOrderBuildingSql here would look like finishing the
+// job and would instead strand the crew lead the rule is meant to serve.
 router.get('/:id', requireAuth, async (req, res) => {
   try {
     const orgId = callerOrgId(req);
@@ -481,8 +545,10 @@ router.get('/:id', requireAuth, async (req, res) => {
       'SELECT t.*, ' +
       '       au.name AS assignee_name, ' +
       '       cu.name AS created_by_name, ' +
+      // Same org predicate, same tolerance arm, same reason as the list above.
       '       (SELECT COUNT(*)::int FROM attachments a ' +
-      "          WHERE a.entity_type = 'task' AND a.entity_id = t.id) AS photo_count " +
+      "          WHERE a.entity_type = 'task' AND a.entity_id = t.id " +
+      '            AND (a.organization_id = t.organization_id OR a.organization_id IS NULL)) AS photo_count ' +
       '  FROM tasks t ' +
       '  LEFT JOIN users au ON au.id = t.assignee_user_id ' +
       '  LEFT JOIN users cu ON cu.id = t.created_by ' +

@@ -15,7 +15,10 @@
 //      next burst carries only its own events; settle 5 min / max wait 20 min;
 //      finishing and flags never batch; two ticks racing send once.
 //   D. digest: nothing when nothing needs attention; sections; once per local
-//      day; weekdays 7-12 in the person's own zone; digest off + waiting on =
+//      day; a crew lead whose ONLY item is a building assigned to them still
+//      gets one (1.33 — the daily task email stopped carrying buildings and
+//      every other section is gated on job access, which they fail);
+//      weekdays 7-12 in the person's own zone; digest off + waiting on =
 //      the standalone reminder, honouring the org's N; and a digest that
 //      reached NO channel falls through to that reminder in the same pass,
 //      because the day is already burned and nothing retries it.
@@ -430,11 +433,31 @@ describe('D. morning digest and waiting reminder', () => {
   test('one digest per person with something to do, on a weekday morning, with the sections and no Reply-To', async () => {
     const W = WED9();
     digestFixture(W);
+    // 1.33: Carl is on no work order and holds no grant on j1, so every section
+    // that goes through listVisibility skips him — and since the same release
+    // took buildings off the daily task email, this digest is the ONLY thing
+    // that tells him a building is assigned to him. Before it, he got nothing.
+    insert('tasks', {
+      id: 'b_carl', organization_id: 1, title: 'Bldg 12', status: 'open', scope: 'org',
+      service_ticket_id: 'd_due', assignee_user_id: 11, archived_at: null,
+      due_date: localDay(new Date(W.getTime() + DAY)),
+    });
     const s = senders();
     const out = await cron.runOnce({ now: W, deps: s.deps });
     const d = digests(s);
-    // Paula runs j1; Cora raised the tickets (admin). Carl is on nothing.
-    expect(d.map((m) => m.to).sort()).toEqual(['creator@agx.test', 'pm@agx.test']);
+    // Paula runs j1; Cora raised the tickets (admin); Carl is on nothing but is
+    // the assignee of a building.
+    expect(d.map((m) => m.to).sort()).toEqual(['creator@agx.test', 'crew@agx.test', 'pm@agx.test']);
+    const carl = d.find((x) => x.to === 'crew@agx.test');
+    expect(carl.subject).toBe('Work orders needing you today (1)');
+    expect(carl.text).toContain('Buildings assigned to you (1)');
+    expect(carl.text).toContain('1 building still open · next due ');
+    ['Ready for your approval', 'Overdue (', 'Crew scheduled soon'].forEach((head) => {
+      expect([head, carl.text.includes(head)]).toEqual([head, false]);
+    });
+    // Crew-facing: he is told the job number and where to go, and nothing more.
+    expect(carl.text).toContain('M1001 · Latitude');
+    expect(carl.subject + carl.text + carl.html).not.toMatch(/[$£€]\s?\d|\b\d+\.\d{2}\b/);
     const m = d.find((x) => x.to === 'pm@agx.test');
     expect(m.subject).toBe('[2 to approve] Work orders needing you today (4)');
     expect(m.text).toContain('Ready for your approval (2)');
@@ -447,7 +470,7 @@ describe('D. morning digest and waiting reminder', () => {
     expect(JSON.stringify(s.emails)).not.toMatch(/24000|contract/i);
     const push = s.pushes.find((p) => p.userId === 10 && p.key === 'work_order_digest');
     expect(push.payload.body).toBe('2 to approve · 1 overdue · 1 link not opened');
-    expect(out.digest).toMatchObject({ digests: 2 });
+    expect(out.digest).toMatchObject({ digests: 3 });
     expect(out.digest.users).toBeGreaterThanOrEqual(3);
   });
 

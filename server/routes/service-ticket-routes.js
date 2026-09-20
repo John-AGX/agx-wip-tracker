@@ -40,6 +40,10 @@ const fields = require('../services/service-ticket-fields');
 const assignees = require('../services/service-ticket-assignees');
 const inflight = require('../services/inflight');
 const notices = require('../services/work-order-notices');
+// 1.33: the one place that says in SQL what a work-order building is
+// (notAWorkOrderBuildingSql) and what "assigned to me" means on one
+// (myOpenBuildingSql). GET /my-buildings below is the second's only caller here.
+const subtaskDoor = require('../services/service-ticket-subtask-door');
 // 1.29: what the crew flagged and what the office has seen (B4), and the change
 // orders started from a work order (B8). Office reads only.
 const flagSvc = require('../services/service-ticket-flags');
@@ -178,6 +182,35 @@ const TICKET_COLS = [
   'approval_notified_at', 'approval_notice_attempts', 'approval_notice_gave_up_at',
   'approved_at', 'approved_by', 'cancelled_at', 'cancelled_by',
 ].join(', ');
+
+// What a work order may carry to someone who is only the assignee of a
+// building on it. Projection by INCLUSION, like svc.PUBLIC_TICKET_KEYS: a
+// column added to service_tickets later must not appear here by default.
+// NO MONEY, NO OFFICE TEXT: no internal_notes, no scope_proposed, no
+// scope_approved, no materials, no crew_takeoff, no guest_log, no
+// requested_by, no assignee_user_id, no created_by.
+//
+// It DELIBERATELY widens what an assignee learns beyond what they could read
+// anywhere else: the job's number and title, the site address and the work
+// order's own title, for a job they may not be able to open at all. That is
+// the point — a crew lead handed a building has to know where to go. Nothing
+// past that, and test/work-order-my-buildings-door.test.js asserts the key set
+// EXACTLY rather than as a subset, so a new column cannot be added silently.
+const MY_BUILDING_ROW_KEYS = Object.freeze([
+  'id', 'ticket_number', 'title', 'status', 'priority',
+  'scheduled_for', 'due_date', 'street_address', 'city',
+  'job_id', 'lead_id', 'job_number', 'job_title', 'lead_title',
+  'my_buildings_open', 'my_buildings_total', 'my_next_due', 'is_overdue',
+  'buildings',
+]);
+
+// Each building object carries exactly these and nothing else.
+const MY_BUILDING_TASK_KEYS = Object.freeze(['id', 'title', 'status', 'due_date', 'completed_at']);
+
+// At most this many buildings per ticket travel inline. The strip and the
+// "My work" view open each one with window.p86Tasks.openDetail(id); a punch
+// list longer than this is a scrolling problem, not a paging one.
+const MY_BUILDINGS_PER_TICKET = 25;
 
 function newId(prefix) { return svc.genId(prefix); }
 
@@ -419,6 +452,256 @@ router.get('/assignees/:kind/:parentId', requireAuth, requireOrgId, async (req, 
   } catch (e) {
     console.error('[service-tickets] assignees failed', e);
     res.status(500).json({ error: 'Failed to load the people this can be assigned to' });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 1.33: THE BUILDINGS ASSIGNED TO ME, AND HOW MANY ARE OPEN ON A PARENT
+ *
+ * A building on a work order's punch list is an ordinary org task carrying a
+ * service_ticket_id. From 1.33 those rows are subtracted from every task list
+ * — My Tasks, Team Tasks, the job and lead Tasks panels, My Day, the calendar,
+ * the admin count, the daily email and 86's task list — because a building is
+ * not a to-do. These two reads are what makes that removal safe.
+ *
+ * ROUTE ORDER IS LOAD-BEARING. Express matches in declaration order and
+ * `router.get('/:id')` is declared below, so '/my-buildings' and
+ * '/building-counts' MUST stay above it or they are fed to loadOwnedTicket and
+ * answered 404 as missing tickets. test/work-order-my-buildings-door.test.js
+ * drives both and asserts they are not swallowed.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+function intOf(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : 0;
+}
+
+function truthy(v) {
+  return v === true || v === 1 || v === '1' || v === 't' || v === 'true';
+}
+
+// The caller's buildings on one ticket, exactly five keys each.
+function shapeMyBuilding(row) {
+  const r = row || {};
+  const out = {};
+  MY_BUILDING_TASK_KEYS.forEach(function (k) { out[k] = r[k] === undefined ? null : r[k]; });
+  return out;
+}
+
+// Shaped key by key through MY_BUILDING_ROW_KEYS, the way
+// services/service-ticket-board.js shapeRow does it: a fresh object, null for
+// anything the statement did not select. A column added to the SELECT that is
+// not on the whitelist never reaches the browser.
+function shapeMyBuildingRow(row, buildings) {
+  const r = row || {};
+  const out = {};
+  MY_BUILDING_ROW_KEYS.forEach(function (k) { out[k] = r[k] === undefined ? null : r[k]; });
+  out.my_buildings_open = intOf(r.my_buildings_open);
+  out.my_buildings_total = intOf(r.my_buildings_total);
+  out.my_next_due = r.my_next_due == null || r.my_next_due === '' ? null : String(r.my_next_due).slice(0, 10);
+  out.is_overdue = truthy(r.is_overdue);
+  out.buildings = buildings || [];
+  const shaped = {};
+  MY_BUILDING_ROW_KEYS.forEach(function (k) { shaped[k] = out[k]; });
+  return shaped;
+}
+
+// The active statuses as a literal IN list, built from the board's own
+// constant rather than retyped: a status added to board.STATUS_GROUPS.active
+// must reach this door in the same edit.
+function activeStatusIn(alias) {
+  return alias + '.status IN (' +
+    board.STATUS_GROUPS.active.map(function (s) { return "'" + s + "'"; }).join(', ') + ')';
+}
+
+// ── 1.33: GET /my-buildings — the work orders where a building is MINE ────
+//
+// THIS IS THE ONE ARM THAT DELIBERATELY DOES NOT ASK
+// services/service-ticket-access.js listVisibility, and it must stay that way.
+// listVisibility resolves to "every job-parented ticket" (JOBS_VIEW_ALL), "the
+// jobs I own or hold a job_access grant on" (JOBS_VIEW_ASSIGNED) or nothing —
+// the rule GET / and the whole Service Tickets board run through. But
+// services/service-ticket-subtask-door.js doneVerdict deliberately lets a
+// building's ASSIGNEE finish it on a job they cannot otherwise open, so a crew
+// lead on JOBS_VIEW_ASSIGNED with no grant on the job is a real, intended
+// case. Gating this read on listVisibility would answer that person zero rows
+// and strand them with no way to reach work that is assigned to them by name —
+// the exact regression removing buildings from the task lists exists to
+// prevent. So the key here is assignment and nothing else.
+//
+// What that costs is written down rather than waved at: the answer tells an
+// assignee the job's number and title, the site address and the work order's
+// own title for a job they may not be able to open. MY_BUILDING_ROW_KEYS above
+// is the whole of what leaks, it is a whitelist, and the test asserts it
+// exactly. No prices, no internal notes, no scope text.
+router.get('/my-buildings', requireAuth, requireOrgId, async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const me = callerUserId(req);
+    // The caller's own day, from their zone (else the org's) — never the
+    // server's and never the browser's. board.boardDates is the one place.
+    const dates = await board.boardDates(pool, orgId, me);
+    const today = dates.today;
+
+    const countOnly = String(req.query.count_only || '') === '1';
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+    const offsetRaw = Number(req.query.offset);
+    const offset = Number.isFinite(offsetRaw) ? Math.min(5000, Math.max(0, Math.trunc(offsetRaw))) : 0;
+
+    // No usable identity is an EMPTY answer, never everything: `assignee_user_id
+    // = NULL` is never true in SQL, but failing closed here says so out loud.
+    if (me == null) {
+      return res.json(countOnly
+        ? { total: 0, buildings_open: 0 }
+        : { tickets: [], today, total: 0, buildings_open: 0, has_more: false, next_offset: null });
+    }
+
+    // $1 org, $2 the caller. Both counts and the rows run the SAME predicate.
+    const baseWhere =
+      't.organization_id = $1 AND t.archived_at IS NULL AND ' + activeStatusIn('t') +
+      ' AND ' + subtaskDoor.myOpenBuildingSql('t', '$2');
+
+    // Two counts, never derived from the page: `total` is how many work orders
+    // match, `buildings_open` is how many of the caller's buildings are open
+    // across all of them (the number the My Day strip and the tab badge show).
+    // Each carries its own organization predicate, and the buildings count
+    // re-states the ticket predicate through a join rather than trusting the
+    // ticket id alone.
+    const [totalRes, openRes] = await Promise.all([
+      pool.query('SELECT COUNT(*)::int AS total FROM service_tickets t WHERE ' + baseWhere, [orgId, me]),
+      pool.query(
+        `SELECT COUNT(*)::int AS buildings_open
+           FROM tasks k
+           JOIN service_tickets s ON s.id = k.service_ticket_id AND s.organization_id = k.organization_id
+          WHERE k.organization_id = $1 AND k.archived_at IS NULL AND k.scope = 'org'
+            AND k.status <> 'done' AND k.assignee_user_id = $2
+            AND s.archived_at IS NULL AND ${activeStatusIn('s')}`,
+        [orgId, me]
+      ),
+    ]);
+    const total = intOf(totalRes.rows[0] && totalRes.rows[0].total);
+    const buildingsOpen = intOf(openRes.rows[0] && openRes.rows[0].buildings_open);
+
+    // The badge asks for the numbers alone; neither statement below runs.
+    if (countOnly) return res.json({ total, buildings_open: buildingsOpen });
+
+    // Every per-row count is a correlated subquery carrying its OWN org
+    // predicate — a child is never reached on parent-id membership alone. The
+    // two label joins are pinned to the ticket's own org for the same reason
+    // the list route pins its: a parent in another tenant comes back as a null
+    // label, never as someone else's name.
+    const rowsSql =
+      `SELECT t.id, t.ticket_number, t.title, t.status, t.priority,
+              t.scheduled_for, t.due_date, t.street_address, t.city,
+              t.job_id, t.lead_id,
+              jl.data->>'jobNumber' AS job_number,
+              COALESCE(NULLIF(jl.data->>'title',''), jl.data->>'name') AS job_title,
+              CASE WHEN t.job_id IS NULL THEN ll.title END AS lead_title,
+              (SELECT COUNT(*)::int FROM tasks bo
+                WHERE bo.service_ticket_id = t.id AND bo.organization_id = t.organization_id
+                  AND bo.archived_at IS NULL AND bo.scope = 'org'
+                  AND bo.assignee_user_id = $2 AND bo.status <> 'done') AS my_buildings_open,
+              (SELECT COUNT(*)::int FROM tasks bt
+                WHERE bt.service_ticket_id = t.id AND bt.organization_id = t.organization_id
+                  AND bt.archived_at IS NULL AND bt.scope = 'org'
+                  AND bt.assignee_user_id = $2) AS my_buildings_total,
+              (SELECT MIN(bd.due_date)::text FROM tasks bd
+                WHERE bd.service_ticket_id = t.id AND bd.organization_id = t.organization_id
+                  AND bd.archived_at IS NULL AND bd.scope = 'org'
+                  AND bd.assignee_user_id = $2 AND bd.status <> 'done') AS my_next_due,
+              (t.due_date IS NOT NULL AND t.due_date < $3) AS is_overdue
+         FROM service_tickets t
+         LEFT JOIN jobs jl ON jl.id = t.job_id AND jl.organization_id = t.organization_id
+         LEFT JOIN leads ll ON ll.id = t.lead_id AND ll.organization_id = t.organization_id
+        WHERE ${baseWhere}
+        ORDER BY (t.due_date IS NULL), t.due_date ASC, (t.scheduled_for IS NULL), t.scheduled_for ASC,
+                 t.created_at DESC, t.id ASC
+        LIMIT ${limit + 1} OFFSET ${offset}`;
+    const { rows } = await pool.query(rowsSql, [orgId, me, today]);
+
+    // One row over the limit is how has_more is decided, exactly as
+    // services/service-ticket-board.js rowsStatement does it.
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+
+    // ONE statement for the whole page's buildings, never one per ticket. The
+    // crew lead cannot open POST /:id/subtasks/:taskId/done (it asks for write
+    // access on the parent, which they fail), so these rows are what the client
+    // hands to window.p86Tasks.openDetail(id) — without them the removal
+    // strands the person this door exists to serve.
+    const byTicket = new Map();
+    if (page.length) {
+      const ids = page.map(function (r) { return String(r.id); });
+      const kids = await pool.query(
+        `SELECT id, service_ticket_id, title, status, due_date, completed_at
+           FROM tasks
+          WHERE organization_id = $1 AND service_ticket_id = ANY($2::text[])
+            AND archived_at IS NULL AND scope = 'org' AND assignee_user_id = $3
+          ORDER BY created_at ASC`,
+        [orgId, ids, me]
+      );
+      for (const k of kids.rows) {
+        const key = String(k.service_ticket_id);
+        const list = byTicket.get(key) || [];
+        if (list.length < MY_BUILDINGS_PER_TICKET) list.push(shapeMyBuilding(k));
+        byTicket.set(key, list);
+      }
+    }
+
+    res.json({
+      tickets: page.map(function (r) { return shapeMyBuildingRow(r, byTicket.get(String(r.id)) || []); }),
+      today,
+      total,
+      buildings_open: buildingsOpen,
+      has_more: hasMore,
+      next_offset: hasMore ? offset + limit : null,
+    });
+  } catch (e) {
+    console.error('[service-tickets] my-buildings failed', e);
+    res.status(500).json({ error: 'Failed to load your buildings' });
+  }
+});
+
+// ── 1.33: GET /building-counts — the line on a job's or lead's Tasks panel ─
+//
+// "4 buildings open across 2 work orders", above a Tasks panel that no longer
+// lists them. Unlike /my-buildings this is an OFFICE surface on a page the
+// caller already had to open, so it asks the file's normal per-parent rule
+// (ticketAccessOk on the parent, read tier) and a caller who cannot open the
+// job gets the same 404 a missing job gets. Both counts zero is a perfectly
+// good answer; a parent with no buildings is never a 404.
+router.get('/building-counts', requireAuth, requireOrgId, async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const kind = String(req.query.entity_type || '');
+    if (kind !== 'job' && kind !== 'lead') return res.status(404).json({ error: 'Not found' });
+    const id = String(req.query.entity_id || '');
+    const missingMsg = kind === 'job' ? 'Job not found' : 'Lead not found';
+    const inOrg = id !== '' && (await assertEntityInOrg(kind, id, orgId));
+    if (!inOrg) return res.status(404).json({ error: missingMsg });
+    const parent = kind === 'job' ? { job_id: id, lead_id: null } : { job_id: null, lead_id: id };
+    if (!(await ticketAccessOk(req, res, parent, 'read', orgId, missingMsg))) return;
+
+    // A converted lead's ticket carries the job and belongs to it, exactly as
+    // services/service-ticket-access.js parentOf decides it — so it is counted
+    // on the JOB's panel and the lead arm excludes it.
+    const parentSql = kind === 'job' ? 's.job_id = $2' : '(s.job_id IS NULL AND s.lead_id = $2)';
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int AS buildings_open,
+              COUNT(DISTINCT k.service_ticket_id)::int AS work_orders
+         FROM tasks k
+         JOIN service_tickets s ON s.id = k.service_ticket_id AND s.organization_id = k.organization_id
+        WHERE k.organization_id = $1 AND k.archived_at IS NULL AND k.scope = 'org'
+          AND k.status <> 'done'
+          AND s.archived_at IS NULL AND ${activeStatusIn('s')}
+          AND ${parentSql}`,
+      [orgId, id]
+    );
+    const row = rows[0] || {};
+    res.json({ buildings_open: intOf(row.buildings_open), work_orders: intOf(row.work_orders) });
+  } catch (e) {
+    console.error('[service-tickets] building-counts failed', e);
+    res.status(500).json({ error: 'Failed to count the buildings on this' });
   }
 });
 
@@ -1619,5 +1902,10 @@ router.get('/:id/events', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to load the timeline' });
   }
 });
+
+// The crew-safe whitelist GET /my-buildings shapes every row through, so a
+// test asserts the key set without re-typing it (and a new column cannot be
+// added to the projection without the test noticing).
+router.MY_BUILDING_ROW_KEYS = MY_BUILDING_ROW_KEYS;
 
 module.exports = router;

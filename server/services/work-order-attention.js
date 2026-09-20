@@ -22,6 +22,29 @@
 //                or scheduled; no live crew link has been opened.
 //   expiring     can read it; a live crew link expires within 3 days.
 //   suggestions  can edit it; crew suggestions pending for more than 24 hours.
+//   your_buildings
+//                is the ASSIGNEE of at least one live, open org building on it
+//                (tasks.assignee_user_id). How many are still open, and the
+//                soonest due date among them. Not gated on access — see below.
+//
+// THE ONE SECTION THAT IS NOT GATED ON ACCESS. Every section above is filtered
+// through reaches(), which is services/service-ticket-access.js listVisibility.
+// your_buildings deliberately is not, and must never be. A building is assigned
+// to a PERSON, and services/service-ticket-subtask-door.js doneVerdict lets that
+// person finish it on a job they cannot otherwise open. Since 1.33 buildings are
+// off every task list (the owner's rule: a service ticket is not a task), so
+// this section — and GET /api/service-tickets/my-buildings, the same rule on the
+// page — is the only place that person is TOLD about work assigned to them. Put
+// it through listVisibility and a crew lead is shown nothing, which is the exact
+// failure it exists to prevent. Nor is membership of `related` / relationIds
+// asked: being the assignee of a building is the whole claim.
+//   A deliberate widening, named out loud: the recipient learns the job's number
+//   and title (jobLine) and the work order's title for a job they may not be
+//   able to open. That is necessary — they have to know where to go — and it is
+//   all they learn. Nothing priced, ever, here as everywhere else.
+//   Only an ACTIVE work order counts: the ticket query below already restricts
+//   to open, scheduled, in_progress and work_complete, so this section needs no
+//   status filter of its own.
 //
 // WHO IS "ON" A WORK ORDER is services/work-order-recipients.js relationIds —
 // the same relations every notice uses (PM, creator, every link sender,
@@ -48,7 +71,8 @@ const access = require('./service-ticket-access');
 const TICKET_CAP = 500;
 const DAY_MS = 86400000;
 const EXPIRING_MS = 3 * DAY_MS;
-const SECTION_KEYS = Object.freeze(['approvals', 'flags', 'overdue', 'unopened', 'expiring', 'suggestions']);
+// Appended to, never reordered: the digest and the page's count index this list.
+const SECTION_KEYS = Object.freeze(['approvals', 'flags', 'overdue', 'unopened', 'expiring', 'suggestions', 'your_buildings']);
 const ACTIVE_STATUSES = Object.freeze(['open', 'scheduled', 'in_progress']);
 
 function positiveInt(v) {
@@ -125,7 +149,8 @@ function emptySections() {
 /**
  * attentionForOrg(db, {org:{id, name, timezone, settings}, now?, deps?, userIds?})
  *   -> Map<userId, {user, sections:{approvals, flags, overdue, unopened, expiring,
- *                   suggestions}, overBusinessDays:[{ticket, jobLine, businessDays}]}>
+ *                   suggestions, your_buildings},
+ *                   overBusinessDays:[{ticket, jobLine, businessDays}]}>
  * Only people with at least one item are in the map.
  *   deps.hasCapability  injected by tests; auth's role cache by default
  *   deps.openFlags      (db, orgId, ticketIds) -> Map<ticketId, [{flag_id, category, created_at}]>
@@ -165,7 +190,7 @@ async function attentionForOrg(db, opts) {
   const jobIds = Array.from(new Set(tickets.filter(function (row) { return row.job_id; }).map(function (row) { return String(row.job_id); })));
   const leadIds = Array.from(new Set(tickets.filter(function (row) { return row.lead_id; }).map(function (row) { return String(row.lead_id); })));
 
-  const [shares, pending, tallies, jobRows, grantRows, leadRows, participants, users] = await Promise.all([
+  const [shares, pending, tallies, jobRows, grantRows, leadRows, participants, users, myBuildings] = await Promise.all([
     db.query(
       `SELECT id, ticket_id, created_by, recipient_name, scope, opened_at, revoked_at, expires_at,
               CASE WHEN revoked_at IS NULL AND expires_at > NOW() THEN 1 ELSE 0 END AS live
@@ -218,6 +243,22 @@ async function attentionForOrg(db, opts) {
         ORDER BY id ASC`,
       [orgId]
     ),
+    // OPEN BUILDINGS PER ASSIGNEE. The per-ticket tally above cannot answer
+    // this — it has no assignee column — so your_buildings has its own group.
+    // A building is a live org task on the ticket: `scope = 'org'` leaves a
+    // private to-do that happens to carry a ticket id to its owner, exactly as
+    // services/service-ticket-subtask-door.js draws the line.
+    db.query(
+      `SELECT k.service_ticket_id AS ticket_id, k.assignee_user_id AS user_id,
+              COUNT(*)::int AS open_n,
+              CAST(MIN(k.due_date) AS TEXT) AS next_due
+         FROM tasks k
+        WHERE k.organization_id = $1 AND k.service_ticket_id = ANY($2::text[])
+          AND k.archived_at IS NULL AND k.scope = 'org'
+          AND k.status <> 'done' AND k.assignee_user_id IS NOT NULL
+        GROUP BY k.service_ticket_id, k.assignee_user_id`,
+      [orgId, ids]
+    ),
   ]);
 
   let flags = new Map();
@@ -231,6 +272,7 @@ async function attentionForOrg(db, opts) {
   }
 
   const sharesByTicket = groupBy(shares.rows, 'ticket_id');
+  const myBuildingsByTicket = groupBy(myBuildings.rows, 'ticket_id');
   const participantsByTicket = groupBy(participants.rows, 'ticket_id');
   const pendingByTicket = new Map(pending.rows.map(function (r) { return [String(r.ticket_id), Number(r.n) || 0]; }));
   const tallyByTicket = new Map(tallies.rows.map(function (r) {
@@ -347,11 +389,34 @@ async function attentionForOrg(db, opts) {
         add(p, 'suggestions', { ticket: ticket, jobLine: jobLine, count: waiting });
       });
     }
+
+    // BUILDINGS ASSIGNED TO SOMEONE. Not `readers`, not `writers`, not even
+    // `related`: the assignee is told, whether or not they can open the job.
+    // reaches() is NEVER asked here — see "THE ONE SECTION THAT IS NOT GATED ON
+    // ACCESS" in the header. `add` still honours the `only` (userIds) filter, so
+    // the page's own count is unaffected. No status filter: the ticket query
+    // already keeps only open, scheduled, in_progress and work_complete.
+    (myBuildingsByTicket.get(id) || []).forEach(function (row) {
+      const person = people.get(positiveInt(row.user_id));
+      if (!person) return;   // inactive, or moved to another organization
+      add(person, 'your_buildings', {
+        ticket: ticket, jobLine: jobLine,
+        count: Number(row.open_n) || 0,
+        nextDue: dayText(row.next_due),
+      });
+    });
   });
 
   out.forEach(function (entry, id) {
     entry.sections.approvals.sort(function (a, b) { return b.daysWaiting - a.daysWaiting; });
     entry.sections.overdue.sort(function (a, b) { return a.dueDate < b.dueDate ? -1 : (a.dueDate > b.dueDate ? 1 : 0); });
+    // Soonest first, mirroring overdue; a work order whose buildings carry no
+    // due date at all goes last rather than to the top.
+    entry.sections.your_buildings.sort(function (a, b) {
+      if (!a.nextDue) return b.nextDue ? 1 : 0;
+      if (!b.nextDue) return -1;
+      return a.nextDue < b.nextDue ? -1 : (a.nextDue > b.nextDue ? 1 : 0);
+    });
     const any = SECTION_KEYS.some(function (k) { return entry.sections[k].length; });
     if (!any) out.delete(id);
   });
@@ -359,7 +424,7 @@ async function attentionForOrg(db, opts) {
 }
 
 function countsOf(entry) {
-  const counts = { approvals: 0, flags: 0, overdue: 0, unopened: 0, expiring: 0, suggestions: 0, total: 0 };
+  const counts = { approvals: 0, flags: 0, overdue: 0, unopened: 0, expiring: 0, suggestions: 0, your_buildings: 0, total: 0 };
   if (!entry) return counts;
   const ticketIds = new Set();
   SECTION_KEYS.forEach(function (k) {
@@ -373,7 +438,8 @@ function countsOf(entry) {
 
 /**
  * attentionForUser(db, {orgId, userId, now?, deps?})
- *   -> {approvals, flags, overdue, unopened, expiring, suggestions, total}
+ *   -> {approvals, flags, overdue, unopened, expiring, suggestions,
+ *       your_buildings, total}
  * total counts distinct work orders across the sections.
  */
 async function attentionForUser(db, opts) {
