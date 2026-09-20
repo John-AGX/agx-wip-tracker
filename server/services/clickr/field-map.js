@@ -169,6 +169,74 @@ const DATASETS = {
       'isOriginatedFromAccounting', 'attachedFileCount', 'commentCount', 'isDuplicated', 'isDeleted',
     ],
   },
+  // Estimates — Buildertrend’s estimate worksheets, 277 records. A RECORD IS
+  // ONE LINE ITEM, not one estimate: the ESTIMATE is the WORKSHEET, and the
+  // worksheet-level facts (jobId, jobName, contractPrice, proposalStatus,
+  // worksheetLocked) are repeated on every line of it. estimate-match.js
+  // groups by worksheetId and orders by displayOrder; this registry only
+  // reads lines.
+  //
+  // Like bills, these keys were NOT taken from a pull: CLICKR_API_KEY lives
+  // only on the deployed server. They are the labels of ONE record’s detail
+  // panel in the Clickr UI (2026-09-20) converted to the camelCase this
+  // registry already uses, and every one is a CLAIM that describeMapping()
+  // settles without echoing a value: a declared key no record carries lands in
+  // missingKeys and the key the records really use lands in unexpectedKeys.
+  // readEstimateLine() below reads each one exactly as named, with no
+  // candidate list and no fallback (see the header of this file), so a wrong
+  // name reads as ABSENT and never as a wrong value.
+  //
+  // ‘item’ is the least certain of them, exactly as ‘payTo’ is on bills and for
+  // the same reason: Clickr’s LIST view shows an "Item" column holding the
+  // line’s own name, and its underlying key was never seen on a record. It is
+  // declared under the label’s own camelCase like every other key here. It is
+  // also the one key KNOWN to be blank on a real record (a sampled row read
+  // "Item —"), which is why it is not, and can never be, the required key.
+  estimates: {
+    key: 'estimates',
+    label: 'Estimates',
+    noun: 'estimate',
+    datasetId: '6aa5d2a084f8135cf0cc607d',
+    // jobName, for the bills reasoning and two more of its own.
+    //
+    // WHY: a worksheet is matched ONLY inside the P86 job its Buildertrend job
+    // is linked to, and a record with no job is refused whatever else it
+    // carries — so a dataset that lost its job column is a dataset that
+    // classifies nothing, which is the condition this 95% guard exists to
+    // catch. Both job-scoped datasets of a full pull carried jobName on every
+    // record, and jobName is repeated on every LINE of a worksheet, so the
+    // share is measured over lines without being diluted.
+    //
+    //   NOT lineItemId — it is the idKey. A required key that is the id asks
+    //     only "did Clickr send ids", which fetchDataset already dedupes on and
+    //     reports, and it would sit at 100% with every business field renamed
+    //     underneath it.
+    //   NOT worksheetId — the grouping key, and the thing this sync acts on,
+    //     but an opaque number. usableName screens through isBtBlank, a TEXT
+    //     blankness test, so a numeric id can NEVER read blank and the guard
+    //     would pass vacuously on a dataset whose every other key had moved.
+    //   NOT item — the line’s own name, blank on a real sampled record and the
+    //     least certain key in the entry. Requiring it would refuse the whole
+    //     dataset over a key that costs one line its printed name.
+    //   NOT costCodeTitle or groupTitle — a line need belong to neither.
+    requiredKey: 'jobName',
+    // THE LINE’S OWN id, and getting this wrong is expensive: fetchDataset
+    // dedupes on idKey and marks a read PARTIAL when an id arrives twice, and a
+    // partial read blocks every apply. Keying on worksheetId (or on jobId)
+    // would make all 277 lines look like a handful of records arriving over and
+    // over. The WORKSHEET id is what estimate-match.js exposes as the row’s
+    // btId; the LINE id is only ever the read’s identity.
+    idKey: 'lineItemId',
+    keys: [
+      'lineItemId', 'worksheetId', 'groupId', 'assemblyId', 'costCodeId', 'costCategoryId', 'formatId',
+      'costCodeTitle', 'costCategoryName', 'groupTitle', 'groupPath', 'displayOrder', 'lineItemType', 'markedAs',
+      'item',
+      'quantity', 'unitCost', 'builderCost', 'markupType', 'markupPercent', 'markupPerUnit', 'markupAmount',
+      'margin', 'unitPrice', 'ownerPrice', 'amountInvoiced', 'totalWithTax',
+      'jobId', 'jobName', 'contractPrice', 'proposalStatus', 'worksheetLocked', 'isSentToBudget',
+      'hasRelatedPurchaseOrder', 'dateAdded', 'isDeleted',
+    ],
+  },
 };
 
 function isPlainObject(v) {
@@ -375,12 +443,79 @@ function readBill(rec) {
   };
 }
 
+// ONE LINE of a Buildertrend estimate worksheet. Every key is read EXACTLY as
+// declared in the registry and never through a fallback, and every one of them
+// may simply be ABSENT: this mapping came from a detail panel rather than a
+// pull, so a name that turns out to be wrong has to read as null here — never
+// crash the read, never read as a wrong value — and show itself in
+// describeMapping instead.
+//
+// btId IS THE WORKSHEET, NOT THE LINE, and that is deliberate. Every other
+// dataset’s btId is the record’s own id because the record IS the thing a
+// person acts on. Here the record is a LINE and the thing a person acts on is
+// the WORKSHEET: estimate-match.js emits one row per worksheet, sync-apply acts
+// on the ids those rows carry, and since-refresh remembers one snapshot per
+// worksheet. The line’s own id is `lineId`, and it is what DATASETS.estimates
+// declares as idKey so fetchDataset dedupes the READ on the right thing.
+function readEstimateLine(rec) {
+  const r = isPlainObject(rec) ? rec : {};
+  return {
+    btId: scalarText(r.worksheetId),
+    lineId: scalarText(r.lineItemId),
+    groupId: scalarText(r.groupId),
+    groupTitle: scalarText(r.groupTitle),
+    groupPath: scalarText(r.groupPath),
+    // Buildertrend’s own ordering inside the worksheet. A number, or null when
+    // Clickr sent something else — estimate-match.js then falls back to the
+    // order the records arrived in, which it says out loud.
+    displayOrder: typeof r.displayOrder === 'number' && Number.isFinite(r.displayOrder) ? r.displayOrder
+      : (typeof r.displayOrder === 'string' && /^-?\d+(\.\d+)?$/.test(r.displayOrder.trim()) ? Number(r.displayOrder.trim()) : null),
+    lineItemType: scalarText(r.lineItemType),
+    markedAs: scalarText(r.markedAs),
+    // UNCERTAIN KEY — see the note on the registry entry.
+    item: scalarText(r.item),
+    costCodeTitle: scalarText(r.costCodeTitle),
+    costCategoryName: scalarText(r.costCategoryName),
+    assemblyId: scalarText(r.assemblyId),
+    // Money and quantities keep their native shape (a number, a string or
+    // {value, scale}); bt-match’s parseMoney reads all three, and this reader
+    // never decides what any of them means.
+    quantity: r.quantity === undefined ? null : r.quantity,
+    unitCost: r.unitCost === undefined ? null : r.unitCost,
+    builderCost: r.builderCost === undefined ? null : r.builderCost,
+    // The markup WORD and its three mutually exclusive figures. estimate-match
+    // maps only the words it knows and REFUSES anything else naming it, so an
+    // unexpected word lands on the page instead of being rounded to a percent.
+    markupType: scalarText(r.markupType),
+    markupPercent: r.markupPercent === undefined ? null : r.markupPercent,
+    markupPerUnit: r.markupPerUnit === undefined ? null : r.markupPerUnit,
+    markupAmount: r.markupAmount === undefined ? null : r.markupAmount,
+    margin: r.margin === undefined ? null : r.margin,
+    unitPrice: r.unitPrice === undefined ? null : r.unitPrice,
+    ownerPrice: r.ownerPrice === undefined ? null : r.ownerPrice,
+    amountInvoiced: r.amountInvoiced === undefined ? null : r.amountInvoiced,
+    totalWithTax: r.totalWithTax === undefined ? null : r.totalWithTax,
+    jobId: scalarText(r.jobId),
+    jobName: scalarText(r.jobName),
+    // WORKSHEET-LEVEL, repeated on every line. estimate-match refuses a
+    // worksheet whose lines disagree about any of them rather than averaging.
+    contractPrice: r.contractPrice === undefined ? null : r.contractPrice,
+    proposalStatus: scalarText(r.proposalStatus),
+    worksheetLocked: r.worksheetLocked === true,
+    isSentToBudget: r.isSentToBudget === true,
+    hasRelatedPurchaseOrder: r.hasRelatedPurchaseOrder === true,
+    dateAdded: scalarText(r.dateAdded),
+    isDeleted: r.isDeleted === true,
+  };
+}
+
 function readRecord(kind, rec) {
   if (kind === 'jobs') return readJob(rec);
   if (kind === 'clients') return readClient(rec);
   if (kind === 'changeOrders') return readChangeOrder(rec);
   if (kind === 'purchaseOrders') return readPurchaseOrder(rec);
   if (kind === 'bills') return readBill(rec);
+  if (kind === 'estimates') return readEstimateLine(rec);
   return readLead(rec);
 }
 
@@ -434,4 +569,4 @@ function describeMapping(kind, records) {
   };
 }
 
-module.exports = { DATASETS, REQUIRED_SHARE, readRecord, readJob, readLead, readChangeOrder, readPurchaseOrder, readBill, describeMapping, customField, isPlainObject };
+module.exports = { DATASETS, REQUIRED_SHARE, readRecord, readJob, readLead, readChangeOrder, readPurchaseOrder, readBill, readEstimateLine, describeMapping, customField, isPlainObject };

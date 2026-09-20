@@ -320,7 +320,21 @@ function samePlace(x, y, fuzzy) {
 // { kind: 'blank' | 'value' | 'range' | 'unparsed', value, low, high }
 // 0 is blank (Buildertrend shows $0 on 42 of 44 lead revenues). A non-empty
 // string that is not money is UNPARSED — never blank, never a value.
-function parseMoneyText(s) {
+//
+// EVERY figure is rounded to CENTS, because that is what a dollar amount is.
+// { round: false } skips ONLY that rounding and changes nothing else: not the
+// grammar, not the one-sign rule, not the range arm, not blank-is-zero, not
+// the {value, scale} envelope. It exists because this grammar is ALSO the only
+// reader for two figures that are not money — a Buildertrend QUANTITY and a
+// PERCENT (services/clickr/estimate-match.js numExact). 1.3333 squares is a
+// figure Buildertrend holds and a P86 line can hold, so rounding it to 1.33
+// writes a quantity neither side ever had. A second, hand-rolled parser over
+// there is the thing this parameter exists to prevent: Number('1,333.3333')
+// and Number({ value: 1.3333 }) are both NaN, so anything simpler than this
+// grammar refuses input that imports correctly today. The DEFAULT is
+// unchanged, so every existing caller reads money exactly as it always did.
+function parseMoneyText(s, opts) {
+  const cents = (n) => ((opts && opts.round === false) ? n : Math.round(n * 100) / 100);
   let t = s.trim();
   if (isBtBlank(t)) return { kind: 'blank' };
   const range = t.split(/\s+(?:-|–|—|to)\s+/i);
@@ -328,8 +342,8 @@ function parseMoneyText(s) {
     // A range is two readable figures. "$5 - $0", "0 - $12,000" or "$5 - abc"
     // is not one figure and not a range: unparsed, shown held back.
     if (range.length !== 2) return { kind: 'unparsed' };
-    const lo = parseMoneyText(range[0]);
-    const hi = parseMoneyText(range[1]);
+    const lo = parseMoneyText(range[0], opts);
+    const hi = parseMoneyText(range[1], opts);
     if (lo.kind === 'value' && hi.kind === 'value') return { kind: 'range', low: lo.value, high: hi.value };
     return { kind: 'unparsed' };
   }
@@ -346,23 +360,24 @@ function parseMoneyText(s) {
   let n = parseFloat((m[1] || '0').replace(/,/g, '') + (m[2] || ''));
   if (m[3]) n *= /k/i.test(m[3]) ? 1e3 : 1e6;
   if (!Number.isFinite(n)) return { kind: 'unparsed' };
-  n = Math.round((neg ? -n : n) * 100) / 100;
+  n = cents(neg ? -n : n);
   return n === 0 ? { kind: 'blank', zero: true } : { kind: 'value', value: n };
 }
 
-function parseMoney(v) {
+function parseMoney(v, opts) {
   if (v == null) return { kind: 'blank' };
   if (typeof v === 'number') {
     if (!Number.isFinite(v)) return { kind: 'unparsed' };
-    return v === 0 ? { kind: 'blank', zero: true } : { kind: 'value', value: Math.round(v * 100) / 100 };
+    if (v === 0) return { kind: 'blank', zero: true };
+    return { kind: 'value', value: (opts && opts.round === false) ? v : Math.round(v * 100) / 100 };
   }
-  if (typeof v === 'string') return parseMoneyText(v);
+  if (typeof v === 'string') return parseMoneyText(v, opts);
   if (typeof v === 'object' && !Array.isArray(v) && Object.prototype.hasOwnProperty.call(v, 'value')) {
     // Buildertrend's {value, scale}. `value` is already in dollars (the full
     // pull's contract sum is 6,772,135.49 read this way); `scale` is its
     // display precision, not a divisor.
     if (v.value == null) return { kind: 'blank' };
-    return parseMoney(v.value);
+    return parseMoney(v.value, opts);
   }
   return { kind: 'unparsed' };
 }

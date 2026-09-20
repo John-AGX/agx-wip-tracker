@@ -215,6 +215,20 @@ function estStatusMeta(est) {
     if (est && est.sent_at) return { key: 'sent', label: 'Sent',  color: '#60a5fa', bg: 'rgba(96,165,250,.14)' };
     return { key: 'draft', label: 'Draft', color: '#94a3b8', bg: 'rgba(148,163,184,.14)' };
 }
+// The job an estimate is FILED UNDER (estimates.attached_job_id), as a label.
+//
+// NOT est.job_id, which is a different fact: that one is the SOLD marker the
+// convert route stamps into the blob, and it is what estStatusMeta paints as
+// "Won". attached_job_id says only that the estimate lives in that job’s file,
+// and an estimate carrying it has been sold to nobody.
+function estJobLabel(est) {
+    var id = est && est.attached_job_id;
+    if (!id) return '';
+    var job = (appData.jobs || []).find(function(j) { return j && String(j.id) === String(id); });
+    var name = job ? [job.jobNumber, job.title || job.name].filter(Boolean).join(' ') : '';
+    return '<span style="color:var(--text-dim,#888);">Job: </span>' + escapeHTML(name || String(id));
+}
+
 function estStatusRank(est) { var k = estStatusMeta(est).key; return k === 'won' ? 2 : k === 'sent' ? 1 : 0; }
 
 // Mark an estimate Sent (or clear it). Optimistic: stamp locally + re-render,
@@ -762,7 +776,13 @@ function renderEstimatesList() {
             // "% Complete" so the visual at a glance matches.
             const rowsHtml = sorted.map(function(est) {
                 const t = est.__totals;
+                // A JOB ESTIMATE HAS NO CLIENT AND NO COMMUNITY. Estimates
+                // imported from a Buildertrend worksheet are filed under a job
+                // (attached_job_id) rather than created from a lead, so this cell
+                // read "no client" in grey italics for every one of them and the
+                // list gave no clue what any of them was. Name the job instead.
                 const clientLabel = [est.client, est.community].filter(Boolean).join(' &middot; ') ||
+                    estJobLabel(est) ||
                     '<span style="color:var(--text-dim,#666);font-style:italic;">no client</span>';
                 const titleSubBits = [];
                 if (est.jobType) titleSubBits.push(escapeHTML(est.jobType));
@@ -1086,6 +1106,15 @@ function renderEstimatesList() {
             // with it) and into the job's link-estimate picker. Re-attach manually
             // when you are re-bidding the same opportunity.
             'lead_id',
+            // attached_job_id and bt_worksheet_id are COLUMNS the server strips
+            // out of the blob on save, so a copy structurally cannot carry either
+            // into the database. Listed anyway, for the reason the signing keys
+            // are: a copy that LOOKS filed under the original’s job until the next
+            // reload is a copy somebody files a second proposal from, and
+            // bt_worksheet_id is UNIQUE — a copy that ever reached the column
+            // would either 500 on the index or steal the original’s Buildertrend
+            // link on the next sync.
+            'attached_job_id', 'bt_worksheet_id',
             // ── Buildertrend pipeline status ──────────────────────────
             // Sales provenance living under TWO spellings, blob-only with no
             // shadowing column — so nothing ever corrects it on reload. The

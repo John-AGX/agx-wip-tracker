@@ -1503,7 +1503,7 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
   const _orgId = organization && organization.id;
   if (_orgId == null) throw new Error('Estimate not found');
   const estRes = await pool.query(
-    `SELECT e.id, e.owner_id, e.data FROM estimates e
+    `SELECT e.id, e.owner_id, e.data, e.attached_job_id FROM estimates e
       WHERE e.id = $1 AND (e.organization_id = $2 OR e.organization_id IS NULL)`,
     [estimateId, _orgId]);
   if (!estRes.rows.length) throw new Error('Estimate not found');
@@ -1536,6 +1536,21 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
       'SELECT * FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
       [blob.client_id, _orgId]);
     clientRow = cRes.rows[0] || null;
+  }
+
+  // THE JOB THIS ESTIMATE IS FILED UNDER (estimates.attached_job_id). An
+  // estimate imported from a Buildertrend worksheet has NO lead and NO client
+  // — it belongs to a job — so without this the model was handed an estimate
+  // with no context at all and no way to ask for any. Scoped exactly as the
+  // client and lead reads are, and for the same reason: proving the ESTIMATE
+  // is in-org proves nothing about a row it points at.
+  let jobRow = null;
+  if (estRes.rows[0].attached_job_id) {
+    const jRes = await pool.query(
+      "SELECT id, data->>'jobNumber' AS job_number, data->>'title' AS title, data->>'status' AS status "
+      + 'FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [estRes.rows[0].attached_job_id, _orgId]);
+    jobRow = jRes.rows[0] || null;
   }
 
   // Linked lead — when an estimate was created from a lead, the lead's
@@ -1673,6 +1688,14 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
   // BT-imported SOW summary, POC contact, gate codes, and special
   // instructions — read these when answering scope / completeness
   // questions. Photos from the lead are already attached as image blocks.
+  if (jobRow) {
+    lines.push('# Filed under job');
+    lines.push('- ' + ([jobRow.job_number, jobRow.title].filter(Boolean).join(' ') || jobRow.id)
+      + ' [' + jobRow.id + ']' + (jobRow.status ? ' · ' + jobRow.status : ''));
+    lines.push('- This estimate is filed under that job rather than created from a lead, so it may have no lead and no client at all.');
+    lines.push('');
+  }
+
   if (leadRow) {
     lines.push('# Linked lead');
     if (leadRow.title && leadRow.title !== blob.title) lines.push('- Lead title: ' + leadRow.title);

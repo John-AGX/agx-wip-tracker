@@ -112,6 +112,27 @@ const SNAPSHOT_FIELDS = {
     ['invoiceDate', 'Invoice date', 'invoiceDate', 'day'],
     ['dueDate', 'Due date', 'dueDate', 'day'],
   ],
+  // ESTIMATES, AND THIS ONE IS NOT PER RECORD. A Clickr estimates record is one
+  // LINE of a worksheet and the preview’s rows are WORKSHEETS, so a snapshot is
+  // per WORKSHEET and is built by snapshotRecords() below, not by snapshotOf().
+  // The third column is null for every field that has no single line to come
+  // from, and snapshotOf() refuses this dataset outright rather than quietly
+  // returning the first line’s values under a worksheet’s name.
+  //
+  // What a person would call a change to an estimate: whose job it is, the
+  // contract, the proposal word, whether Buildertrend locked it, and the three
+  // numbers that move when a LINE is added, removed, re-priced or re-marked-up.
+  // The line totals are what make a line edit visible at all — without them a
+  // worksheet could be rewritten from top to bottom and still read unchanged.
+  estimates: [
+    ['job', 'Job', 'jobName', 'text'],
+    ['contractPrice', 'Contract price', 'contractPrice', 'money'],
+    ['proposalStatus', 'Proposal status', 'proposalStatus', 'text'],
+    ['worksheetLocked', 'Worksheet locked', null, 'text'],
+    ['lineCount', 'Lines', null, 'text'],
+    ['costTotal', 'Cost total', null, 'money'],
+    ['ownerTotal', 'Owner price total', null, 'money'],
+  ],
 };
 
 const FIRST_TIME_NOTE = 'Buildertrend records are remembered from this refresh on — the next refresh marks what is new or changed.';
@@ -141,12 +162,63 @@ function normDay(v) {
 const NORM = { text: normText, money: normMoney, day: normDay };
 
 // readRecord(dataset, rec) -> flat object of normalized Buildertrend values.
+// ONE RECORD IN, ONE SNAPSHOT OUT — which is why it refuses estimates: there,
+// one record is one LINE and a snapshot is a WORKSHEET. Answering anyway would
+// hand back the first line's values under the worksheet's id, and a worksheet
+// whose every line changed would read unchanged whenever its first line did
+// not. Loud, because that failure is silent and numeric.
 function snapshotOf(dataset, values) {
+  if (dataset === 'estimates') {
+    throw new Error('estimates snapshots are per WORKSHEET, not per line: use snapshotRecords()');
+  }
   const out = {};
   for (const [field, , key, kind] of SNAPSHOT_FIELDS[dataset] || []) {
     out[field] = NORM[kind](values ? values[key] : null);
   }
   return out;
+}
+
+// [{ btId, snapshot }] for ONE complete read, from readRecord() values.
+//
+// Every dataset but estimates is one record, one snapshot. Estimates are one
+// record per LINE and one snapshot per WORKSHEET, so the lines are folded here
+// — syncSnapshots() skips a btId it has already seen, so without this fold a
+// worksheet's snapshot would be whatever its first line happened to say.
+// DELETED lines are left out of the totals, exactly as estimate-match.js leaves
+// them out of the import, so deleting a line reads as the change it is.
+function snapshotRecords(dataset, values) {
+  const list = Array.isArray(values) ? values : [];
+  if (dataset !== 'estimates') return list.map((v) => ({ btId: v.btId, snapshot: snapshotOf(dataset, v) }));
+  const order = [];
+  const byId = new Map();
+  for (const v of list) {
+    const id = v && v.btId != null ? String(v.btId).trim() : '';
+    if (!id) continue;
+    if (!byId.has(id)) { byId.set(id, []); order.push(id); }
+    byId.get(id).push(v);
+  }
+  return order.map((id) => {
+    const live = byId.get(id).filter((v) => !v.isDeleted);
+    const first = live[0] || byId.get(id)[0];
+    let cost = 0;
+    let owner = 0;
+    for (const v of live) {
+      const q = normMoney(v.quantity);
+      const c = normMoney(v.unitCost);
+      if (q != null && c != null) cost += q * c;
+      const o = normMoney(v.ownerPrice);
+      if (o != null) owner += o;
+    }
+    return { btId: id, snapshot: {
+      job: normText(first.jobName),
+      contractPrice: normMoney(first.contractPrice),
+      proposalStatus: normText(first.proposalStatus),
+      worksheetLocked: first.worksheetLocked ? 'Yes' : 'No',
+      lineCount: String(live.length),
+      costTotal: Math.round(cost * 100) / 100,
+      ownerTotal: Math.round(owner * 100) / 100,
+    } };
+  });
 }
 
 function parseJsonish(v) {
@@ -198,6 +270,7 @@ function snapshotLabel(dataset, snap, btId) {
   if (dataset === 'changeOrders') label = [s.coNumber, s.title].filter(Boolean).join(' ') + (s.job ? ' (' + s.job + ')' : '');
   else if (dataset === 'purchaseOrders') label = [s.poNumber, s.title].filter(Boolean).join(' ') + (s.job ? ' (' + s.job + ')' : '');
   else if (dataset === 'bills') label = [s.billNumber, s.title].filter(Boolean).join(' ') + (s.job ? ' (' + s.job + ')' : '');
+  else if (dataset === 'estimates') label = s.job ? 'Estimate on ' + s.job : '';
   else if (dataset === 'leads') label = s.title || '';
   else label = s.name || '';
   label = String(label).trim();
@@ -353,6 +426,6 @@ function markDataset(dataset, rows, synced, previous) {
 
 module.exports = {
   SNAPSHOT_FIELDS, FIRST_TIME_NOTE, PARTIAL_NOTE, CHUNK,
-  snapshotOf, diffSnapshots, sameSnapshot, snapshotLabel, toDate,
+  snapshotOf, snapshotRecords, diffSnapshots, sameSnapshot, snapshotLabel, toDate,
   syncSnapshots, readLastRefresh, writeLastRefresh, markDataset,
 };

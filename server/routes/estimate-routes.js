@@ -169,7 +169,7 @@ router.get('/', requireAuth, async (req, res) => {
     // Wave 1.A Phase 2 — org-scoped list. NULL org_id retained for
     // unbackfilled legacy until NOT NULL tightening.
     const { rows } = await pool.query(
-      'SELECT id, owner_id, data, created_at, updated_at, geocode_lat, geocode_lng, is_locked, sent_at, viewed_at, accepted_at, sent_count, approval_status, sent_to, sent_method, approved_at, approved_by, approval_method, declined_at, decline_reason, market_id FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
+      'SELECT id, owner_id, data, created_at, updated_at, geocode_lat, geocode_lng, is_locked, sent_at, viewed_at, accepted_at, sent_count, approval_status, sent_to, sent_method, approved_at, approved_by, approval_method, declined_at, decline_reason, market_id, attached_job_id, bt_worksheet_id FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
       [req.user.organization_id]
     );
     // Surface created_at/updated_at + geocode coords + lifecycle timestamps on
@@ -204,7 +204,18 @@ router.get('/', requireAuth, async (req, res) => {
       // carrying a legacy market NAME in their blob were resolving.
       // Numeric in PG (BIGINT), stringified so the client's String()
       // comparisons behave the same as they do for jobs and leads.
-      market_id: r.market_id != null ? String(r.market_id) : null
+      market_id: r.market_id != null ? String(r.market_id) : null,
+      // THE JOB THIS ESTIMATE IS FILED UNDER, and it is NOT `job_id`.
+      // data.job_id — which the spread above may already have put on this
+      // object — means "this estimate was SOLD onto that job", and it is what
+      // the list paints as Won. attached_job_id means "this estimate lives in
+      // that job’s file": the shape Buildertrend’s estimate worksheets arrive
+      // in (services/clickr/estimate-match.js), where there is no lead, no
+      // client, and nothing has been sold to anybody. Every reader that showed
+      // a lead or a client had to learn both can be absent, and this is the
+      // field it learns the job from.
+      attached_job_id: r.attached_job_id || null,
+      bt_worksheet_id: r.bt_worksheet_id || null
     }));
     res.json({ estimates });
   } catch (e) {
@@ -434,6 +445,15 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), requi
           ? require('../services/markets').resolveMarketId(marketMap, blob)
           : null;
         delete blob.market_id;
+        // attached_job_id and bt_worksheet_id are COLUMNS too, and neither is
+        // ever set from this endpoint: the Buildertrend sync owns both
+        // (services/clickr/sync-apply.js). They are stripped for the same two
+        // reasons as the fields above — a copy inside the JSONB shadows the
+        // column on the next GET, because that read spreads `data` first, and
+        // it makes every save’s blob differ from the last round-trip’s, which
+        // re-fires the IS DISTINCT FROM and resets updated_at across the list.
+        delete blob.attached_job_id;
+        delete blob.bt_worksheet_id;
         // Only bump updated_at when the JSONB actually differs from what's
         // stored. The frontend bulk-save sends EVERY estimate on every
         // save, so without this gate, opening any one estimate would

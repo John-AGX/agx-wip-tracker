@@ -84,9 +84,12 @@ const INDEX = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 
 // ── 1. the version ────────────────────────────────────────────────────────
 describe('release ' + VERSION + ' is cut', () => {
-  test('APP_VERSION and the newest release are both ' + VERSION, () => {
-    expect(catalog.APP_VERSION).toBe(VERSION);
-    expect(catalog.releases[0].version).toBe(VERSION);
+  test('APP_VERSION names the newest release, and ' + VERSION + ' is in the list', () => {
+    // This suite was written the day 1.34 was cut, when it was newest. Later
+    // releases ship above it, so what stays true is: APP_VERSION always names
+    // whatever sits at the head of the list, and this release is still there.
+    expect(catalog.APP_VERSION).toBe(catalog.releases[0].version);
+    expect(catalog.releases.map((r) => r.version)).toContain(VERSION);
   });
 
   test('mutant: APP_VERSION left on the previous release is caught', () => {
@@ -95,9 +98,13 @@ describe('release ' + VERSION + ' is cut', () => {
     expect(() => {
       expect(stale.APP_VERSION).toBe(VERSION);
     }).toThrow();
-    // And the newest release really is the one that moved, not a coincidence.
-    // 1.33 shipped from another branch on the same day; this release sits above it.
-    expect(catalog.releases[1].version).toBe('1.33');
+    // And the list really is ordered newest-first, not a coincidence: this
+    // release sits directly above 1.33, which shipped from another branch the
+    // same day. Checked by position RELATIVE to this release, so a later one
+    // shipping above it does not make this assertion wrong.
+    const at = catalog.releases.findIndex((r) => r.version === VERSION);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(catalog.releases[at + 1].version).toBe('1.33');
   });
 
   test('its rows are grouped new, improved, fixed, and every row has text', () => {

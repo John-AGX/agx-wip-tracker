@@ -67,29 +67,30 @@
     clients: { f: 'all', scope: 'all', q: '', shown: PAGE },
     changeOrders: { f: 'all', scope: 'all', q: '', shown: PAGE },
     purchaseOrders: { f: 'all', scope: 'all', q: '', shown: PAGE },
-    bills: { f: 'all', scope: 'all', q: '', shown: PAGE }
+    bills: { f: 'all', scope: 'all', q: '', shown: PAGE },
+    estimates: { f: 'all', scope: 'all', q: '', shown: PAGE }
   };
   // Apply (server/services/clickr/sync-apply.js). The server re-reads both
   // sides and re-matches; the page only says which Buildertrend ids to act on.
   var APPLY_ENDPOINT = '/api/admin/organizations/me?action=buildertrend-apply';
   var _applying = null;          // 'jobs:safe' | 'jobs:<btId>' | ...
-  var _applyNote = { jobs: null, leads: null, clients: null, changeOrders: null, purchaseOrders: null, bills: null };   // { ok, text }
+  var _applyNote = { jobs: null, leads: null, clients: null, changeOrders: null, purchaseOrders: null, bills: null, estimates: null };   // { ok, text }
   // What a person ticked, per row: _picks['jobs:<btId>'][field] = true/false.
   // Corrections start ticked; held-back items a person may apply start unticked.
   var _picks = {};
-  var TABS = [['jobs', 'Jobs'], ['leads', 'Leads'], ['clients', 'Clients'], ['changeOrders', 'Change orders'], ['purchaseOrders', 'Purchase orders'], ['bills', 'Bills'], ['archive', 'Archive']];
+  var TABS = [['jobs', 'Jobs'], ['leads', 'Leads'], ['clients', 'Clients'], ['changeOrders', 'Change orders'], ['purchaseOrders', 'Purchase orders'], ['bills', 'Bills'], ['estimates', 'Estimates'], ['archive', 'Archive']];
   var ARCHIVE_ENDPOINT = '/api/admin/organizations/me?view=buildertrend-archive';
   var _archive = null;       // [{ kind, id, label, reason, mergedInto, archivedAt, attached, deletable }]
   var _archiveErr = null;
   var _archiveNote = null;
-  var NOUN = { jobs: 'job', leads: 'lead', clients: 'client', changeOrders: 'change order', purchaseOrders: 'purchase order', bills: 'bill' };
+  var NOUN = { jobs: 'job', leads: 'lead', clients: 'client', changeOrders: 'change order', purchaseOrders: 'purchase order', bills: 'bill', estimates: 'estimate' };
   var _tab = 'jobs';
-  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'jobs' || _savedTab === 'leads' || _savedTab === 'clients' || _savedTab === 'changeOrders' || _savedTab === 'purchaseOrders' || _savedTab === 'bills' || _savedTab === 'archive') _tab = _savedTab; } catch (e) { /* storage blocked */ }
+  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'jobs' || _savedTab === 'leads' || _savedTab === 'clients' || _savedTab === 'changeOrders' || _savedTab === 'purchaseOrders' || _savedTab === 'bills' || _savedTab === 'estimates' || _savedTab === 'archive') _tab = _savedTab; } catch (e) { /* storage blocked */ }
 
   // The three datasets that hang off a linked JOB rather than standing alone.
   // Their P86 side is reviewed in P86, never archived from here, and their
   // "refused" bucket is mostly "its job is not linked yet".
-  var DETAIL_KINDS = { changeOrders: 1, purchaseOrders: 1, bills: 1 };
+  var DETAIL_KINDS = { changeOrders: 1, purchaseOrders: 1, bills: 1, estimates: 1 };
 
   // A change order is "refused" mostly because its job is not linked yet.
   function labelFor(ds, k) {
@@ -347,6 +348,17 @@
       if (bt.vendorName) meta.push('Pay to: ' + esc(bt.vendorName));
       if ((bt.relatedPurchaseOrderIds || []).length) meta.push('BT purchase order' + (bt.relatedPurchaseOrderIds.length === 1 ? ' ' : 's ') + esc(bt.relatedPurchaseOrderIds.join(', ')));
       if (bt.dueDate) meta.push('Due ' + esc(String(bt.dueDate).slice(0, 10)));
+    } else if (ds.key === 'estimates') {
+      if (bt.jobName) meta.push('Job: ' + esc(bt.jobName));
+      // A ROW IS A WORKSHEET AND A RECORD IS A LINE, so the line count is not
+      // decoration: it is the only thing on the page that says how many Clickr
+      // records this one row was folded from.
+      meta.push(bt.lineCount + ' line item' + (bt.lineCount === 1 ? '' : 's')
+        + (bt.deletedCount ? ' (' + bt.deletedCount + ' deleted, left out)' : ''));
+      meta.push('Cost ' + esc(bt.costText) + ' · owner price ' + esc(bt.ownerText));
+      meta.push('Contract ' + esc(bt.contractText));
+      if (bt.proposalStatus) meta.push('Proposal: ' + esc(bt.proposalStatus));
+      if (bt.worksheetLocked) meta.push('Locked in Buildertrend');
     } else if (ds.key === 'clients') {
       if (bt.email) meta.push(esc(bt.email));
       if (bt.phone || bt.cell) meta.push(esc(bt.phone || bt.cell));
@@ -370,6 +382,7 @@
     if (kind === 'changeOrders') return esc([p.coNumber, p.title].filter(Boolean).join(' ') || p.id);
     if (kind === 'purchaseOrders') return esc([p.poNumber, p.title].filter(Boolean).join(' ') || p.id);
     if (kind === 'bills') return esc([p.billNumber, p.title].filter(Boolean).join(' ') || p.id);
+    if (kind === 'estimates') return esc(p.title || p.id);
     return esc(p.title || p.id);
   }
 
@@ -426,6 +439,15 @@
         if (r.job) meta.push('on ' + esc(r.job.label));
         meta.push('Cost ' + esc(p.totalText || '?') + (p.subName ? ' · ' + esc(p.subName) : ''));
       }
+      if (ds.key === 'estimates') {
+        if (r.bt.proposalStatus) meta.push('Buildertrend: ' + esc(r.bt.proposalStatus));
+        if (r.job) meta.push('on ' + esc(r.job.label));
+        meta.push(p.lineCount + ' line' + (p.lineCount === 1 ? '' : 's') + (p.costText ? ' · cost ' + esc(p.costText) : '') + (p.priceText ? ' · price ' + esc(p.priceText) : ''));
+        if (p.alternates > 1) meta.push(p.alternates + ' alternates');
+        // THE GUARD, ON THE PAGE. A row that proposes nothing has to say why,
+        // or it reads as a row with nothing to do.
+        if (p.lifecycle) meta.push('Sent or sold — ' + esc(p.lifecycle));
+      }
       if (ds.key === 'bills') {
         if (r.bt.paymentStatusText) meta.push('Buildertrend: ' + esc(r.bt.paymentStatusText));
         if (r.job) meta.push('on ' + esc(r.job.label));
@@ -449,6 +471,13 @@
     } else if (cls === 'new') {
       html += r.createBlocked ? '<div class="btp-none">Not in P86 — not created, see the note below</div>'
         : '<div class="btp-none">Not in P86 — a sync would create it' + (r.job ? ' on ' + esc(r.job.label) : '') + '</div>';
+      // The estimates already on this job that nothing matched. Not candidates
+      // and not a guess — the server refuses to choose between them — but a
+      // person can, and without these buttons that decision has no door.
+      if ((r.considered || []).length) {
+        html += '<div class="btp-meta">Already on this job — link this worksheet to one instead of creating a second:</div>'
+          + candidatesHTML(ds, r.considered, null, r);
+      }
     } else {
       html += '<div class="btp-none">Not compared</div>';
     }
@@ -654,7 +683,7 @@
   // linked with. (Warranty and Pending used to be the standing example — P86
   // now has both statuses, so they are ordinary agreeing rows.)
   function statusWordCount(ds) {
-    if (!ds || (ds.key !== 'jobs' && ds.key !== 'changeOrders' && ds.key !== 'bills')) return 0;
+    if (!ds || (ds.key !== 'jobs' && ds.key !== 'changeOrders' && ds.key !== 'bills' && ds.key !== 'estimates')) return 0;
     return (ds.rows || []).filter(function (r) {
       return (r['class'] === 'matched' || r['class'] === 'conflict') && r.bt && r.bt.btId != null && r.bt.btId !== '' && r.btStatusDue === true;
     }).length;
@@ -721,6 +750,11 @@
     var t = 'Saves the Buildertrend id on each confident match' + (ds.key === 'jobs' ? ' and fills a start date only where P86 has none' : '') + '.';
     var w = statusWordCount(ds);
     if (w) t += ' Records what Buildertrend now calls ' + w + ' ' + (NOUN[ds.key] || 'record') + (w === 1 ? '' : 's') + ', beside the P86 status, which does not change.';
+    if (ds.key === 'estimates') {
+      t += ' An estimate’s LINE ITEMS are applied one row at a time and only when you tick them: they carry every cost and every price on the proposal.'
+        + ' Nothing is written into a P86 estimate that was sent to a client or sold — those take the Buildertrend id and nothing else.'
+        + ' No P86 estimate is created or deleted by this press.';
+    }
     if (ds.key === 'bills') {
       t += ' A bill’s amount, its bill number and its purchase order are applied one row at a time, and its amount only when you tick it.' +
         ' No P86 bill is created, voided or deleted by this press.';
@@ -748,6 +782,12 @@
     if (key === 'purchaseOrders' && ds) {
       var committed = (ds.rows || []).filter(function (x) { return x['class'] === 'new' && !x.createBlocked && x.bt.state86 && x.bt.state86 !== 'draft'; }).length;
       extra = ' ' + committed + ' of them are sent or approved in Buildertrend, so they are created committed and their cost accrues on the job. Where one has a P86 sub, that sub gets portal access to the job’s files, as on the PO page.';
+    }
+    if (key === 'estimates' && ds) {
+      var lineN = (ds.rows || []).filter(function (x) { return x['class'] === 'new'; })
+        .reduce(function (n, x) { return n + (x.bt.lineCount || 0); }, 0);
+      extra = ' Each becomes a real P86 estimate on its linked job, with Buildertrend’s own ' + lineN + ' line item' + (lineN === 1 ? '' : 's')
+        + ' and section groups, and is born unsent, unlocked and not approved. Deleted Buildertrend lines are left out.';
     }
     if (key === 'bills' && ds) {
       var paidN = (ds.rows || []).filter(function (x) { return x['class'] === 'new' && x.bt.state86 === 'paid'; }).length;
@@ -977,6 +1017,7 @@
         (ds.key === 'clients' ? 'Create clients first — leads and jobs link to a client through its Buildertrend id. ' : '') +
         (ds.key === 'changeOrders' ? 'Each is created on its linked P86 job with Buildertrend’s price and cost as one line, and approved and locked when Buildertrend approved it. A change order whose job is not linked yet waits. ' : '') +
         (ds.key === 'purchaseOrders' ? 'Each is created on its linked P86 job with Buildertrend’s number, status, cost and sub/vendor (when it is exactly one P86 sub). A sent or approved one is committed and locked, so its cost accrues. No bill is created. A sent or approved PO’s sub gets portal access to the job’s files, as on the PO page. ' : '') +
+        (ds.key === 'estimates' ? 'Each Buildertrend WORKSHEET becomes one real P86 estimate on its linked job, carrying that worksheet’s line items in Buildertrend’s own groups, and is born unsent, unlocked and not approved. A worksheet whose job is not linked yet waits, and one carrying a markup Project 86 cannot express is refused whole rather than imported at a number that is not Buildertrend’s. ' : '') +
         (ds.key === 'bills' ? 'Each is created on its linked P86 job at Buildertrend’s amount, with its vendor invoice number, dates and vendor, and its purchase order only where P86 has already imported that exact Buildertrend PO. Deleted and duplicated Buildertrend bills are never created. ' : '') +
         'Possible duplicates and ambiguous rows are never created.</span></div>';
       var note = _applyNote[ds.key];

@@ -61,6 +61,7 @@ const jobFin = require('../job-financials');
 const coMatch = require('./co-match');
 const poMatch = require('./po-match');
 const billMatch = require('./bill-match');
+const estimateMatch = require('./estimate-match');
 const coMoney = require('../money/change-order-totals');
 const { coNumberKey } = require('../job-financials');
 const { grantSubAccessForPO } = require('../po-sub-access');
@@ -108,7 +109,13 @@ const PO_DATA_KEYS = { title: 'title', costCode: 'costCode', scheduledCompletion
 const BILL_FIELDS = { status: 1, description: 1, billDate: 1, dueDate: 1, po: 1, sub: 1 };
 const BILL_DATA_KEYS = { description: 'description' };
 const BILL_DATE_COLUMNS = { billDate: 'bill_date', dueDate: 'due_date' };
-const DATASET_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills'];
+// An ESTIMATE's writable CORRECTIONS, and there is exactly one. 'lines',
+// 'title' and 'contractPrice' are deliberately ABSENT: the matcher only ever
+// emits them as held-back items, and leaving them out of this table is the
+// second lock — writable() could not apply any of them even if a correction of
+// that name ever appeared on a row. Do not add them.
+const ESTIMATE_FIELDS = { job: 1 };
+const DATASET_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills', 'estimates'];
 
 function isSafeCorrection(kind, c) {
   return kind === 'jobs' && c.field === 'startDate' && c.kind === 'fill';
@@ -123,6 +130,7 @@ function writable(kind, row, mode, fields) {
     : kind === 'changeOrders' ? CO_FIELDS
     : kind === 'purchaseOrders' ? PO_FIELDS
     : kind === 'bills' ? BILL_FIELDS
+    : kind === 'estimates' ? ESTIMATE_FIELDS
     : kind === 'clients' ? CLIENT_COLUMNS
     : Object.assign({ salesperson: 1, client: 1 }, LEAD_FIELD_COLUMNS);
   const pick = fields ? new Set(fields) : null;
@@ -150,6 +158,15 @@ function pickedHeldBack(kind, row, mode, fields) {
   // no fields at all — the same guard, for the same reason, as 'close' above.
   if (kind === 'bills') return (row.heldBack || []).filter((h) => h.applicable === true
     && (h.field === 'amount' || h.field === 'billNumber') && fields.indexOf(h.field) !== -1);
+  // AN ESTIMATE's LINE ITEMS and its match key, on exactly the same terms and
+  // for exactly the same reason. The lines ARE the money on an estimate — every
+  // cost and every price on the proposal — so they reach a write only through
+  // here: out of safe mode, and out of an "apply everything" press that names
+  // no fields at all. 'contractPrice' and 'totalDiff' are NOT listed: the
+  // matcher marks both applicable: false, and neither has a P86 field on an
+  // estimate to be applied to.
+  if (kind === 'estimates') return (row.heldBack || []).filter((h) => h.applicable === true
+    && (h.field === 'lines' || h.field === 'title') && fields.indexOf(h.field) !== -1);
   const allowed = kind === 'jobs' ? { jobNumber: 1 } : kind === 'clients' ? CLIENT_COLUMNS : LEAD_REVENUE_COLUMNS;
   const pick = new Set(fields);
   return (row.heldBack || []).filter((h) => h.applicable === true && allowed[h.field] && pick.has(h.field));
@@ -877,6 +894,187 @@ async function createBill(db, orgId, row, user) {
   return { created: id, notes };
 }
 
+// ── estimates ────────────────────────────────────────────────────────
+// An estimate is reached the two ways the matcher reaches it, and each
+// statement carries this organisation in the SAME literal as the read:
+//   (a) filed under a job whose organisation and Buildertrend id are both the
+//       caller's, plus the estimate's own column with the tolerance arm the
+//       preview read uses (an older estimate row can carry a NULL organisation);
+//   (b) already linked by this sync and no longer filed under any job. No
+//       parent to scope it by, so no tolerance arm — and none is needed: every
+//       estimate createEstimate writes is stamped from its job.
+async function lockedEstimate(db, orgId, estId, btJobId, btWsId) {
+  await db.query('SELECT id FROM estimates WHERE id = $1 FOR UPDATE', [estId]);
+  const cols = 'e.id, e.attached_job_id AS job_id, e.bt_worksheet_id, e.data, e.is_locked, e.sent_at, e.sent_count, '
+    + 'e.approval_status, e.accepted_at, e.approved_at, e.declined_at ';
+  const onJob = await db.query(
+    'SELECT ' + cols + 'FROM estimates e JOIN jobs j ON j.id = e.attached_job_id '
+    + 'WHERE e.id = $1 AND j.organization_id = $2 AND j.bt_job_id = $3 AND j.bt_archived_at IS NULL '
+    + 'AND (e.organization_id = $2 OR e.organization_id IS NULL)', [estId, orgId, btJobId]);
+  if (onJob.rows.length) return onJob.rows[0];
+  if (!btWsId) return null;
+  const loose = await db.query(
+    'SELECT ' + cols + 'FROM estimates e '
+    + 'WHERE e.id = $1 AND e.organization_id = $2 AND e.attached_job_id IS NULL AND e.bt_worksheet_id = $3', [estId, orgId, btWsId]);
+  return loose.rows[0] || null;
+}
+
+async function estimateLinkedElsewhere(db, orgId, btId, exceptId) {
+  const taken = await db.query(
+    'SELECT e.id FROM estimates e LEFT JOIN jobs j ON j.id = e.attached_job_id '
+    + 'WHERE e.bt_worksheet_id = $1 AND e.id <> $2 AND (e.organization_id = $3 OR j.organization_id = $3)', [btId, exceptId || '', orgId]);
+  return taken.rows.length > 0;
+}
+
+// The P86 job this Buildertrend job is linked to, in this organisation. The
+// only door from a proposal's job id to a real one.
+async function jobOfOrgByBt(db, orgId, jobId, btJobId) {
+  const r = await db.query(
+    'SELECT id FROM jobs WHERE id = $1 AND organization_id = $2 AND bt_job_id = $3 AND bt_archived_at IS NULL', [String(jobId), orgId, btJobId]);
+  return r.rows[0] || null;
+}
+
+async function applyEstimate(db, orgId, row, mode, fields) {
+  const btId = norm(row.bt.btId);
+  const est = await lockedEstimate(db, orgId, row.p86.id, norm(row.bt.jobId), btId);
+  if (!est) return { skipped: 'The P86 estimate is no longer on the job linked to this Buildertrend job.' };
+  const linkedTo = norm(est.bt_worksheet_id);
+  if (linkedTo && linkedTo !== btId) return { skipped: 'This P86 estimate is already linked to a different Buildertrend worksheet.' };
+  if (await estimateLinkedElsewhere(db, orgId, btId, est.id)) return { skipped: 'Another P86 estimate is already linked to this Buildertrend worksheet.' };
+  const wasLinked = linkedTo === btId;
+
+  // THE GUARD, re-checked against the LOCKED row rather than against the
+  // preview, which may be minutes old: an estimate somebody SENT or SOLD in
+  // between is a document that went to a client, and this is the last place
+  // that can still refuse to write into it.
+  const view = estimateMatch.p86EstimateView(est);
+  const locked = estimateMatch.lifecycleLock(view);
+  if (locked) {
+    // ONLY THE LINK. Not the lines, not the title, not the job, and NOT even
+    // Buildertrend's own word beside it. On every other dataset data.btStatus is
+    // bookkeeping stored next to the record; an ESTIMATE's data blob IS the
+    // document — its lines, its client, its totals, the bytes a client was sent
+    // — so this path does not touch `data` at all, and updated_at is left where
+    // it is. What is written is one column: the id that stops the next refresh
+    // reading this worksheet as new and creating a duplicate proposal.
+    const stale = (fields || []).map((f) => f + ' — this P86 estimate went to a client or was sold (' + locked.join('; ') + ')');
+    if (wasLinked) return { unchanged: true, stale };
+    await db.query(
+      'UPDATE estimates SET bt_worksheet_id = $1 WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)',
+      [btId, est.id, orgId]);
+    return { applied: [], linked: true, stale, lifecycleLocked: true };
+  }
+
+  let data = parseData(est.data);
+  let jobId = est.job_id || null;
+  const applied = [];
+  const stale = [];
+
+  for (const c of writable('estimates', row, mode, fields)) {
+    // THE JOB. Filled only when P86 has none, and only with the P86 job this
+    // Buildertrend job is actually linked to. A sync never MOVES an estimate
+    // between jobs: that moves a proposal's money from one job to another.
+    if (c.field !== 'job') continue;
+    if (jobId) { stale.push('Job — P86 has one now'); continue; }
+    const job = await jobOfOrgByBt(db, orgId, c.value, norm(row.bt.jobId));
+    if (!job) { stale.push('Job — not the P86 job linked to this Buildertrend job'); continue; }
+    jobId = job.id;
+    applied.push({ field: 'job', from: '', to: c.to });
+  }
+
+  // THE LINE ITEMS AND THE MATCH KEY — only what the request named by field.
+  for (const h of pickedHeldBack('estimates', row, mode, fields)) {
+    if (h.field === 'lines') {
+      // Re-checked against the LOCKED row. apply() re-reads P86 and re-runs the
+      // matcher, so in the ordinary case h.p86Value IS this blob’s fingerprint:
+      // this is the guard for the window between that read and this FOR UPDATE,
+      // and for an estimate somebody edited inside it. A single-connection test
+      // harness cannot drive that window, so the mutation that bites here is one
+      // that changes WHICH array is fingerprinted. Never delete it because it
+      // looks unreachable.
+      const cur = Array.isArray(data.lines) ? data.lines : [];
+      if (estimateMatch.linesFingerprint(cur) !== h.p86Value) { stale.push('Line items — P86’s lines changed since the preview'); continue; }
+      const alts = Array.isArray(data.alternates) ? data.alternates : [];
+      if (alts.length > 1) { stale.push('Line items — P86 holds ' + alts.length + ' alternates on this estimate'); continue; }
+      const incoming = (h.value && Array.isArray(h.value.lines)) ? h.value.lines : null;
+      if (!incoming || !incoming.length) { stale.push(h.label || h.field); continue; }
+      let altId = alts.length && alts[0] && alts[0].id ? alts[0].id : null;
+      let nextAlts = alts;
+      if (!altId) {
+        altId = 'a' + est.id;
+        nextAlts = [{ id: altId, estimateId: est.id, name: 'Base' }];
+      }
+      // THE STAMP IS THE WRITER’S, NOT THE MATCHER’S. estimate-match builds the
+      // array with no estimateId and no alternateId precisely so the document
+      // it lands in decides both; an estimate line is scoped by the pair, and a
+      // line carrying the wrong one is invisible to the editor and to the
+      // per-alternate total.
+      const stamped = incoming.map((l) => Object.assign({}, l, { estimateId: est.id, alternateId: altId }));
+      data = Object.assign({}, data, { lines: stamped, alternates: nextAlts,
+        activeAlternateId: data.activeAlternateId || altId });
+      applied.push({ field: 'lines', from: h.p86, to: h.bt });
+    } else if (h.field === 'title') {
+      if (norm(data.title || data.name) !== norm(h.p86Value)) { stale.push(h.label || h.field); continue; }
+      const next = norm(h.value).slice(0, 200);
+      if (!next) { stale.push(h.label || h.field); continue; }
+      data = Object.assign({}, data, { title: next });
+      applied.push({ field: 'title', from: h.p86, to: next });
+    }
+  }
+
+  // Buildertrend's OWN proposal word, beside P86's own state and never as one.
+  const nextBt = withBtStatus(data, btStatusText(row.bt.proposalStatus));
+  if (nextBt) data = nextBt;
+  if (!applied.length && wasLinked && !nextBt && jobId === (est.job_id || null)) return { unchanged: true, stale };
+  await db.query(
+    'UPDATE estimates SET data = $1::jsonb, attached_job_id = $2, bt_worksheet_id = $3, updated_at = NOW() '
+    + 'WHERE id = $4 AND (organization_id = $5 OR organization_id IS NULL)',
+    [JSON.stringify(data), jobId, btId, est.id, orgId]);
+  return { applied, linked: !wasLinked, stale, btStatus: !!nextBt };
+}
+
+async function createEstimate(db, orgId, row, user) {
+  const bt = row.bt;
+  const btId = norm(bt.btId);
+  const job = await db.query('SELECT id FROM jobs WHERE organization_id = $1 AND bt_job_id = $2 AND bt_archived_at IS NULL', [orgId, norm(bt.jobId)]);
+  if (job.rows.length !== 1) return { skipped: 'Its Buildertrend job is not linked to a P86 job.' };
+  const jobId = job.rows[0].id;
+  if (await estimateLinkedElsewhere(db, orgId, btId, null)) return { skipped: 'A P86 estimate is already linked to this Buildertrend worksheet.' };
+  // THE LINES COME FROM THE MATCHER, which apply() has just re-run against a
+  // fresh Clickr read. Nothing the browser sent reaches this array.
+  const lines = (row.build && Array.isArray(row.build.lines)) ? row.build.lines : null;
+  if (!lines || !lines.length) return { skipped: 'This Buildertrend worksheet has no line this sync can carry, so no estimate is created.' };
+
+  const id = genId('est');
+  const altId = 'a' + id;
+  const stamped = lines.map((l) => Object.assign({}, l, { estimateId: id, alternateId: altId }));
+  // BORN UNSENT, UNLOCKED AND UNAPPROVED, and that is done by writing NOTHING:
+  // is_locked defaults FALSE and sent_count 0, and sent_at, viewed_at,
+  // accepted_at, approval_status, approved_at, approved_by, declined_at and
+  // sign_token are all left NULL. data carries no `job_id` and no
+  // status 'sold' either — those two are the SOLD marker routes/job-routes.js
+  // stamps on conversion, and an imported worksheet has been sold to nobody.
+  const data = {
+    id,
+    title: bt.title || ('Buildertrend estimate ' + btId),
+    client: '',
+    lines: stamped,
+    alternates: [{ id: altId, estimateId: id, name: 'Base' }],
+    activeAlternateId: altId,
+  };
+  const word = btStatusText(bt.proposalStatus);
+  if (word) data.btStatus = word;
+  // THE ORGANISATION COMES FROM THE PARENT JOB, never from the request.
+  await db.query(
+    'INSERT INTO estimates (id, owner_id, data, organization_id, attached_job_id, bt_worksheet_id) '
+    + 'VALUES ($1, $2, $3::jsonb, (SELECT organization_id FROM jobs WHERE id = $4), $4, $5)',
+    [id, user && user.id != null ? user.id : null, JSON.stringify(data), jobId, btId]);
+  const notes = [];
+  const content = stamped.filter((l) => l.section !== '__section_header__').length;
+  notes.push('Created with ' + content + ' Buildertrend line' + (content === 1 ? '' : 's') + ', unsent, unlocked and not approved.');
+  return { created: id, notes };
+}
+
 // ── leads ────────────────────────────────────────────────────────────────
 async function applyLead(db, orgId, row, mode, fields) {
   const btId = norm(row.bt.btId);
@@ -1172,6 +1370,7 @@ async function createRecords(org, kind, rows, input, deps) {
         : kind === 'changeOrders' ? await createChangeOrder(client, org.id, row, deps.user)
         : kind === 'purchaseOrders' ? await createPurchaseOrder(client, org.id, row, deps.user)
         : kind === 'bills' ? await createBill(client, org.id, row, deps.user)
+        : kind === 'estimates' ? await createEstimate(client, org.id, row, deps.user)
         : kind === 'clients' ? await createClient(client, org.id, row)
         : await createLead(client, org.id, row, deps.user);
       await client.query('COMMIT');
@@ -1218,7 +1417,7 @@ async function linkRecord(org, kind, rows, input, deps) {
   const skip = (reason) => ({ status: 200, body: { dataset: kind, mode: 'link', counts: { linked: 0, skipped: 1 }, results: [Object.assign(base, { outcome: 'skipped', reason })] } });
   if (row.class === 'matched' || row.class === 'conflict') return skip('This Buildertrend record already has a confident P86 match.');
   if (listed.indexOf(String(input.p86Id)) === -1) return skip('That P86 record is not one of the candidates listed for this Buildertrend record.');
-  if (kind === 'changeOrders' || kind === 'purchaseOrders' || kind === 'bills') return linkDetail(kind, org, row, input, deps, base, skip);
+  if (kind === 'changeOrders' || kind === 'purchaseOrders' || kind === 'bills' || kind === 'estimates') return linkDetail(kind, org, row, input, deps, base, skip);
   const [table, col] = LINK_TABLE[kind];
   const client = await deps.pool.connect();
   try {
@@ -1250,28 +1449,37 @@ async function linkRecord(org, kind, rows, input, deps) {
 // A change order, purchase order or bill is linked only on the P86 job its
 // Buildertrend job is linked to. The link writes the Buildertrend id and
 // NOTHING else — no money, no status.
-const DETAIL_NOUN = { changeOrders: 'change order', purchaseOrders: 'purchase order', bills: 'bill' };
+const DETAIL_NOUN = { changeOrders: 'change order', purchaseOrders: 'purchase order', bills: 'bill', estimates: 'estimate' };
 async function linkDetail(kind, org, row, input, deps, base, skip) {
   const co = kind === 'changeOrders';
   const bill = kind === 'bills';
+  const est = kind === 'estimates';
   const noun = DETAIL_NOUN[kind];
   const client = await deps.pool.connect();
   try {
     await client.query('BEGIN');
     const rec = co ? await lockedChangeOrder(client, org.id, input.p86Id, norm(row.bt.jobId))
       : bill ? await lockedBill(client, org.id, input.p86Id, norm(row.bt.jobId))
+      // An estimate is only ever LINKED from a candidate the matcher listed, and
+      // every one of those is already filed under this job — so the link is
+      // reached through the job like the other three, and a jobless estimate (the
+      // loose arm of lockedEstimate) is deliberately out of reach here: it is not
+      // a candidate, so nothing can name it.
+      : est ? await lockedEstimate(client, org.id, input.p86Id, norm(row.bt.jobId), null)
       : await lockedPurchaseOrder(client, org.id, input.p86Id, norm(row.bt.jobId));
     if (!rec || !row.job || rec.job_id !== row.job.id) { await client.query('ROLLBACK'); return skip('That P86 ' + noun + ' is not on the job linked to this Buildertrend job.'); }
-    const current = norm(co ? rec.bt_co_id : bill ? rec.bt_bill_id : rec.bt_po_id);
+    const current = norm(co ? rec.bt_co_id : bill ? rec.bt_bill_id : est ? rec.bt_worksheet_id : rec.bt_po_id);
     if (current && current !== base.btId) { await client.query('ROLLBACK'); return skip('That P86 ' + noun + ' is already linked to a different Buildertrend ' + noun + '.'); }
     const elsewhere = co ? await coLinkedElsewhere(client, org.id, base.btId, rec.id)
       : bill ? await billLinkedElsewhere(client, org.id, base.btId, rec.id)
+      : est ? await estimateLinkedElsewhere(client, org.id, base.btId, rec.id)
       : await poLinkedElsewhere(client, org.id, base.btId, rec.id);
     if (elsewhere) {
       await client.query('ROLLBACK'); return skip('Another P86 ' + noun + ' is already linked to this Buildertrend ' + noun + '.');
     }
     if (co) await client.query('UPDATE job_change_orders SET bt_co_id = $1 WHERE id = $2 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)', [base.btId, rec.id, org.id]);
     else if (bill) await client.query('UPDATE job_vendor_bills SET bt_bill_id = $1, updated_at = NOW() WHERE id = $2 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)', [base.btId, rec.id, org.id]);
+    else if (est) await client.query('UPDATE estimates SET bt_worksheet_id = $1 WHERE id = $2 AND attached_job_id IN (SELECT id FROM jobs WHERE organization_id = $3)', [base.btId, rec.id, org.id]);
     else await client.query('UPDATE job_purchase_orders SET bt_po_id = $1 WHERE id = $2 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)', [base.btId, rec.id, org.id]);
     // A linked change order learns Buildertrend's current word for it (C2).
     const nextCoBt = co ? withBtStatus(parseData(rec.data), btStatusText(row.bt.statusText)) : null;
@@ -1289,7 +1497,7 @@ async function linkDetail(kind, org, row, input, deps, base, skip) {
   // Committed and released: a linked PO that is already active with a sub of
   // this organization gets that sub access, as its next save on the PO page would.
   const linked = Object.assign(base, { outcome: 'linked', linked: true });
-  if (!co && await grantPoSubAccessAfterCommit(deps.pool, org.id, input.p86Id, deps.user)) linked.subAccess = true;
+  if (!co && !bill && !est && await grantPoSubAccessAfterCommit(deps.pool, org.id, input.p86Id, deps.user)) linked.subAccess = true;
   if (preview.forgetFetch) preview.forgetFetch(org.id);
   return { status: 200, body: { dataset: kind, mode: 'link', counts: Object.assign({ linked: 1 }, linked.subAccess ? { subAccess: 1 } : {}), results: [linked] } };
 }
@@ -1344,6 +1552,7 @@ async function apply(org, input, deps) {
         : kind === 'changeOrders' ? await applyChangeOrder(client, org.id, row, mode, input.fields)
         : kind === 'purchaseOrders' ? await applyPurchaseOrder(client, org.id, row, mode, input.fields)
         : kind === 'bills' ? await applyBill(client, org.id, row, mode, input.fields)
+        : kind === 'estimates' ? await applyEstimate(client, org.id, row, mode, input.fields)
         : kind === 'clients' ? await applyClient(client, org.id, row, mode, input.fields)
         : await applyLead(client, org.id, row, mode, input.fields);
       await client.query('COMMIT');
@@ -1387,7 +1596,7 @@ async function apply(org, input, deps) {
 function parseInput(body) {
   const b = body || {};
   const dataset = b.dataset;
-  if (DATASET_KINDS.indexOf(dataset) === -1) return { error: 'dataset must be "jobs", "leads", "clients", "changeOrders", "purchaseOrders" or "bills".' };
+  if (DATASET_KINDS.indexOf(dataset) === -1) return { error: 'dataset must be "jobs", "leads", "clients", "changeOrders", "purchaseOrders", "bills" or "estimates".' };
   if (b.mode === 'link') {
     const btId = (typeof b.btId === 'string' || typeof b.btId === 'number') ? String(b.btId).trim() : '';
     const p86Id = (typeof b.p86Id === 'string' || typeof b.p86Id === 'number') ? String(b.p86Id).trim() : '';
@@ -1536,7 +1745,7 @@ async function handle(req, res, deps) {
     if (out.status === 200) {
       auditLog(req, {
         action: input.mode === 'create' ? 'buildertrend.create' : input.mode === 'link' ? 'buildertrend.link' : 'buildertrend.apply',
-        targetType: input.dataset === 'jobs' ? 'job' : input.dataset === 'clients' ? 'client' : input.dataset === 'changeOrders' ? 'change_order' : input.dataset === 'purchaseOrders' ? 'purchase_order' : input.dataset === 'bills' ? 'bill' : 'lead',
+        targetType: input.dataset === 'jobs' ? 'job' : input.dataset === 'clients' ? 'client' : input.dataset === 'changeOrders' ? 'change_order' : input.dataset === 'purchaseOrders' ? 'purchase_order' : input.dataset === 'bills' ? 'bill' : input.dataset === 'estimates' ? 'estimate' : 'lead',
         targetId: input.mode === 'safe' ? 'safe updates' : input.mode === 'create' && !input.btIds.length ? 'bulk create' : String(input.btIds.length) + ' records',
         organizationId: org.id,
         detail: { mode: input.mode, counts: out.body.counts,

@@ -1501,6 +1501,38 @@ async function initSchema() {
     -- one is unique outright and every sync read reaches the row through its job.
     ALTER TABLE job_vendor_bills ADD COLUMN IF NOT EXISTS bt_bill_id TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_job_vendor_bills_bt_bill_id ON job_vendor_bills(bt_bill_id) WHERE bt_bill_id IS NOT NULL;
+
+    -- ── AN ESTIMATE FILED UNDER A JOB ───────────────────────────────────
+    -- Buildertrend keeps its estimate WORKSHEETS on the JOB, and
+    -- services/clickr/estimate-match.js brings each one over as a real P86
+    -- estimate. Until now a P86 estimate belonged to a lead and a client and
+    -- had no job link of any kind, so this column is the new shape.
+    --
+    -- IT IS NOT data->>'job_id', AND THE TWO MUST NEVER BE CONFLATED.
+    -- data.job_id is the SOLD marker: routes/job-routes.js stamps it inside
+    -- the convert transaction beside status 'sold', is_locked = TRUE and
+    -- accepted_at, it is what the Estimates list paints as "Won", and the
+    -- same route refuses a second job on an estimate that already carries it
+    -- ("An estimate can be sold ONCE"). Reusing that key for "this estimate
+    -- lives on this job" would mark every imported Buildertrend worksheet
+    -- sold and won on the day it arrived, and would block the real sale.
+    --
+    -- attached_job_id says one thing only: this estimate belongs in this
+    -- job's file. A job may have several; none of them is sold by having it;
+    -- and an estimate carrying one may have no lead at all, which is why
+    -- every reader of estimates had to learn the lead can be absent.
+    -- ON DELETE SET NULL is the choice jobs.estimate_id already makes in the
+    -- other direction: deleting a job never deletes an estimate.
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS attached_job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_estimates_attached_job ON estimates(attached_job_id) WHERE attached_job_id IS NOT NULL;
+    -- A Buildertrend estimate WORKSHEET's id (services/clickr/estimate-match.js
+    -- rung 0), on the same terms as the three above: an estimate row can carry
+    -- a NULL organization_id (see the upsert in routes/estimate-routes.js), so
+    -- this one is unique outright, and every sync read reaches the row through
+    -- its attached job. A Buildertrend record is ONE LINE of a worksheet, so
+    -- what is stored here is the WORKSHEET id, never a line item id.
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS bt_worksheet_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_estimates_bt_worksheet_id ON estimates(bt_worksheet_id) WHERE bt_worksheet_id IS NOT NULL;
     -- Buildertrend reconcile archive (services/clickr/reconcile-merge.js): a merged
     -- duplicate or a P86-only record set aside for review. NULL = live. Archived
     -- leads and clients are left out of their list routes and the map; an archived

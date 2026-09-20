@@ -697,7 +697,12 @@ describe('gates', () => {
 
   test('only /me, only jobs or leads, and ids are required per record', async () => {
     expect((await put('/api/admin/organizations/1?action=buildertrend-apply', ADMIN, { dataset: 'jobs', mode: 'safe' })).status).toBe(400);
-    expect((await put(APPLY, ADMIN, { dataset: 'estimates', mode: 'safe' })).status).toBe(400);
+    // 'estimates' used to stand here as the example of a dataset this endpoint
+    // does not serve. It serves one now (services/clickr/estimate-match.js), so
+    // the property — an unknown dataset name is refused before anything is read
+    // — needs a name that is still unknown. 'invoices' is one: P86 has the
+    // table, Clickr has no such dataset, and nothing in DATASET_KINDS names it.
+    expect((await put(APPLY, ADMIN, { dataset: 'invoices', mode: 'safe' })).status).toBe(400);
     expect((await put(APPLY, ADMIN, { dataset: 'jobs', btIds: [] })).status).toBe(400);
   });
 

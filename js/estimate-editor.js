@@ -4722,6 +4722,35 @@
       '</div>';
     }
 
+    // FILED UNDER A JOB, with no lead. The shape Buildertrend’s estimate
+    // worksheets arrive in (server/services/clickr/estimate-match.js): the
+    // estimate belongs to a job’s file rather than to an opportunity, so the
+    // UNATTACHED copy below — "sits outside the opportunity chain, no pipeline,
+    // no map pin" — would be telling the estimator it is an orphan when it is
+    // not. The lead affordances stay: attaching one to a job estimate is a
+    // perfectly ordinary thing to want, and nothing here is sold or locked.
+    //
+    // est.attached_job_id is a COLUMN the GET projection surfaces, and it is not
+    // est.job_id, which means "sold onto that job" and is what eeIsSold reads.
+    if (est && est.attached_job_id && !eeIsSold(est)) {
+      var jb = (appData.jobs || []).find(function (j) { return j && String(j.id) === String(est.attached_job_id); });
+      var jnm = jb ? ([jb.jobNumber, jb.title || jb.name].filter(Boolean).join(' ') || jb.id) : ('Job ' + est.attached_job_id);
+      return '<div style="margin-bottom:12px;"><label style="display:block;">' + label + '</label>' +
+        '<div style="' + box + '">' +
+          '<div style="min-width:0;">' +
+            '<div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Filed under ' + escapeHTML(jnm) + '</div>' +
+            '<div style="font-size:11px;color:var(--text-dim,#8a93a6);">This estimate belongs to a job rather than to a lead' +
+              (est.bt_worksheet_id ? ' \u2014 imported from a Buildertrend worksheet' : '') + '.</div>' +
+          '</div>' +
+          (canEditEst
+            ? '<div style="display:flex;gap:6px;flex:0 0 auto;">' +
+                '<button class="ee-btn secondary" onclick="window.eeAttachLead()">Attach to a lead…</button>' +
+              '</div>'
+            : '') +
+        '</div>' +
+      '</div>';
+    }
+
     // UNATTACHED.
     var canCreate = canEditEst && eeCan('LEADS_EDIT');
     return '<div style="margin-bottom:12px;"><label style="display:block;">' + label + '</label>' +

@@ -526,9 +526,22 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.34';
+const APP_VERSION = '1.35';
 
 const releases = [
+  {
+    version: '1.35',
+    date: '2026-09-20',
+    name: 'Buildertrend estimates',
+    summary: 'A Buildertrend estimate worksheet can be brought into Project 86 as a real estimate, with its line items, its sections and its markup, attached to the job it belongs to — and it refuses rather than guessing wherever Buildertrend prices a line in a way Project 86 cannot express.',
+    changes: [
+      { type: 'new', text: 'Estimates are the seventh Buildertrend dataset the preview reads. Buildertrend holds an estimate as a worksheet of line items, so the preview groups them back into worksheets and offers each one as a Project 86 estimate on the job its Buildertrend job is linked to. Line order, section headers and each line’s quantity, unit cost and markup come across as they were, and a worksheet whose own lines disagree with each other about which job or contract price they belong to is refused rather than averaged.' },
+      { type: 'new', text: 'An estimate can now be attached to a job. Until now an estimate belonged to a lead and a client; an imported worksheet belongs to a job instead. This is a separate thing from selling an estimate into a job — an imported estimate is not marked sold or won, is not locked, and can still be sold the normal way later.' },
+      { type: 'improved', text: 'Markup is converted only where it means the same thing. A Buildertrend percentage markup comes across as a percentage. A margin is converted to the equivalent markup, which is the same number written differently — edit the quantity or the cost afterwards and both move identically. A per-unit or flat-dollar markup is NOT converted: no percentage means the same thing once somebody edits a quantity, and on a zero-cost line no percentage exists at all. A worksheet priced that way is refused, naming the lines, because an estimate missing lines is a wrong document rather than a partial one.' },
+      { type: 'improved', text: 'The money is checked, not assumed. Every worksheet offered is priced through the same pricing the estimate editor and the proposal use, and compared with Buildertrend’s own owner price. Any difference of half a cent or more is shown as a held-back item naming both figures, never quietly absorbed. Contract price and line costs are always ticked by hand, never applied by “Link confident matches”.' },
+      { type: 'fixed', text: 'A sent, accepted, approved, sold or locked estimate is never rewritten by the sync. A document that went to a client or was sold is left exactly as it is, and the row says why.' },
+    ],
+  },
   {
     version: '1.34',
     date: '2026-09-20',

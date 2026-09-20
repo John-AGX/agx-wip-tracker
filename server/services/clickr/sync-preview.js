@@ -42,6 +42,7 @@ const match = require('./bt-match');
 const coMatch = require('./co-match');
 const poMatch = require('./po-match');
 const billMatch = require('./bill-match');
+const estimateMatch = require('./estimate-match');
 const coMoney = require('../money/change-order-totals');
 const since = require('./since-refresh');
 
@@ -147,6 +148,32 @@ async function readP86(pool, orgId) {
     + 'LEFT JOIN subs s ON s.id = b.sub_id AND s.organization_id = $1 '
     + 'LEFT JOIN job_purchase_orders po ON po.id = b.po_id AND po.job_id = b.job_id '
     + 'WHERE j.organization_id = $1 AND j.bt_archived_at IS NULL AND (b.organization_id = $1 OR b.organization_id IS NULL)', [orgId]);
+  // ESTIMATES, in two statements because an estimate can be reached two ways
+  // and each way has its own tenancy.
+  //
+  //   (a) filed under a job of this organization (estimates.attached_job_id).
+  //       Reached through THEIR JOB’s organization AND their own, exactly as
+  //       change orders, purchase orders and bills are: a row stamped with
+  //       another organization is never read even on this org’s job, and an
+  //       older row with no organization still is — missing it would read its
+  //       Buildertrend worksheet as "new" and create a duplicate PROPOSAL.
+  //
+  //   (b) already linked by this sync but no longer filed under any job
+  //       (attached_job_id went NULL when the job was deleted). There is no job
+  //       to reach it through, so this one carries NO tolerance arm: with no
+  //       parent there is nothing to scope an org-NULL row by, and none can
+  //       exist — every estimate this sync creates is stamped from its job’s
+  //       organization (sync-apply.js createEstimate), so a row carrying a
+  //       bt_worksheet_id always carries an organization too.
+  const estsOnJob = await pool.query(
+    'SELECT e.id, e.attached_job_id, e.bt_worksheet_id, e.data, e.is_locked, e.sent_at, e.sent_count, '
+    + 'e.approval_status, e.accepted_at, e.approved_at, e.declined_at '
+    + 'FROM estimates e JOIN jobs j ON j.id = e.attached_job_id '
+    + 'WHERE j.organization_id = $1 AND j.bt_archived_at IS NULL AND (e.organization_id = $1 OR e.organization_id IS NULL)', [orgId]);
+  const estsLoose = await pool.query(
+    'SELECT e.id, e.attached_job_id, e.bt_worksheet_id, e.data, e.is_locked, e.sent_at, e.sent_count, '
+    + 'e.approval_status, e.accepted_at, e.approved_at, e.declined_at '
+    + 'FROM estimates e WHERE e.organization_id = $1 AND e.bt_worksheet_id IS NOT NULL AND e.attached_job_id IS NULL', [orgId]);
   const subs = await pool.query("SELECT id, name FROM subs WHERE organization_id = $1 AND COALESCE(status, 'active') <> 'closed'", [orgId]);
   const users = await pool.query(
     'SELECT id, name FROM users WHERE organization_id = $1 AND active = true', [orgId]);
@@ -163,6 +190,7 @@ async function readP86(pool, orgId) {
     coRows: cos.rows,
     poRows: pos.rows,
     billRows: bills.rows,
+    estimateRows: estsOnJob.rows.concat(estsLoose.rows),
     subs: subs.rows,
     directory: { users: users.rows.map((r) => ({ id: r.id, name: r.name })), clients: clients.rows.map((r) => ({ id: r.id, name: r.name })) },
     clients: clients.rows,
@@ -173,7 +201,10 @@ async function readP86(pool, orgId) {
 
 function fetchedSentence(ds, fr) {
   if (fr.error) return fr.error.message;
-  const noun = ds.label.toLowerCase();
+  // Estimates are counted in LINE ITEMS, because that is what Clickr sends:
+  // one record is one line of a worksheet, and saying "277 estimates" for 277
+  // lines would be a confident wrong answer about the size of the job.
+  const noun = ds.key === 'estimates' ? 'estimate line items' : ds.label.toLowerCase();
   const of = fr.reportedCount != null ? ' of ' + fr.reportedCount : '';
   if (fr.complete) {
     return 'Fetched ' + fr.fetched + of + ' ' + noun + ' in ' + fr.pages + ' page' + (fr.pages === 1 ? '' : 's') + ' — every record Clickr reported.';
@@ -192,6 +223,10 @@ function notInBtSentence(ds, reliable, fr, p86Error, n, notListed) {
     ? ' Only change orders on P86 jobs whose Buildertrend job sent change orders in this read are listed; ' + notListed + ' on other jobs are not (Clickr\'s change-order dataset covers open jobs only).'
     : ds.key === 'purchaseOrders'
     ? ' Only purchase orders on P86 jobs whose Buildertrend job sent purchase orders in this read are listed; ' + notListed + ' on other jobs are not (Clickr\'s purchase-order dataset covers open jobs only).'
+    : ds.key === 'estimates'
+    ? ' Only estimates filed under a P86 job whose Buildertrend job sent estimate lines in this read are listed; ' + notListed
+      + ' on other jobs, and every estimate that belongs to a lead rather than a job, are not.'
+      + ' A P86 estimate nothing in Buildertrend reached is expected: P86 writes proposals Buildertrend never sees. Nothing is proposed for deletion.'
     : ds.key === 'bills'
     ? ' Only bills on P86 jobs whose Buildertrend job sent bills in this read are listed; ' + notListed + ' on other jobs are not (Clickr\'s bills dataset covers open jobs only).'
       + ' A P86 bill nothing in Buildertrend reached is expected: P86 records bills Buildertrend never sees. Nothing is proposed for deletion, and a sync never voids one.'
@@ -219,10 +254,13 @@ function matchRows(kind, values, p86) {
   // Bills need poRows too: a bill's purchase order is resolved ONLY through the
   // bt_po_id a P86 purchase order already carries.
   if (kind === 'bills') return billMatch.matchBills(values, { jobs: p86.jobs, billRows: p86.billRows || [], poRows: p86.poRows || [], subs: p86.subs || [] });
+  // Estimates are the one dataset whose RECORDS are not the rows: a record is
+  // one LINE, and matchEstimates groups them into worksheets itself.
+  if (kind === 'estimates') return estimateMatch.matchEstimates(values, { jobs: p86.jobs, estimateRows: p86.estimateRows || [] });
   return match.matchLeads(values, p86.leads, { directory: p86.directory });
 }
 
-const PREVIEW_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills'];
+const PREVIEW_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills', 'estimates'];
 
 function buildDataset(kind, fr, p86, p86Error) {
   const ds = DATASETS[kind];
@@ -256,6 +294,8 @@ function buildDataset(kind, fr, p86, p86Error) {
     ? poMatch.notInBuildertrend(rows, values, p86)
     : kind === 'bills'
     ? billMatch.notInBuildertrend(rows, values, p86)
+    : kind === 'estimates'
+    ? estimateMatch.notInBuildertrend(rows, values, p86)
     // readComplete: a P86 lead is called "no longer an open lead in Buildertrend"
     // only when the Buildertrend read reached every record. After a partial read
     // its Buildertrend lead may simply be in the part never fetched.
@@ -367,10 +407,11 @@ async function markSinceRefresh(org, deps, datasets, reads, ctx) {
   }
   const snaps = {};
   for (const k of complete) {
-    snaps[k] = (reads[k].records || []).map((r) => {
-      const v = readRecord(k, r);
-      return { btId: v.btId, snapshot: since.snapshotOf(k, v) };
-    });
+    // ONE SNAPSHOT PER THING A ROW IS, which for every dataset but estimates is
+    // one per record. An estimates record is a LINE, and the rows are
+    // WORKSHEETS, so since-refresh groups them: keyed on a line's id nothing
+    // would ever line up with a row and no worksheet could be marked at all.
+    snaps[k] = since.snapshotRecords(k, (reads[k].records || []).map((r) => readRecord(k, r)));
   }
   // Nothing carrying the key is ever stored: the same check the response gets.
   if (carriesKey(snaps, ctx.apiKey)) throw Object.assign(new Error('withheld'), { keyLeak: true });
@@ -411,7 +452,7 @@ async function buildPreview(org, deps) {
   try {
     p86 = await readP86(deps.pool, org.id);
   } catch (e) {
-    p86 = { jobs: [], leads: [], clients: [], coRows: [], poRows: [], billRows: [], subs: [], coTotals: new Map(), directory: { users: [], clients: [] }, unscopedJobs: 0, unscopedLeads: 0 };
+    p86 = { jobs: [], leads: [], clients: [], coRows: [], poRows: [], billRows: [], estimateRows: [], subs: [], coTotals: new Map(), directory: { users: [], clients: [] }, unscopedJobs: 0, unscopedLeads: 0 };
     p86Error = 'Could not read Project 86\'s own jobs and leads, so nothing was classified.';
   }
 

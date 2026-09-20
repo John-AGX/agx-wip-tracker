@@ -49,7 +49,11 @@ const SCHEMA = `
   CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, name TEXT, role TEXT, organization_id INTEGER);
   CREATE TABLE jobs (id TEXT PRIMARY KEY, owner_id INTEGER, organization_id INTEGER, data TEXT);
   CREATE TABLE estimates (
-    id TEXT PRIMARY KEY, owner_id INTEGER, organization_id INTEGER, data TEXT NOT NULL
+    id TEXT PRIMARY KEY, owner_id INTEGER, organization_id INTEGER, data TEXT NOT NULL,
+    -- estimates.attached_job_id: the job an estimate is FILED UNDER, which is
+    -- not data.job_id (the sold marker). buildEstimateContext reads it to name
+    -- the job, so a fixture without it 42703s the whole context build.
+    attached_job_id TEXT
   );
   CREATE TABLE leads (
     id TEXT PRIMARY KEY, organization_id INTEGER, job_id TEXT,

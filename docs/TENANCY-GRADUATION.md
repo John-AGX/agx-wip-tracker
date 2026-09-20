@@ -192,8 +192,49 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**557** occurrences of `organization_id IS NULL` across `server/`.
+**562** occurrences of `organization_id IS NULL` across `server/`.
 
+557 → 562: the Buildertrend ESTIMATES sync. Five statements, on the same terms
+as the four syncs before it. `services/clickr/sync-preview.js` readP86’s
+`estimates` read and `sync-apply.js` `lockedEstimate` both reach an estimate
+through `jobs.organization_id = $n` (strict, via the new
+`estimates.attached_job_id`) and carry the arm on the ESTIMATE’s own column,
+whose older rows can be NULL — skipping it would read a linked worksheet as
+"new" and create a duplicate PROPOSAL. `sync-apply.js` applyEstimate’s two
+UPDATEs carry it predicate-for-predicate from `routes/estimate-routes.js`,
+which is where every other write to that table already carries it. The fifth is
+`routes/ai-routes.js` buildEstimateContext reading the JOB an estimate is filed
+under, on exactly the terms the client and lead reads beside it already use.
+
+Both companion reads of the new shape go the OTHER way and carry NO arm, on
+purpose: sync-preview’s second `estimates` statement (an estimate this sync
+linked that has since lost its job) and `sync-apply.js` `estimateLinkedElsewhere`
+are strict `organization_id = $n`, because with no parent row to scope by there
+is nothing for a tolerance arm to be tolerant OF — and no such row can exist,
+since every estimate `createEstimate` writes takes its organisation from its
+job. `estimates` is already classified in `services/org-table-classification.js`,
+and it is in the **`DIRECT`** list — `classify('estimates')` is `'direct'`, the
+row’s OWN `organization_id` IS the tenant — which is why its un-stamped rows are
+exactly the ones the arm above exists for. It is NOT in `PARENT` and must not be
+moved there to make this paragraph shorter: `attached_job_id` is an extra path
+THESE READS travel, not a parent classification. The column is nullable and `ON
+DELETE SET NULL`, most estimates belong to a LEAD and have no job at all, and
+`routes/estimate-routes.js` lists estimates on their own column with no join —
+so scoping the TABLE through `jobs` would drop every one of those rows. Either
+way this adds no new table to items 1-8.
+
+
+554 → 557: the work-order/task split (846bde56), which shipped without an entry
+here. Net three statements across two files, all on reads that had NO company
+check at all rather than on a new shape. `routes/ai-routes.js` gained the
+`tasks.organization_id` arm on the daily "Your tasks for today" read, and the
+attachment `photo_count` subquery beside a task gained
+`a.organization_id = t.organization_id OR a.organization_id IS NULL` in
+`routes/ai-routes.js` once and `routes/tasks-routes.js` twice — a photo count
+is scoped to the TASK’s organization rather than the caller’s, because the task
+row has already been scoped by the time the subquery runs. The arm is on the
+ATTACHMENT’s own column, whose older rows can be NULL; dropping it would count a
+legacy photo as zero. No new table.
 551 → 554: the Buildertrend BILLS sync, on exactly the terms the change-order
 and purchase-order sync already took (see below). Three statements:
 `services/clickr/sync-preview.js` readP86's `job_vendor_bills` read, and
