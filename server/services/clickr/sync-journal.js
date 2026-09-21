@@ -376,9 +376,21 @@ async function handleUndo(req, res, deps) {
   }
 }
 
+// The same three, taken on the pool. A scheduled run has no transaction of its
+// own to hang them on, and must not borrow a record's: a record that rolls
+// back would take the whole run's line with it.
+async function onPool(pool, fn) {
+  const client = await pool.connect();
+  try { return await fn(client); } finally { client.release(); }
+}
+function startRunOn(pool, orgId, meta) { return onPool(pool, (c) => startRun(c, orgId, meta)); }
+function finishRunOn(pool, orgId, runId, counts) { return onPool(pool, (c) => finishRun(c, orgId, runId, counts)); }
+function dropEmptyRunOn(pool, orgId, runId) { return onPool(pool, (c) => dropEmptyRun(c, orgId, runId)); }
+
 module.exports = {
   TABLE, NOISE, journalled, tableFor, snapshot, diffColumns, canon, stable, sameValue, sameStored, fromColumn, fromJsonb, jsonParam,
   startRun, finishRun, dropEmptyRun, capture,
+  startRunOn, finishRunOn, dropEmptyRunOn,
   REFERRERS, blockedBy, undoChange, markUndone,
   handleHistory, handleUndo, MAX_RUNS,
 };

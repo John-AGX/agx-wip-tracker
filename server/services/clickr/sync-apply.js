@@ -1796,6 +1796,17 @@ async function linkDetail(kind, org, row, input, deps, base, skip) {
 }
 
 // ── the operation ────────────────────────────────────────────────────────
+// The rows a dataset is offering right now, matched exactly as apply() will
+// match them. Read-only: the unattended run uses it to decide which held-back
+// items to NAME, and apply() then re-reads and re-matches before it writes, so
+// a row that moved in between is refused there rather than trusted here.
+async function rowsFor(org, kind, deps) {
+  const fr = await readDataset(org, kind, deps);
+  if (fr.error || fr.complete !== true) return [];
+  const p86 = await preview.readP86(deps.pool, org.id);
+  return preview.matchRows(kind, fr.records.map((r) => readRecord(kind, r)), p86);
+}
+
 async function apply(org, input, deps) {
   const journalRun = deps.journalRun || null;
   const kind = input.dataset;
@@ -2078,4 +2089,4 @@ async function handle(req, res, deps) {
   }
 }
 
-module.exports = { handle, handleArchiveList, apply, parseInput, writable, pickedHeldBack, p86JobStatus, ACTION_PARAM, grantPoSubAccessAfterCommit };
+module.exports = { handle, handleArchiveList, apply, rowsFor, parseInput, writable, pickedHeldBack, p86JobStatus, ACTION_PARAM, grantPoSubAccessAfterCommit };

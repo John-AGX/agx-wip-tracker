@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.41';
+const APP_VERSION = '1.42';
 
 const releases = [
+  {
+    version: '1.42',
+    date: '2026-09-20',
+    name: 'The sync can run on its own',
+    summary: 'A scheduled run that brings Buildertrend across without being asked — off until you turn it on, and every change it makes can be taken back from the sync history.',
+    changes: [
+      { type: 'new', text: 'An unattended run, every 30 minutes. It links confident matches, creates what Buildertrend has and Project 86 does not, and applies the differences — money included, which is the decision you made. It is OFF until BT_AUTO_SYNC is switched on, and the switch is read each time it ticks, so turning it on or off does not need a deploy.' },
+      { type: 'new', text: 'It works parents first. A change order, purchase order, bill, estimate worksheet or task whose Buildertrend job is not linked to a Project 86 job can do nothing at all, so clients and jobs are brought across before anything that hangs off a job — which means one run does what two runs in any other order would.' },
+      { type: 'improved', text: 'Everything it writes is journalled exactly like a press, so a whole run or a single field can be taken back from the sync history afterwards. That is the safety: not a confirmation step, but a way back.' },
+      { type: 'fixed', text: 'One thing it will not do on its own: close a purchase order. A closed purchase order cannot be edited, unlocked, revised by addendum or deleted by anybody, and putting a column value back does not undo that — so those are left on the preview for a person, and the run says how many it left.' },
+    ],
+  },
   {
     version: '1.41',
     date: '2026-09-20',

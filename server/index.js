@@ -627,6 +627,16 @@ function startServer() {
       } catch (e) {
         console.warn('[work-order-notify] failed to start:', e && e.message);
       }
+      // The unattended Buildertrend sync — ticks every 30 min and does nothing
+      // at all unless BT_AUTO_SYNC is on, so the switch is read at tick time
+      // and neither turning it on nor off needs a deploy. Every write it makes
+      // goes down the same journalled path a press does, so all of it can be
+      // taken back from the sync history.
+      try {
+        require('./bt-auto-sync-cron').start();
+      } catch (e) {
+        console.warn('[bt-auto-sync] failed to start:', e && e.message);
+      }
       // Email Hub snooze wake-up (E3) — ticks every 5 min. Returns snoozed
       // mail to the owner's own Inbox, unread, once snoozed_until passes.
       // Purely in-app: it sends nothing and touches only rows the owner
