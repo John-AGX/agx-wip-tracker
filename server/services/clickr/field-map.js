@@ -424,6 +424,16 @@ function readLead(rec) {
     estimatedRevenueMin: r.estimatedRevenueMin === undefined ? null : r.estimatedRevenueMin,
     estimatedRevenueMax: r.estimatedRevenueMax === undefined ? null : r.estimatedRevenueMax,
     createdDate: scalarText(r.createdDate),
+    // DECLARED SINCE THE BEGINNING AND NEVER READ. The registry listed these
+    // four, so describeMapping reported them present and healthy, and the
+    // reader dropped them on the floor — 72 of 75 live leads carry notes, all
+    // 72 of them different. That is the declared-but-unread shape, and the
+    // diagnostic cannot catch it: it checks what Buildertrend SENDS against
+    // what the registry DECLARES, never what the reader actually takes.
+    notes: scalarText(r.notes),
+    nextActivityDate: scalarText(r.nextActivityDate),
+    nextActivityTitle: scalarText(r.nextActivityTitle),
+    nextActivityAssignee: scalarText(r.nextActivityAssignee),
   };
 }
 

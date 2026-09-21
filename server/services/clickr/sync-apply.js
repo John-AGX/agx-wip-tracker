@@ -93,7 +93,7 @@ const ACTION_PARAM = 'buildertrend-apply';
 const MAX_ROWS = 200;
 
 const JOB_FIELD_KEYS = { title: 'title', street: 'street_address', city: 'city', state: 'state', zip: 'zip', status: 'status', startDate: 'startDate' };
-const LEAD_FIELD_COLUMNS = { title: 'title', street: 'street_address', city: 'city', state: 'state', zip: 'zip', source: 'source', confidence: 'confidence' };
+const LEAD_FIELD_COLUMNS = { title: 'title', street: 'street_address', city: 'city', state: 'state', zip: 'zip', source: 'source', confidence: 'confidence', notes: 'notes' };
 const LEAD_ADDRESS = ['street', 'city', 'state', 'zip'];
 const JOB_ADDRESS = ['street', 'city', 'state', 'zip'];
 
@@ -214,7 +214,11 @@ function pickedHeldBack(kind, row, mode, fields) {
   if (kind === 'tasks') return (row.heldBack || []).filter((h) => h.applicable === true
     && (h.field === 'status' || h.field === 'title' || h.field === 'notes' || h.field === 'dueDate')
     && fields.indexOf(h.field) !== -1);
-  const allowed = kind === 'jobs' ? { jobNumber: 1 } : kind === 'clients' ? CLIENT_COLUMNS : LEAD_REVENUE_COLUMNS;
+  // A LEAD's notes: not money, but a REPLACEMENT for something a person may
+  // have written in P86, so it reaches a write only through here — never
+  // through safe mode and never through a press that names no fields.
+  const allowed = kind === 'jobs' ? { jobNumber: 1 } : kind === 'clients' ? CLIENT_COLUMNS
+    : Object.assign({ notes: 1 }, LEAD_REVENUE_COLUMNS);
   const pick = new Set(fields);
   return (row.heldBack || []).filter((h) => h.applicable === true && allowed[h.field] && pick.has(h.field));
 }
@@ -1367,6 +1371,15 @@ async function applyLead(db, orgId, row, mode, fields) {
   const applied = [];
   const stale = [];
   for (const h of pickedHeldBack('leads', row, mode, fields)) {
+    // NOTES, ticked on purpose: text, and a replacement for what P86 holds.
+    // Refused when P86's notes are no longer what the preview showed, so a
+    // sentence somebody wrote between the read and the press is never lost.
+    if (h.field === 'notes') {
+      if (norm(lead.notes) !== norm(h.p86Value)) { stale.push(h.label || h.field); continue; }
+      sets.notes = str(h.value);
+      applied.push({ field: h.field, from: h.p86, to: h.bt });
+      continue;
+    }
     // LEAD REVENUE, ticked on purpose.
     const col = LEAD_REVENUE_COLUMNS[h.field];
     if (!moneyEq(lead[col], h.p86Value) || !Number.isFinite(h.value)) { stale.push(h.label || h.field); continue; }

@@ -100,8 +100,11 @@ function leadRec(title, o) {
     confidence: o.confidence === undefined ? 0 : o.confidence,
     estimatedRevenueMin: o.min === undefined ? 0 : o.min,
     estimatedRevenueMax: o.max === undefined ? 0 : o.max,
-    notes: '', createdDate: '2026-04-03T12:00:00.000Z',
-    nextActivityDate: null, nextActivityTitle: null, nextActivityAssignee: null,
+    notes: o.notes === undefined ? '' : o.notes,
+    createdDate: '2026-04-03T12:00:00.000Z',
+    nextActivityDate: o.nextDate === undefined ? null : o.nextDate,
+    nextActivityTitle: o.nextTitle === undefined ? null : o.nextTitle,
+    nextActivityAssignee: o.nextWho === undefined ? null : o.nextWho,
     hasBeenContacted: true,
   };
   return rec;
@@ -2464,5 +2467,73 @@ describe('the Overview walks every dataset the server returns', () => {
       if (k === 'overview' || k === 'archive') continue;
       expect(preview.PREVIEW_KINDS).toContain(k);
     }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// LEAD NOTES — declared since the beginning, read from today. 72 of 75 live
+// Buildertrend leads carry notes, all 72 of them different.
+// ══════════════════════════════════════════════════════════════════════════
+describe('lead notes', () => {
+  // A street on BOTH sides: the title alone does not match a lead any more
+  // (an address is a property, not an opportunity — 1.38), so these fixtures
+  // have to corroborate the title or nothing is proposed at all.
+  const ST = '12 Oak St';
+  const btLead = (o) => leadRec('Roof leak', Object.assign({ street: ST }, o || {}));
+  const p86Lead = (o) => [pLead('l1', Object.assign({ title: 'Roof leak', street_address: ST }, o || {}))];
+  const one = (rec, p86) => match.matchLeads([rec].map(readLead), p86, {})[0];
+  const corr = (r, f) => (r.corrections || []).find((c) => c.field === f);
+  const held = (r, f) => (r.heldBack || []).find((h) => h.field === f);
+
+  test('readLead now takes the four keys the registry always declared', () => {
+    const v = readLead(leadRec('X', { notes: 'Gate code 4417', nextDate: '2026-10-01', nextTitle: 'Call back', nextWho: 'Ana' }));
+    expect([v.notes, v.nextActivityDate, v.nextActivityTitle, v.nextActivityAssignee])
+      .toEqual(['Gate code 4417', '2026-10-01', 'Call back', 'Ana']);
+  });
+
+  test('an EMPTY P86 note takes Buildertrend’s, as a fill', () => {
+    const r = one(btLead({ notes: 'Gate code 4417' }), p86Lead({ notes: '' }));
+    const c = corr(r, 'notes');
+    expect([c.kind, c.from, c.to]).toEqual(['fill', '', 'Gate code 4417']);
+    expect(held(r, 'notes')).toBeUndefined();
+  });
+
+  test('TWO DIFFERENT notes are HELD BACK, never a correction', () => {
+    const r = one(btLead({ notes: 'Gate code 4417' }), p86Lead({ notes: 'Spoke to Cherisse, needs scaffold' }));
+    expect(corr(r, 'notes')).toBeUndefined();
+    const h = held(r, 'notes');
+    expect([h.applicable, h.money, h.reason]).toEqual([true, false, 'written']);
+    expect(h.p86).toBe('Spoke to Cherisse, needs scaffold');
+    expect(h.bt).toBe('Gate code 4417');
+    expect(h.note).toMatch(/REPLACES/);
+  });
+
+  test('a BLANK in Buildertrend never erases what P86 holds', () => {
+    const r = one(btLead({ notes: '' }), p86Lead({ notes: 'Mine' }));
+    expect(corr(r, 'notes')).toBeUndefined();
+    expect(held(r, 'notes')).toBeUndefined();
+    expect((r.btBlank || []).find((b) => b.field === 'notes').p86).toBe('Mine');
+  });
+
+  test('the same note written on both sides is not a difference', () => {
+    const r = one(btLead({ notes: 'Gate code 4417' }), p86Lead({ notes: '  gate code 4417  ' }));
+    expect(corr(r, 'notes')).toBeUndefined();
+    expect(held(r, 'notes')).toBeUndefined();
+  });
+
+  test('NEXT ACTIVITY is said, not written — P86 has nowhere to keep it', () => {
+    const r = one(btLead({ nextTitle: 'Call back', nextDate: '2026-10-01', nextWho: 'Ana' }), p86Lead());
+    expect(corr(r, 'nextActivityTitle')).toBeUndefined();
+    expect(held(r, 'nextActivityTitle')).toBeUndefined();
+    const line = (r.notes || []).find((x) => /next activity/i.test(x));
+    expect(line).toMatch(/Call back/);
+    expect(line).toMatch(/2026-10-01/);
+    expect(line).toMatch(/Ana/);
+    expect(line).toMatch(/nowhere to keep/);
+  });
+
+  test('no next activity says nothing at all', () => {
+    const r = one(btLead({}), p86Lead());
+    expect((r.notes || []).find((x) => /next activity/i.test(x))).toBeUndefined();
   });
 });

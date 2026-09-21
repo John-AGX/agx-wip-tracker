@@ -109,7 +109,7 @@ async function readP86(pool, orgId) {
     data: Object.fromEntries(JOB_KEYS.map((k) => [k, r[k] == null ? '' : r[k]])) }));
   const leads = await pool.query(
     'SELECT l.id, l.title, l.status, l.street_address, l.city, l.state, l.zip, l.source, l.confidence, '
-    + 'l.estimated_revenue_low, l.estimated_revenue_high, l.bt_lead_id, '
+    + 'l.estimated_revenue_low, l.estimated_revenue_high, l.bt_lead_id, l.notes, '
     // Converted = the lead <-> job link on EITHER side (jobs.lead_id or
     // leads.job_id), and only through a job of THIS organization: another
     // tenant's job naming this lead, or this lead naming another tenant's job,

@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.43';
+const APP_VERSION = '1.44';
 
 const releases = [
+  {
+    version: '1.44',
+    date: '2026-09-20',
+    name: 'Lead notes come across',
+    summary: 'Buildertrend lead notes now reach Project 86 — 72 of 75 live leads carry them, and none of it was arriving. They fill an empty note and never overwrite one you have written.',
+    changes: [
+      { type: 'fixed', text: 'A Buildertrend lead’s notes were being fetched and thrown away. The field was listed as one the sync reads, so the health check reported it present and healthy, but three separate places had to name it for the value to survive the trip and only the first one did. Of 75 leads in Buildertrend, 72 carry notes and every one of them is different — none of it was reaching Project 86.' },
+      { type: 'new', text: 'Notes fill, and never overwrite. A lead with no notes in Project 86 takes Buildertrend’s. Where both sides carry notes and they differ, nothing happens on its own: the difference is held for you with both versions shown, because only a person can tell which is the fuller account rather than merely the later one. A blank in Buildertrend still never erases what Project 86 holds.' },
+      { type: 'improved', text: 'A Buildertrend next activity — what is planned, when, and for whom — is shown on the lead’s row in the preview. It is not written anywhere: Project 86 leads have no field for it, and adding one to hold three values on 6 of 75 leads is a decision for a person and not for a sync.' },
+    ],
+  },
   {
     version: '1.43',
     date: '2026-09-20',

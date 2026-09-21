@@ -1200,6 +1200,13 @@ function p86LeadView(row) {
     revenueHigh: row.estimated_revenue_high == null ? '' : str(row.estimated_revenue_high),
     salesperson: str(row.salesperson_name),
     client: str(row.client_name),
+    // The THIRD place a field has to be named to survive: the Buildertrend
+    // record, the Buildertrend view, and the P86 view are all enumerated one
+    // key at a time. A field present in two of them and missing from the third
+    // reads as blank, which for notes means every lead would look like an
+    // empty note taking Buildertrend's — the exact overwrite this rule exists
+    // to prevent.
+    notes: str(row.notes),
     // The lead <-> job link is kept on BOTH sides: leads.job_id and jobs.lead_id.
     // sync-preview.js reads both into has_job, and only through a job of THIS
     // organization — a job_id naming another tenant's job does not count.
@@ -1221,6 +1228,35 @@ function leadProposals(bt, p, directory) {
   const notes = [];
   compareField(acc, { field: 'title', label: 'Title', bt: bt.title, p86: p.title, same: (a, b) => textKey(a) === textKey(b) });
   addressFields(acc, bt, p);
+
+  // NOTES. The standing rule of this reconcile at its sharpest: a Buildertrend
+  // blank never erases a P86 value, and neither does a Buildertrend sentence
+  // somebody in P86 has already written over. So notes FILL and never
+  // overwrite — an empty P86 note takes Buildertrend's, and two notes that
+  // differ are held back for a person, who is the only one who can tell which
+  // is the fuller account rather than merely the later one.
+  //
+  // Held back and NOT money: it costs nothing to apply and nothing to undo, so
+  // it is offered applicable and unticked rather than kept off the page.
+  if (isBtBlank(bt.notes)) {
+    if (!isP86Blank(p.notes)) acc.btBlank.push({ field: 'notes', label: 'Notes', p86: p.notes });
+  } else if (isP86Blank(p.notes)) {
+    acc.corrections.push({ field: 'notes', label: 'Notes', kind: 'fill', from: '', to: str(bt.notes).trim() });
+  } else if (textKey(bt.notes) !== textKey(p.notes)) {
+    acc.heldBack.push({ field: 'notes', label: 'Notes', reason: 'written', money: false, applicable: true,
+      bt: str(bt.notes).trim(), p86: str(p.notes).trim(), p86Value: str(p.notes).trim(), value: str(bt.notes).trim(),
+      note: 'Both sides carry notes and they differ. Applying REPLACES what Project 86 holds with Buildertrend’s, so it is never automatic — read both and tick it only if Buildertrend’s is the one you want kept.' });
+  }
+
+  // NEXT ACTIVITY is shown, not written: Project 86 leads have no column for
+  // it, and inventing one to hold three fields on 6 of 75 leads would be a
+  // schema decision taken by a sync. It reaches the row as a sentence so the
+  // person reading the lead can see it.
+  if (!isBtBlank(bt.nextActivityTitle) || !isBtBlank(bt.nextActivityDate)) {
+    notes.push('Buildertrend next activity: ' + [str(bt.nextActivityTitle).trim(), str(bt.nextActivityDate).trim(),
+      isBtBlank(bt.nextActivityAssignee) ? '' : 'for ' + str(bt.nextActivityAssignee).trim()]
+      .filter(Boolean).join(' · ') + '. Project 86 has nowhere to keep this, so nothing is proposed.');
+  }
 
   // SALESPERSON: only onto exactly one active user of this org with that name.
   if (isBtBlank(bt.salesperson)) {
@@ -1300,6 +1336,17 @@ function matchLeads(btValues, p86Rows, ctx) {
       contactId: str(v.contactId), contactName: str(v.contactName), salesperson: str(v.salesperson), source: str(v.source),
       confidence: v.confidence, estimatedRevenueMin: v.estimatedRevenueMin, estimatedRevenueMax: v.estimatedRevenueMax,
       projectType: str(v.projectType), createdDate: str(v.createdDate), scope: 'open',
+      // The SECOND place these were dropped. readLead takes them off the
+      // Buildertrend record and this view is built by naming fields one at a
+      // time, so a key missing HERE is read and then thrown away again — which
+      // is what happened to notes for as long as the leads dataset has existed.
+      // bt.notes is Buildertrend's note ON the lead; row.notes, on the row
+      // itself, is this matcher's own explanation of what it did. Different
+      // objects, and the only two things in this file called notes.
+      notes: str(v.notes),
+      nextActivityDate: str(v.nextActivityDate),
+      nextActivityTitle: str(v.nextActivityTitle),
+      nextActivityAssignee: str(v.nextActivityAssignee),
     };
     const view = Object.assign({}, bt);
     delete bt.estimatedRevenueMin;
