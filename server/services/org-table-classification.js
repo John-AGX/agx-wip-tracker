@@ -56,7 +56,7 @@ const DIRECT = [
   'assembly_research', 'assembly_tuning_log',
   // The Buildertrend preview's memory (services/clickr/since-refresh.js): each
   // row's own NOT NULL organization_id is the tenant, never inferred from a job.
-  'bt_preview_views', 'bt_record_snapshots',
+  'bt_preview_views', 'bt_record_snapshots', 'bt_sync_runs', 'bt_sync_changes',
   'calendar_events', 'clients',
   'compliance_items', 'context_load_events', 'cost_categories', 'deal_memory',
   'email_campaigns', 'email_folders', 'email_labels', 'email_rules',

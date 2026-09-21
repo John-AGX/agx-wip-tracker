@@ -1255,6 +1255,12 @@ describe('R4 — classify() is checked, never consulted', () => {
   // record of a complete read, per organization, dataset and Buildertrend id)
   // and `bt_preview_views` (each admin's own last refresh).
   //
+  // 119 -> 121: the Buildertrend UNDO SPINE — `bt_sync_runs` (one press, or
+  // later one unattended run) and `bt_sync_changes` (one COLUMN of one record,
+  // with the value that was there before the sync wrote it). Both DIRECT, and
+  // both written only by code that already has the organisation in hand, so
+  // neither has an un-stamped row anywhere.
+  //
   // Both are DIRECT — each carries its own NOT NULL organization_id as the
   // first column of its primary key, so the generic seeder plants org A / org B
   // / un-stamped rows in each with no curation step. Neither is parent-scoped:
@@ -1272,7 +1278,7 @@ describe('R4 — classify() is checked, never consulted', () => {
   // are both ON DELETE SET NULL (a revoked link keeps the report, a deleted task
   // makes it ticket-level), and a flag whose tenant rode either pointer would
   // lose its tenancy at exactly that moment.
-  test('the fixture carries every table server/db.js creates (119) — nothing curated out', () => {
-    expect(TWO.ALL_TABLES.length).toBe(119);
+  test('the fixture carries every table server/db.js creates (121) — nothing curated out', () => {
+    expect(TWO.ALL_TABLES.length).toBe(121);
   });
 });

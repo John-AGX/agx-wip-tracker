@@ -55,6 +55,27 @@ const { fetchDataset } = require('./client');
 const match = require('./bt-match');
 const preview = require('./sync-preview');
 const { auditLog } = require('../../audit');
+const journal = require('./sync-journal');
+
+// A run row of its own, so one press is one line on the page even when it
+// wrote twenty records in twenty transactions. Opened and closed on the pool,
+// never inside a record's transaction: a record that rolls back must not take
+// the run with it.
+async function openJournalRun(pool, orgId, meta) {
+  const client = await pool.connect();
+  try { return await journal.startRun(client, orgId, meta); }
+  catch (e) { return null; }
+  finally { client.release(); }
+}
+async function closeJournalRun(pool, orgId, runId, counts) {
+  if (!runId) return;
+  const client = await pool.connect();
+  try {
+    await journal.finishRun(client, orgId, runId, counts);
+    await journal.dropEmptyRun(client, orgId, runId);
+  } catch (e) { /* the writes already committed; the run line is not worth failing the press */ }
+  finally { client.release(); }
+}
 const jobTypes = require('../job-types');
 const reconcile = require('./reconcile-merge');
 const jobFin = require('../job-financials');
@@ -1582,6 +1603,7 @@ async function createJob(db, orgId, row, user) {
 }
 
 async function createRecords(org, kind, rows, input, deps) {
+  const journalRun = deps.journalRun || null;
   let targets;
   if (input.btIds.length) {
     const wanted = new Set(input.btIds.map(norm));
@@ -1620,6 +1642,11 @@ async function createRecords(org, kind, rows, input, deps) {
         : kind === 'tasks' ? await createTask(client, org.id, row, deps.user)
         : kind === 'clients' ? await createClient(client, org.id, row)
         : await createLead(client, org.id, row, deps.user);
+      // A create has no before-state; capture() writes a 'create' row, and an
+      // undo of it is a DELETE that refuses once anything points at the record.
+      if (journalRun && r.created) {
+        await journal.capture(client, { orgId: org.id, runId: journalRun, kind, id: r.created, btId: norm(row.bt.btId), before: null });
+      }
       await client.query('COMMIT');
       if (r.skipped) results.push(Object.assign(base, { outcome: 'skipped', reason: r.skipped }));
       else {
@@ -1657,6 +1684,7 @@ async function createRecords(org, kind, rows, input, deps) {
 const LINK_TABLE = { jobs: ['jobs', 'bt_job_id'], leads: ['leads', 'bt_lead_id'], clients: ['clients', 'bt_contact_id'] };
 
 async function linkRecord(org, kind, rows, input, deps) {
+  const journalRun = deps.journalRun || null;
   const row = rows.find((r) => norm(r.bt.btId) === norm(input.btIds[0]));
   if (!row) return { status: 200, body: { dataset: kind, mode: 'link', counts: { linked: 0, skipped: 1 }, results: [{ btId: input.btIds[0], outcome: 'skipped', reason: 'No Buildertrend record with that id in this read.' }] } };
   const base = { btId: norm(row.bt.btId), label: row.bt.raw || row.bt.title || '', p86Id: input.p86Id };
@@ -1769,6 +1797,7 @@ async function linkDetail(kind, org, row, input, deps, base, skip) {
 
 // ── the operation ────────────────────────────────────────────────────────
 async function apply(org, input, deps) {
+  const journalRun = deps.journalRun || null;
   const kind = input.dataset;
   const mode = input.mode;
   const fr = await readDataset(org, kind, deps);
@@ -1813,6 +1842,10 @@ async function apply(org, input, deps) {
     const client = await deps.pool.connect();
     try {
       await client.query('BEGIN');
+      // The row as it stands, before this write. Read on the SAME client, so
+      // it is the row this transaction is about to change and not one another
+      // connection has since moved.
+      const before = journalRun ? await journal.snapshot(client, kind, org.id, base.p86Id) : null;
       const r = kind === 'jobs' ? await applyJob(client, org.id, row, mode, input.fields)
         : kind === 'changeOrders' ? await applyChangeOrder(client, org.id, row, mode, input.fields)
         : kind === 'purchaseOrders' ? await applyPurchaseOrder(client, org.id, row, mode, input.fields)
@@ -1821,6 +1854,11 @@ async function apply(org, input, deps) {
         : kind === 'tasks' ? await applyTask(client, org.id, row, mode, input.fields)
         : kind === 'clients' ? await applyClient(client, org.id, row, mode, input.fields)
         : await applyLead(client, org.id, row, mode, input.fields);
+      // Journalled BEFORE the COMMIT, on the same client: the change and the
+      // record of what it overwrote land together or not at all.
+      if (journalRun && !r.skipped) {
+        await journal.capture(client, { orgId: org.id, runId: journalRun, kind, id: base.p86Id, btId: base.btId, before });
+      }
       await client.query('COMMIT');
       if (r.skipped) results.push(Object.assign(base, { outcome: 'skipped', reason: r.skipped }));
       else if (r.unchanged) {
@@ -2005,7 +2043,18 @@ async function handle(req, res, deps) {
   if (inFlight) return res.status(429).json({ error: 'A Buildertrend apply is already running on this server. Try again in a moment.', code: 'CLICKR_APPLY_BUSY' });
   inFlight = true;
   try {
-    const out = await apply(org, input, Object.assign({ env, user: req.user }, deps));
+    // ONE run per press, opened before the write and closed with the counts it
+    // actually produced. A run that journalled nothing is dropped rather than
+    // left on the page as an empty line.
+    const runId = await openJournalRun(deps.pool, org.id, {
+      trigger: 'press', dataset: input.dataset, mode: input.mode,
+      userId: req.user && req.user.id != null ? req.user.id : null });
+    let out;
+    try {
+      out = await apply(org, input, Object.assign({ env, user: req.user, journalRun: runId }, deps));
+    } finally {
+      await closeJournalRun(deps.pool, org.id, runId, out && out.body ? out.body.counts : null);
+    }
     res.set('Cache-Control', 'no-store');
     res.status(out.status).json(out.body);
     if (out.status === 200) {

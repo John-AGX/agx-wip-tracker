@@ -511,6 +511,12 @@ router.get('/me', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), (r
   if (req.query && req.query.view === 'clickr-scout') {
     return require('../services/clickr/scout').handle(req, res, {});
   }
+  // ?view=buildertrend-history — the runs a sync has made and what each one
+  // changed, read-only. Another MODE of this route, for the same census
+  // reason as the preview.
+  if (req.query && req.query.view === 'buildertrend-history') {
+    return require('../services/clickr/sync-journal').handleHistory(req, res, { pool });
+  }
   res.json({ organization: req.organization });
 });
 
@@ -527,6 +533,14 @@ router.put('/:id', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), a
   if (req.query && req.query.action === 'buildertrend-apply') {
     if (req.params.id !== 'me') return res.status(400).json({ error: 'Buildertrend apply runs on /me only.' });
     return require('../services/clickr/sync-apply').handle(req, res, { pool });
+  }
+  // ?action=buildertrend-undo — put back what a sync wrote, one change or a
+  // whole run. An update goes back only while the column still holds what the
+  // sync put there; a created record is deleted only while nothing points at
+  // it. See services/clickr/sync-journal.js.
+  if (req.query && req.query.action === 'buildertrend-undo') {
+    if (req.params.id !== 'me') return res.status(400).json({ error: 'Buildertrend undo runs on /me only.' });
+    return require('../services/clickr/sync-journal').handleUndo(req, res, { pool });
   }
   try {
     const targetId = assertOrgScope(req, req.params.id);

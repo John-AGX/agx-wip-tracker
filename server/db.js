@@ -1573,6 +1573,58 @@ async function initSchema() {
       PRIMARY KEY (organization_id, user_id)
     );
 
+    -- THE UNDO SPINE. An apply is the only thing in Project 86 that writes
+    -- another system's answer onto a record nobody is looking at, so every
+    -- write it makes is journalled with the value that was there BEFORE it.
+    -- bt_sync_runs is one press (or, later, one unattended run);
+    -- bt_sync_changes is one COLUMN of one record, and is what an undo reads.
+    --
+    -- before_value NULL with kind 'create' means the row did not exist. An
+    -- undo of a create therefore DELETES, which is the one undo that can fail
+    -- on a record something else has since pointed at -- see
+    -- services/clickr/sync-journal.js, which refuses rather than cascading.
+    --
+    -- Written inside the SAME transaction as the write it describes: a change
+    -- that committed without its journal row would be a change with no way
+    -- back, which is the one outcome this table exists to prevent.
+    CREATE TABLE IF NOT EXISTS bt_sync_runs (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      finished_at TIMESTAMPTZ,
+      trigger TEXT NOT NULL,                  -- 'press' | 'schedule'
+      dataset TEXT,                           -- NULL when a run spans datasets
+      mode TEXT,                              -- safe | rows | create | link
+      actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      counts JSONB NOT NULL DEFAULT '{}'::jsonb,
+      undone_at TIMESTAMPTZ,
+      undone_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_bt_sync_runs_org ON bt_sync_runs (organization_id, started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS bt_sync_changes (
+      -- A generated TEXT id like every other record here, not a sequence:
+      -- the id is handed to a person as the thing they press undo on, and it
+      -- has to exist the moment the row is written, on every engine.
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES bt_sync_runs(id) ON DELETE CASCADE,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      dataset TEXT NOT NULL,
+      target_table TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      bt_id TEXT,
+      kind TEXT NOT NULL,                     -- 'create' | 'update'
+      column_name TEXT,                       -- NULL on a create row
+      before_value JSONB,
+      after_value JSONB,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      undone_at TIMESTAMPTZ,
+      undone_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      undo_refused TEXT                       -- why an undo could not be taken
+    );
+    CREATE INDEX IF NOT EXISTS idx_bt_sync_changes_run ON bt_sync_changes (run_id);
+    CREATE INDEX IF NOT EXISTS idx_bt_sync_changes_target ON bt_sync_changes (organization_id, target_table, target_id);
+
     -- ---------------------------------------------------------------
     -- Per-org folder templates. Folders in Project 86 are IMPLICIT --
     -- a folder only "exists" once an attachment row carries that

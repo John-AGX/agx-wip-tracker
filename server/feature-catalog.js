@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.40';
+const APP_VERSION = '1.41';
 
 const releases = [
+  {
+    version: '1.41',
+    date: '2026-09-20',
+    name: 'Taking back what the sync wrote',
+    summary: 'Every Buildertrend apply now records the value that was there before it, so any change it makes can be put back — one field or a whole press. This is the groundwork for a sync that runs on its own.',
+    changes: [
+      { type: 'new', text: 'A press on the Buildertrend preview is now a RUN, and every column it changes is written down with the value that was there before it. The record and the change are saved together, in the same step — a change that landed without its record would be a change with no way back, which is the whole point of this. A press that changes nothing leaves nothing behind.' },
+      { type: 'new', text: 'Undo. Take back one field or an entire run. A field goes back only while it still holds what the sync put there — if somebody has typed something else since, theirs stands and the row says so rather than quietly overwriting them. A record the sync CREATED is deleted on undo, unless something now points at it: a job that has since grown a change order is left alone, because deleting it would take the change order with it.' },
+      { type: 'improved', text: 'A history of what the sync has done: each run with who pressed it, which dataset, how many records and columns it touched, and what has since been taken back or refused. Only your own company’s runs are ever listed, and only an admin can see them or undo one.' },
+    ],
+  },
   {
     version: '1.40',
     date: '2026-09-20',

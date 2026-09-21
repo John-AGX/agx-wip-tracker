@@ -117,6 +117,9 @@ function seed() {
   engine.db.exec(`
     DELETE FROM jobs; DELETE FROM leads; DELETE FROM clients; DELETE FROM users; DELETE FROM roles; DELETE FROM organizations;
     DELETE FROM job_change_orders;
+    -- The journal is part of the world a test starts in: leaving runs behind
+    -- would make every count in the undo suite depend on the file's order.
+    DELETE FROM bt_sync_changes; DELETE FROM bt_sync_runs;
     INSERT INTO organizations (id, slug, name) VALUES (1, 'agx', 'AGX Central Florida'), (2, 'other', 'Other Builders');
     INSERT INTO roles (name, label, capabilities) VALUES
       ('admin', 'Admin', '["ROLES_MANAGE","USERS_MANAGE","JOBS_VIEW_ALL"]'),
@@ -831,5 +834,187 @@ describe('PAGE — Apply buttons appear only where an apply can do something', (
     const html = T.render(data([baseRow('matched', { bt: { btId: XSS, raw: 'S1', title: 'x', scope: 'open' } })]));
     expect(html).not.toContain('<img src=x');
     expect(html).toContain('data-btp-apply="&quot;&gt;&lt;img');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// THE UNDO SPINE — a sync write and the record of what it overwrote commit
+// together, and the record is enough to put it back.
+// ══════════════════════════════════════════════════════════════════════════
+const runs = () => engine.db.prepare('SELECT * FROM bt_sync_runs ORDER BY started_at').all();
+const changes = () => engine.db.prepare('SELECT * FROM bt_sync_changes ORDER BY id').all();
+const jval = (v) => { try { return JSON.parse(v); } catch (e) { return v; } };
+
+describe('the undo spine', () => {
+  test('a safe press opens ONE run and journals the column it changed, with the value that was there before', async () => {
+    const wasData = jobData('j-1');
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    expect(r.status).toBe(200);
+
+    const rs = runs();
+    expect(rs.length).toBe(1);
+    expect([rs[0].trigger, rs[0].dataset, rs[0].mode]).toEqual(['press', 'jobs', 'safe']);
+    expect(rs[0].actor_user_id).toBe(ADMIN.id);
+    expect(rs[0].finished_at).toBeTruthy();
+
+    const cs = changes().filter((c) => c.target_id === 'j-1');
+    expect(cs.length).toBeGreaterThan(0);
+    for (const c of cs) {
+      expect([c.kind, c.target_table, c.dataset]).toEqual(['update', 'jobs', 'jobs']);
+      expect(c.run_id).toBe(rs[0].id);
+      expect(c.organization_id).toBe(AGX);
+      // NOT vacuous: the before value is the row as it stood, not the new one.
+      expect(c.before_value).not.toEqual(c.after_value);
+    }
+    // The data column it rewrote carries the OLD blob, so an undo has the
+    // whole record back and not just the field the matcher named.
+    const dataChange = cs.find((c) => c.column_name === 'data');
+    expect(dataChange).toBeTruthy();
+    expect(jval(dataChange.before_value).startDate).toBe(wasData.startDate);
+    expect(jval(dataChange.after_value).startDate).toBe('2026-02-25');
+  });
+
+  test('a press that changes nothing leaves NO run behind', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    const first = runs().length;
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });   // idempotent
+    expect(runs().length).toBe(first);
+  });
+
+  test('a create is journalled as a create, carrying the whole row it made', async () => {
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create' });
+    expect(r.status).toBe(200);
+    const made = changes().filter((c) => c.kind === 'create');
+    expect(made.length).toBeGreaterThan(0);
+    for (const c of made) {
+      expect(c.column_name).toBeNull();
+      expect(c.before_value).toBeNull();
+      expect(jval(c.after_value).id).toBe(c.target_id);
+    }
+  });
+
+  test('ANOTHER TENANT never appears in the journal', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create' });
+    for (const c of changes()) expect(c.organization_id).toBe(AGX);
+    for (const c of changes()) expect(c.target_id).not.toBe('j-x');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// UNDO — putting it back, and refusing to when somebody else has moved on
+// ══════════════════════════════════════════════════════════════════════════
+const UNDO = '/api/admin/organizations/me?action=buildertrend-undo';
+const HISTORY = '/api/admin/organizations/me?view=buildertrend-history';
+
+function get(pathname, user) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(baseUrl + pathname, { method: 'GET',
+      headers: user ? { Authorization: 'Bearer ' + signToken(user) } : {} }, (res) => {
+      let buf = ''; res.setEncoding('utf8');
+      res.on('data', (c) => { buf += c; });
+      res.on('end', () => { let json = null; try { json = JSON.parse(buf); } catch (e) { /* not json */ } resolve({ status: res.statusCode, json }); });
+    });
+    req.on('error', reject); req.end();
+  });
+}
+
+describe('UNDO', () => {
+  test('undoing the run puts the start date back to what it was', async () => {
+    const was = jobData('j-1').startDate;
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    expect(jobData('j-1').startDate).toBe('2026-02-25');
+    expect(jobData('j-1').startDate).not.toBe(was);
+
+    const run = runs()[0];
+    const u = await put(UNDO, ADMIN, { runId: run.id });
+    expect(u.status).toBe(200);
+    expect(u.json.undone).toBeGreaterThan(0);
+    expect(u.json.refused).toBe(0);
+    // The record is back where it started, and the link the press made is gone
+    // with it — an undo of a run is the whole run.
+    expect(jobData('j-1').startDate).toBe(was);
+    expect(jobBt('j-1')).toBeFalsy();
+  });
+
+  test('a column somebody has changed since is LEFT ALONE, and says so', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    const mine = Object.assign(jobData('j-1'), { startDate: '2099-12-31' });
+    engine.db.prepare('UPDATE jobs SET data = ? WHERE id = ?').run(JSON.stringify(mine), 'j-1');
+
+    const u = await put(UNDO, ADMIN, { runId: runs()[0].id });
+    expect(u.status).toBe(200);
+    // Their value stands.
+    expect(jobData('j-1').startDate).toBe('2099-12-31');
+    // The press moved two jobs; only j-1 was edited afterwards, so only j-1's
+    // data is refused — j-2's goes back normally. Scoped, or this would pass on
+    // whichever row the list happened to start with.
+    const dataRow = u.json.results.find((r) => r.target === 'jobs:j-1' && r.column === 'data');
+    expect(dataRow.refused).toMatch(/changed this since/i);
+    const journalled = changes().find((c) => c.target_id === 'j-1' && c.column_name === 'data');
+    expect(journalled.undo_refused).toMatch(/changed this since/i);
+    expect(journalled.undone_at).toBeFalsy();
+    // NOT vacuous: the other job on the same press did go back.
+    const other = u.json.results.find((r) => r.target === 'jobs:j-2' && r.column === 'data');
+    expect(other.ok).toBe(true);
+  });
+
+  test('undoing a CREATE deletes the record it made', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create' });
+    const made = changes().find((c) => c.kind === 'create');
+    expect(made).toBeTruthy();
+    expect(engine.db.prepare('SELECT 1 FROM jobs WHERE id = ?').get(made.target_id)).toBeTruthy();
+
+    const u = await put(UNDO, ADMIN, { changeId: String(made.id) });
+    expect(u.status).toBe(200);
+    expect(u.json.undone).toBe(1);
+    expect(engine.db.prepare('SELECT 1 FROM jobs WHERE id = ?').get(made.target_id)).toBeFalsy();
+  });
+
+  test('a created job something now points at is REFUSED, not deleted', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create' });
+    const made = changes().find((c) => c.kind === 'create');
+    engine.db.prepare("INSERT INTO job_change_orders (id, job_id, organization_id, status, data) VALUES ('co-after', ?, 1, 'draft', '{}')").run(made.target_id);
+
+    const u = await put(UNDO, ADMIN, { changeId: String(made.id) });
+    expect(u.status).toBe(200);
+    expect(u.json.undone).toBe(0);
+    expect(u.json.results[0].refused).toMatch(/change orders now points at it/i);
+    // Both survive: the job is not deleted and the change order is not orphaned.
+    expect(engine.db.prepare('SELECT 1 FROM jobs WHERE id = ?').get(made.target_id)).toBeTruthy();
+    expect(engine.db.prepare("SELECT 1 FROM job_change_orders WHERE id = 'co-after'").get()).toBeTruthy();
+  });
+
+  test('ANOTHER TENANT cannot take back this one’s run, and cannot see it', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    const run = runs()[0];
+    const after = jobData('j-1').startDate;
+
+    const u = await put(UNDO, OTHER_ADMIN, { runId: run.id });
+    expect(u.status).toBe(404);
+    expect(jobData('j-1').startDate).toBe(after);
+
+    const h = await get(HISTORY, OTHER_ADMIN);
+    expect(h.status).toBe(200);
+    expect(h.json.runs).toEqual([]);
+  });
+
+  test('the history names the run, its counts and what it touched', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    const h = await get(HISTORY, ADMIN);
+    expect(h.status).toBe(200);
+    expect(h.json.runs.length).toBe(1);
+    const r = h.json.runs[0];
+    expect([r.trigger, r.dataset, r.mode]).toEqual(['press', 'jobs', 'safe']);
+    expect(r.actor).toBe('Ana Ruiz');
+    expect(r.changeCount).toBeGreaterThan(0);
+    expect(r.records).toBeGreaterThan(0);
+    expect(r.undoneCount).toBe(0);
+  });
+
+  test('a PM cannot reach either door', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    expect((await get(HISTORY, PM)).status).toBe(403);
+    expect((await put(UNDO, PM, { runId: runs()[0].id })).status).toBe(403);
   });
 });

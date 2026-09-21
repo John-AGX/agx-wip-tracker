@@ -192,7 +192,25 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**562** occurrences of `organization_id IS NULL` across `server/`.
+**566** occurrences of `organization_id IS NULL` across `server/`.
+
+
+562 → 566: the Buildertrend UNDO SPINE (`services/clickr/sync-journal.js`). Four statements, and
+each one is a read or a write of a record this organisation owns, reached
+from a journal row rather than from a request: `snapshot()` photographs the
+row before a sync writes it, `undoChange()` re-reads that row under its own
+lock and puts the value back, and the create arm deletes the record the sync
+made. All four carry the arm on the TARGET row’s own column, whose older
+rows can be NULL — a legacy job with no organisation stamp is exactly the
+kind of record a sync corrects, and skipping the arm would photograph nothing,
+then refuse to give it back.
+
+The journal’s OWN two tables carry no tolerance arm anywhere: every row of
+`bt_sync_runs` and `bt_sync_changes` is written by this code with an
+organisation in hand, so there are no un-stamped rows for an arm to be
+tolerant of, and both are classified `DIRECT` in
+`services/org-table-classification.js`. That asymmetry is the point — the
+arm exists for the records being CHANGED, not for the record of the change.
 
 557 → 562: the Buildertrend ESTIMATES sync. Five statements, on the same terms
 as the four syncs before it. `services/clickr/sync-preview.js` readP86’s
