@@ -51,6 +51,14 @@
   // ── Pure filter logic (module scope, testable without a Google map) ──
   // matchesSideFilter inside mount() delegates here with its live state, so
   // the rule the tests pin is the rule the map runs.
+  // Conditions for one site, computed from the per-site grid numbers by the
+  // SAME rules the Site Conditions panel uses (window.p86SiteConditions) —
+  // one rule set, so the map and the job page can never disagree about a
+  // trade. `overall` is a separate, deliberately softer rule: taking the
+  // worst of the four trades would paint almost every Florida job red all
+  // summer, because 40% afternoon thunder sinks roofing every day. Overall
+  // asks the general question — is this a bad weather day — and the trade
+  // selector asks the specific one.
   function condFor(site) {
     if (!site) return null;
     var trades = null;
@@ -82,6 +90,53 @@
   var TRADE_SHORT = { roofing: 'roofing', paint: 'paint', height: 'gutters / siding', concrete: 'concrete' };
   function tradeWords(keys) {
     return keys.map(function (k) { return TRADE_SHORT[k] || k; }).join(', ');
+  }
+
+  // Statuses a job is still WORKING in. The default view shows these —
+  // 51 completed jobs scattered across the map hide the 24 that need a crew.
+  var ACTIVE_JOB_STATUSES = ['New', 'Backlog', 'In Progress', 'On Hold'];
+  // A lead with a visit still ahead of it. Sold, lost and no-opportunity
+  // leads have nothing left to plan around the weather.
+  var OPEN_LEAD_STATUSES = ['new', 'in_progress', 'sent'];
+
+  function condKey(it) { return it.kind + ':' + it.id; }
+
+  // Today's conditions for the rows a single-kind map can show. Jobs: only
+  // ACTIVE ones — weather for a completed job is never the question. Leads:
+  // only OPEN ones — the site walk or estimate visit still ahead. Both keep the
+  // upstream calls proportional to work that can still be rained out.
+  //
+  // Returns null when there is nothing to ask (not a single-kind map, or no
+  // endpoint), else a promise of { byKey: {condKey -> condFor(...)}, asked }.
+  // Never rejects: a failed batch leaves its rows unknown, and unknown is
+  // excluded from a conditions filter rather than read as good.
+  var COND_CHUNK = 30;
+  function fetchConditions(kind, rows, api) {
+    if (kind !== 'job' && kind !== 'lead') return null;
+    var fetchBatch = kind === 'job'
+      ? (api && api.jobs ? function (b) { return api.jobs(b, { site: true }); } : null)
+      : (api && api.leads ? function (b) { return api.leads(b); } : null);
+    if (!fetchBatch) return null;
+    var wanted = kind === 'job' ? ACTIVE_JOB_STATUSES : OPEN_LEAD_STATUSES;
+    var ids = (rows || []).filter(function (r) {
+      return wanted.indexOf(statusOf(r)) >= 0;
+    }).map(function (r) { return r.id; });
+    var byKey = {};
+    var chunks = [];
+    for (var i = 0; i < ids.length; i += COND_CHUNK) chunks.push(ids.slice(i, i + COND_CHUNK));
+    return Promise.all(chunks.map(function (batch) {
+      var p;
+      try { p = Promise.resolve(fetchBatch(batch)); } catch (e) { p = Promise.reject(e); }
+      return p.then(function (res) {
+        var w = (res && res.weather) || {};
+        batch.forEach(function (id) {
+          var rec = w[id];
+          var today = rec && Array.isArray(rec.days) ? rec.days[0] : null;
+          var c = today ? condFor(today.site) : null;
+          if (c) byKey[condKey({ kind: kind, id: id })] = c;
+        });
+      }, function () { /* a failed batch leaves those rows unknown */ });
+    })).then(function () { return { byKey: byKey, asked: ids.length }; });
   }
 
   // ONE derivation of status and type, used by the matcher AND by the chip
@@ -710,35 +765,25 @@
     // Neither org map had a filter at all: the drawer button only rendered
     // when `!opts.only`, and both maps pass `only`.
     var sideFilter = null;            // null until buildJobsSidebar installs it
-    var condByJob = {};               // jobId -> computed conditions (see condFor)
+    // kind + ':' + id -> computed conditions (see condFor). Keyed by KIND as
+    // well as id: a lead and a job are different rows in different tables, and
+    // nothing guarantees their ids never meet.
+    var condById = {};
     var condState = 'idle';           // idle | loading | ready | failed
-
-    // Statuses a job is still WORKING in. The default view shows these —
-    // 51 completed jobs scattered across the map hide the 24 that need a crew.
-    var ACTIVE_JOB_STATUSES = ['New', 'Backlog', 'In Progress', 'On Hold'];
-    var OPEN_LEAD_STATUSES = ['new', 'in_progress', 'sent'];
 
     function sideStatusOf(it) { return statusOf(it); }
     function sideTypeOf(it) { return typeOf(it); }
 
-    // Conditions for one job, computed from the per-site grid numbers by the
-    // SAME rules the Site Conditions panel uses (window.p86SiteConditions) —
-    // one rule set, so the map and the job page can never disagree about a
-    // trade. `overall` is a separate, deliberately softer rule: taking the
-    // worst of the four trades would paint almost every Florida job red all
-    // summer, because 40% afternoon thunder sinks roofing every day. Overall
-    // asks the general question — is this a bad weather day — and the trade
-    // selector asks the specific one.
     // The level the CURRENT view colours by: overall, or one trade.
     function sideCondOf(it) {
-      var c = condByJob[it.id];
+      var c = condById[condKey(it)];
       if (!c) return null;
       var t = (sideFilter && sideFilter.trade) || 'overall';
       if (t === 'overall') return c.level;
       return (c.trades && c.trades[t]) ? c.trades[t].level : null;
     }
     function sideCondWhy(it) {
-      var c = condByJob[it.id];
+      var c = condById[condKey(it)];
       if (!c) return '';
       var t = (sideFilter && sideFilter.trade) || 'overall';
       if (t === 'overall') return c.why;
@@ -761,40 +806,21 @@
       return sideMatch(it, sideFilter, sideCondOf(it), exceptKey, isOverdueItem(it));
     }
 
-    // Load per-site grid numbers for the jobs the current view can show, then
-    // repaint. Only ACTIVE jobs are asked about: weather for a completed job is
-    // never the question, and it keeps the upstream calls proportional to the
-    // work actually in the field. Best-effort — a failure costs the conditions
-    // layer, never the map.
+    // Load today's conditions (fetchConditions, module scope) for this map's
+    // rows, then repaint. Best-effort — a failure costs the conditions layer,
+    // never the map.
     function loadConditions(onDone) {
-      if (opts.only !== 'job' || condState === 'loading') return;
-      if (!(window.p86Api && window.p86Api.weather && window.p86Api.weather.jobs)) return;
-      var ids = data.jobs.filter(function (j) {
-        return ACTIVE_JOB_STATUSES.indexOf(sideStatusOf(j)) >= 0;
-      }).map(function (j) { return j.id; });
-      if (!ids.length) { condState = 'ready'; if (onDone) onDone(); return; }
+      if (condState === 'loading') return;
+      var p = fetchConditions(opts.only, opts.only === 'lead' ? data.leads : data.jobs,
+        window.p86Api && window.p86Api.weather);
+      if (!p) return;
       condState = 'loading';
       if (onDone) onDone();
-      var CHUNK = 30, chunks = [];
-      for (var i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
-      var pending = chunks.length;
-      chunks.forEach(function (batch) {
-        window.p86Api.weather.jobs(batch, { site: true }).then(function (res) {
-          var w = (res && res.weather) || {};
-          Object.keys(w).forEach(function (id) {
-            var rec = w[id];
-            var today = rec && Array.isArray(rec.days) ? rec.days[0] : null;
-            var c = today ? condFor(today.site) : null;
-            if (c) condByJob[id] = c;
-          });
-        }, function () { /* a failed batch leaves those jobs unknown */ })
-        .then(function () {
-          pending--;
-          if (pending === 0) {
-            condState = Object.keys(condByJob).length ? 'ready' : 'failed';
-            if (onDone) onDone();
-          }
-        });
+      p.then(function (r) {
+        Object.keys(r.byKey).forEach(function (k) { condById[k] = r.byKey[k]; });
+        // Nothing to ask about is a finished answer, not a failure.
+        condState = (r.asked === 0 || Object.keys(condById).length) ? 'ready' : 'failed';
+        if (onDone) onDone();
       });
     }
 
@@ -1097,9 +1123,9 @@
     }
     // Today's conditions for the pin card: the overall call, then the trades
     // it rules out by name — "Bad for roofing, gutters / siding" is the sentence a
-    // foreman needs, and the grid numbers behind it are on the job page.
-    function condStatsFor(id) {
-      var c = condByJob[id];
+    // foreman needs, and the grid numbers behind it are on the job or lead page.
+    function condStatsFor(it) {
+      var c = it ? condById[condKey(it)] : null;
       if (!c) return [];
       var out = [{
         label: 'Today',
@@ -1141,7 +1167,7 @@
         stats: [
           { label: 'Contract', value: money(contract) },
           { label: 'Profit', value: (profit < 0 ? '-' : '+') + money(Math.abs(profit)), tone: profit < 0 ? 'neg' : 'pos' }
-        ].concat(condStatsFor(id)),
+        ].concat(condStatsFor(it)),
         icons: [ { act: 'info', title: 'Open job' }, { act: 'maps', title: 'Maps' } ],
         actions: [ { label: 'Open WIP', act: 'open', primary: true, icon: 'arrow-right' }, { label: '🔍', act: 'zoom' }, { label: 'Maps', act: 'maps' } ],
         data: { id: id, lat: it.lat, lng: it.lng }
@@ -1177,7 +1203,7 @@
         subtitle: it.client || (leadObj && (leadObj.client_name || leadObj.property_name)) || '',
         address: it.address || '',
         ring: (leadObj && Number(leadObj.confidence) > 0 ? { pct: Number(leadObj.confidence) } : undefined),
-        stats: leadStats,
+        stats: leadStats.concat(condStatsFor(it)),
         icons: [ { act: 'info', title: 'Open lead' }, { act: 'maps', title: 'Maps' } ],
         actions: [ { label: 'Open lead', act: 'open', primary: true, icon: 'arrow-right' }, { label: '🔍', act: 'zoom' }, { label: 'Maps', act: 'maps' } ],
         data: { id: it.id, lat: it.lat, lng: it.lng }
@@ -1287,10 +1313,9 @@
       function visibleRows() { return rows.filter(function (r) { return matchesSideFilter(r) && searchMatch(r); }); }
 
       function condBadge(r) {
-        if (isLead) return '';
         var lv = sideCondOf(r);
         if (!lv) return '';
-        var c = condByJob[r.id];
+        var c = condById[condKey(r)];
         var bad = (c && c.bad && c.bad.length && sideFilter.trade === 'overall')
           ? ' · bad for ' + tradeWords(c.bad) : '';
         return '<div class="emap-job-cond"><span class="emap-dot" style="background:' + COND_COLOR[lv] + ';"></span>' +
@@ -1358,27 +1383,29 @@
         html += chipRow(isLead ? 'Project type' : 'Job type', 'type',
           valuesFor(sideTypeOf, []), function (v) { return v === '(none)' ? 'Untyped' : v; });
 
-        if (!isLead) {
-          // Conditions: pick WHAT to judge by, then filter on the verdict.
-          var trade = sideFilter.trade || 'overall';
-          var TRADES = [['overall', 'Overall'], ['roofing', 'Roofing'], ['paint', 'Paint'],
-                        ['height', 'Gutters / siding'], ['concrete', 'Concrete']];
-          var condLabel = condState === 'loading' ? 'Conditions today · loading…'
-            : condState === 'failed' ? 'Conditions today · unavailable'
-            : 'Conditions today';
-          html += '<div class="emap-frow"><div class="emap-flabel">' + condLabel + '</div>' +
-            '<select class="emap-trade" title="Judge conditions for">' +
-              TRADES.map(function (t) {
-                return '<option value="' + t[0] + '"' + (t[0] === trade ? ' selected' : '') + '>' +
-                  (t[0] === 'overall' ? 'Overall' : 'For ' + t[1].toLowerCase()) + '</option>';
-              }).join('') +
-            '</select></div>';
-          if (condState === 'ready') {
-            html += chipRow('', 'cond', ['good', 'watch', 'poor'],
-              function (v) { return ({ good: 'Good', watch: 'Watch', poor: 'Poor' })[v]; },
-              function (v) { return COND_COLOR[v]; });
-          }
+        // Conditions — both maps: pick WHAT to judge by, then filter on the
+        // verdict. On the Leads map it answers "is today a day for the site
+        // walk", and the trade selector asks it for the work being sold.
+        var trade = sideFilter.trade || 'overall';
+        var TRADES = [['overall', 'Overall'], ['roofing', 'Roofing'], ['paint', 'Paint'],
+                      ['height', 'Gutters / siding'], ['concrete', 'Concrete']];
+        var condLabel = condState === 'loading' ? 'Conditions today · loading…'
+          : condState === 'failed' ? 'Conditions today · unavailable'
+          : 'Conditions today';
+        html += '<div class="emap-frow"><div class="emap-flabel">' + condLabel + '</div>' +
+          '<select class="emap-trade" title="Judge conditions for">' +
+            TRADES.map(function (t) {
+              return '<option value="' + t[0] + '"' + (t[0] === trade ? ' selected' : '') + '>' +
+                (t[0] === 'overall' ? 'Overall' : 'For ' + t[1].toLowerCase()) + '</option>';
+            }).join('') +
+          '</select></div>';
+        if (condState === 'ready') {
+          html += chipRow('', 'cond', ['good', 'watch', 'poor'],
+            function (v) { return ({ good: 'Good', watch: 'Watch', poor: 'Poor' })[v]; },
+            function (v) { return COND_COLOR[v]; });
+        }
 
+        if (!isLead) {
           // CREW ON SITE — a real filter slot waiting on real data. Disabled
           // until any job carries crewOnSite, and it says so, rather than
           // guessing "running" from a status field.
@@ -1701,6 +1728,7 @@
     flyToJob: flyToJob,
     // Pure pieces of the org-map filter, exposed for tests. The map calls
     // these exact functions — they are not copies.
-    _pure: { condFor: condFor, sideMatch: sideMatch, statusOf: statusOf, typeOf: typeOf, tradeWords: tradeWords }
+    _pure: { condFor: condFor, sideMatch: sideMatch, statusOf: statusOf, typeOf: typeOf, tradeWords: tradeWords,
+             condKey: condKey, fetchConditions: fetchConditions }
   };
 })();

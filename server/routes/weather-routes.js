@@ -17,6 +17,10 @@
 // NWS forecast cache is in-memory in server/weather.js; per-coord
 // rounded to ~110m, 1-hour TTL. Worker pool of 4 throttles outbound
 // calls when many jobs hit the route together.
+//
+// /leads is the exception to all of the above: the Leads map asks about
+// leads that are already geocoded, so it reads stored coordinates and never
+// geocodes (see the route).
 
 'use strict';
 
@@ -300,6 +304,77 @@ router.get('/projects', async function(req, res) {
         out[row.id] = { status: 'ok', lat: lat, lng: lng, address: address, days: days };
       } catch (e) {
         console.warn('[weather] forecast failed for project ' + row.id + ':', e.message);
+        out[row.id] = { status: 'error', error: e.message };
+      }
+    }
+  }
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  res.json({ weather: out });
+});
+
+// GET /api/weather/leads?ids=a,b,c
+//   Per-site conditions for the Leads MAP: today's grid numbers (gusts,
+//   thunder, dew point) for each open lead, so the map can colour a pin by
+//   whether it is a day for a site walk — and for which trade.
+//
+//   Coordinates only. A lead on the map is already geocoded (the map endpoint
+//   only returns leads with coordinates), so this never geocodes — a lead
+//   without stored coordinates answers 'no_coords' rather than spending a
+//   geocoder call from a map load. Alerts are skipped for the same reason the
+//   Jobs map skips them: they are per point, and would add a round trip for
+//   every pin. The grid is cached per ~2.5 km NWS cell, so nearby leads share
+//   one fetch.
+//
+//   Org-scoped exactly as GET /api/map/entities scopes leads: an id from
+//   another organization falls through to 'unknown_lead', indistinguishable
+//   from an id that does not exist.
+const LEADS_MAX = 120;
+router.get('/leads', async function(req, res) {
+  const idsRaw = String(req.query.ids || '').trim();
+  if (!idsRaw) return res.json({ weather: {} });
+  const ids = idsRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+  if (!ids.length) return res.json({ weather: {} });
+  if (ids.length > LEADS_MAX) {
+    return res.status(400).json({ error: 'Ask for at most ' + LEADS_MAX + ' leads at a time.' });
+  }
+
+  let rows;
+  try {
+    const result = await pool.query(
+      'SELECT id, geocode_lat, geocode_lng FROM leads ' +
+      'WHERE id = ANY($1::text[]) AND (organization_id = $2 OR organization_id IS NULL)',
+      [ids, req.user.organization_id]
+    );
+    rows = result.rows;
+  } catch (e) {
+    console.error('[weather] lead lookup failed:', e.message);
+    return res.status(500).json({ error: 'Lead lookup failed: ' + e.message });
+  }
+
+  const out = {};
+  ids.forEach(function(id) { out[id] = { status: 'unknown_lead' }; });
+
+  const queue = rows.slice();
+  async function worker() {
+    while (queue.length) {
+      const row = queue.shift();
+      // NUMERIC columns arrive as strings from pg.
+      const lat = row.geocode_lat == null ? NaN : Number(row.geocode_lat);
+      const lng = row.geocode_lng == null ? NaN : Number(row.geocode_lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        out[row.id] = { status: 'no_coords' };
+        continue;
+      }
+      // Same loose US-coverage check as /coords: NWS covers nothing else.
+      if (lat < 17 || lat > 72 || lng < -180 || lng > -65) {
+        out[row.id] = { status: 'out_of_range', lat: lat, lng: lng };
+        continue;
+      }
+      try {
+        const sc = await getSiteConditions(lat, lng, { alerts: false });
+        out[row.id] = Object.assign({ status: 'ok', lat: lat, lng: lng }, sc);
+      } catch (e) {
+        console.warn('[weather] conditions failed for lead ' + row.id + ':', e.message);
         out[row.id] = { status: 'error', error: e.message };
       }
     }

@@ -192,7 +192,19 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**573** occurrences of `organization_id IS NULL` across `server/`.
+**574** occurrences of `organization_id IS NULL` across `server/`.
+
+573 → 574: `GET /api/weather/leads` (`routes/weather-routes.js`), the Leads
+map asking for today's site conditions at its open leads. One read, of
+`leads` only, and it carries the arm because the rows it is asked about come
+from `GET /api/map/entities`, which selects leads through the very same
+`(organization_id = $1 OR organization_id IS NULL)`. A legacy lead that the
+map pins must be one this route can answer for, or it would sit on the map
+with no conditions and no reason given. When this item closes, the two arms
+retire together. The cross-organization arm is pinned against the real
+handler in `test/weather-leads-route.test.js`: another organization's lead
+answers exactly like an id that does not exist, and nothing is sent upstream
+for it.
 
 569 → 573: the THREE-WAY CONVERT (`POST /api/service-tickets/convert`), the
 door that turns a won lead into a work order or a service ticket rather than

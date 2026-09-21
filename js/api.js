@@ -1401,6 +1401,14 @@
       var qs = 'ids=' + encodeURIComponent(ids.join(','));
       return get('/api/weather/projects?' + qs);
     },
+    // Today's per-site grid numbers for the Leads map, keyed by lead id.
+    // Coordinates only: the server never geocodes on this path, and skips
+    // alerts. At most 120 ids per call (the map sends thirty at a time).
+    leads: function(leadIds) {
+      var ids = (leadIds || []).filter(Boolean);
+      if (!ids.length) return Promise.resolve({ weather: {} });
+      return get('/api/weather/leads?ids=' + encodeURIComponent(ids.join(',')));
+    },
     // Direct lat/lng forecast — used by the header weather chip
     // when the browser hands us geolocation coords. Skips the
     // job-geocode round-trip the .jobs() endpoint goes through.

@@ -217,6 +217,144 @@ describe('the endpoint carries what the filters need — and no money', () => {
   });
 });
 
+describe('conditions on BOTH maps — which rows are asked about, and where', () => {
+  // A fake weather API that records what it was asked and answers a calm day
+  // for every id, except ids listed in `fail` (a rejected batch) or `stormy`.
+  function fakeApi(o) {
+    o = o || {};
+    const calls = { jobs: [], leads: [] };
+    const answer = (ids) => ({
+      weather: Object.fromEntries(ids.map((id) => [id, {
+        status: 'ok',
+        days: [{ site: (o.stormy || []).includes(id)
+          ? { windGustMph: 38, thunderPct: 70, precipPct: 80 }
+          : { windGustMph: 6, thunderPct: 0, precipPct: 5, heatIndexF: 85 } }],
+      }])),
+    });
+    return {
+      calls,
+      jobs(ids, opts) {
+        calls.jobs.push({ ids: ids.slice(), opts });
+        return (o.fail || []).some((f) => ids.includes(f)) ? Promise.reject(new Error('503')) : Promise.resolve(answer(ids));
+      },
+      leads(ids) {
+        calls.leads.push({ ids: ids.slice() });
+        if ((o.fail || []).some((f) => ids.includes(f))) return Promise.reject(new Error('503'));
+        const a = answer(ids);
+        if (o.inject) a.weather[o.inject] = answer([o.inject]).weather[o.inject];
+        return Promise.resolve(a);
+      },
+    };
+  }
+
+  test('the Leads map asks the LEADS endpoint, about OPEN leads only', async () => {
+    const api = fakeApi();
+    const rows = [
+      lead({ id: 'L1', status: 'new' }), lead({ id: 'L2', status: 'in_progress' }),
+      lead({ id: 'L3', status: 'sent' }), lead({ id: 'L4', status: 'sold' }),
+      lead({ id: 'L5', status: 'lost' }), lead({ id: 'L6', status: 'no_opportunity' }),
+    ];
+    const r = await P.fetchConditions('lead', rows, api);
+    expect(api.calls.jobs).toEqual([]);
+    expect(api.calls.leads.map((c) => c.ids)).toEqual([['L1', 'L2', 'L3']]);
+    expect(Object.keys(r.byKey).sort()).toEqual(['lead:L1', 'lead:L2', 'lead:L3']);
+    expect(r.byKey['lead:L1'].level).toBe('good');
+    expect(r.asked).toBe(3);
+  });
+
+  test('the Jobs map still asks the JOBS endpoint for site numbers, about ACTIVE jobs only', async () => {
+    const api = fakeApi();
+    const rows = [job({ id: 'J1', status: 'In Progress' }), job({ id: 'J2', status: 'Completed' }),
+      job({ id: 'J3', status: 'On Hold' })];
+    const r = await P.fetchConditions('job', rows, api);
+    expect(api.calls.leads).toEqual([]);
+    expect(api.calls.jobs).toEqual([{ ids: ['J1', 'J3'], opts: { site: true } }]);
+    expect(Object.keys(r.byKey).sort()).toEqual(['job:J1', 'job:J3']);
+  });
+
+  test('a storm at a lead reads poor and names the trades it rules out', async () => {
+    const api = fakeApi({ stormy: ['L1'] });
+    const r = await P.fetchConditions('lead', [lead({ id: 'L1' })], api);
+    expect(r.byKey['lead:L1'].level).toBe('poor');
+    expect(r.byKey['lead:L1'].bad).toEqual(expect.arrayContaining(['roofing']));
+  });
+
+  test('a lead and a job with the SAME id cannot share conditions', () => {
+    expect(P.condKey(lead({ id: '7' }))).not.toBe(P.condKey(job({ id: '7' })));
+  });
+
+  test('asks in batches of 30 (the server caps a call at 120)', async () => {
+    const api = fakeApi();
+    const rows = Array.from({ length: 65 }, (_, i) => lead({ id: 'L' + i, status: 'new' }));
+    const r = await P.fetchConditions('lead', rows, api);
+    expect(api.calls.leads.map((c) => c.ids.length)).toEqual([30, 30, 5]);
+    expect(Object.keys(r.byKey).length).toBe(65);
+  });
+
+  test('a failed batch leaves ITS rows unknown and never rejects', async () => {
+    const api = fakeApi({ fail: ['L0'] });
+    const rows = Array.from({ length: 35 }, (_, i) => lead({ id: 'L' + i, status: 'new' }));
+    const r = await P.fetchConditions('lead', rows, api);
+    expect(r.byKey['lead:L0']).toBeUndefined();   // first batch of 30 failed
+    expect(r.byKey['lead:L29']).toBeUndefined();
+    expect(r.byKey['lead:L30'].level).toBe('good'); // second batch landed
+  });
+
+  test('an answer for an id nobody asked about is ignored', async () => {
+    const api = fakeApi({ inject: 'L-not-on-this-map' });
+    const r = await P.fetchConditions('lead', [lead({ id: 'L1' })], api);
+    expect(Object.keys(r.byKey)).toEqual(['lead:L1']);
+  });
+
+  test('nothing to ask is a finished answer, and no endpoint is no layer', async () => {
+    const api = fakeApi();
+    const r = await P.fetchConditions('lead', [lead({ id: 'L1', status: 'sold' })], api);
+    expect(r).toEqual(expect.objectContaining({ asked: 0 }));
+    expect(api.calls.leads).toEqual([]);
+    // The Summary card's combined map (no `only`) and a missing endpoint ask nothing.
+    expect(P.fetchConditions(undefined, [lead({})], api)).toBeNull();
+    expect(P.fetchConditions('lead', [lead({})], { jobs: api.jobs })).toBeNull();
+  });
+
+  describe('the Leads map shows them', () => {
+    const src = fs.readFileSync(path.join(REPO, 'js/entities-map.js'), 'utf8');
+    const between = (a, b) => {
+      const i = src.indexOf(a); const j = src.indexOf(b, i + a.length);
+      if (i < 0 || j < 0) throw new Error('anchor missing: ' + (i < 0 ? a : b));
+      return src.slice(i, j);
+    };
+
+    test('the loader in the map DELEGATES to fetchConditions for either kind', () => {
+      const loader = between('function loadConditions(onDone) {', 'var COND_COLOR');
+      expect(loader).toMatch(/fetchConditions\(opts\.only, opts\.only === 'lead' \? data\.leads : data\.jobs/);
+      // no second copy of the per-kind rule inside the mount
+      expect(loader).not.toMatch(/ACTIVE_JOB_STATUSES|OPEN_LEAD_STATUSES|p86Api\.weather\.jobs\(/);
+    });
+
+    test('lead rows carry the conditions badge (it was gated off for leads)', () => {
+      const badge = between('function condBadge(r) {', 'function rowHTML(');
+      expect(badge).not.toMatch(/isLead/);
+      expect(badge).toMatch(/condById\[condKey\(r\)\]/);
+    });
+
+    test('the lead pin card carries today and "Bad for"', () => {
+      const card = between('function showLeadDetail(it) {', 'function showGroupDetail(');
+      expect(card).toMatch(/stats: leadStats\.concat\(condStatsFor\(it\)\)/);
+    });
+
+    test('the Conditions filter renders on both maps; Crew on site stays jobs-only', () => {
+      const filters = between('function paintFilters() {', 'function paintList() {');
+      const condAt = filters.indexOf("html += '<div class=\"emap-frow\"><div class=\"emap-flabel\">' + condLabel");
+      const gateAt = filters.indexOf('if (!isLead) {');
+      expect(condAt).toBeGreaterThan(-1);
+      expect(gateAt).toBeGreaterThan(-1);
+      expect(condAt).toBeLessThan(gateAt);                        // conditions come BEFORE the jobs-only gate
+      expect(filters.slice(gateAt)).toMatch(/Crew on site/);     // crew is behind it
+      expect(filters.slice(0, gateAt)).not.toMatch(/Crew on site/);
+    });
+  });
+});
+
 describe('saved views', () => {
   test('both maps are registered pages for per-user saved views', () => {
     const lv = fs.readFileSync(path.join(REPO, 'server/routes/list-views-routes.js'), 'utf8');
