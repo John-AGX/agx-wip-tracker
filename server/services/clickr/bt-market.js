@@ -35,9 +35,12 @@ function optionOf(v) {
     if (x.length !== 1) return null;
     x = x[0];
   }
-  if (typeof x === 'number' && Number.isFinite(x)) return String(x);
+  // A NEGATIVE id is Buildertrend's "nothing chosen" (-1, seen live on a job),
+  // not an option anybody could map.
+  if (typeof x === 'number' && Number.isFinite(x)) return x < 0 ? null : String(x);
   if (typeof x === 'string') {
     const t = x.trim();
+    if (/^-\d+$/.test(t)) return null;
     if (t && t.length <= OPTION_MAX && !/[\u0000-\u001f\u007f]/.test(t)) return t;
   }
   return null;

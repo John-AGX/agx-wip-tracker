@@ -1390,6 +1390,9 @@ describe('MARKET MAPPING', () => {
     expect(btMarket.optionOf([1, 2])).toBeNull();
     expect(btMarket.optionOf({ id: 1 })).toBeNull();
     expect(btMarket.optionOf(null)).toBeNull();
+    // Buildertrend's "nothing chosen" is not an option to map.
+    expect(btMarket.optionOf([-1])).toBeNull();
+    expect(btMarket.optionOf('-1')).toBeNull();
   });
 
   test('UNMAPPED, an option proposes nothing \u2014 and the evidence suggests only when linked records agree', async () => {
