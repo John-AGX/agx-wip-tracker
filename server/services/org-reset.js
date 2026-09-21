@@ -208,6 +208,10 @@ async function resetOrgData(orgId) {
     //    shares would orphan them rather than remove them.
     //    Flags reference shares and tasks with SET NULL, so they are deleted explicitly.
     await del('service_ticket_flags', 'DELETE FROM service_ticket_flags WHERE organization_id = $1');
+    //    Field capture (Phase 3) likewise: the time and materials lines point at
+    //    shares and tasks with SET NULL.
+    await del('service_ticket_labor', 'DELETE FROM service_ticket_labor WHERE organization_id = $1');
+    await del('service_ticket_materials_used', 'DELETE FROM service_ticket_materials_used WHERE organization_id = $1');
     await del('service_ticket_revisions', 'DELETE FROM service_ticket_revisions WHERE organization_id = $1');
     await del('service_ticket_participants', 'DELETE FROM service_ticket_participants WHERE organization_id = $1');
     await del('service_ticket_events', 'DELETE FROM service_ticket_events WHERE organization_id = $1');

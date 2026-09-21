@@ -5168,6 +5168,99 @@ async function initSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS uq_service_ticket_flags_client_ref
       ON service_ticket_flags(ticket_id, client_ref) WHERE client_ref IS NOT NULL;
 
+    -- Phase 3: FIELD CAPTURE on a work order billed after the work. John,
+    -- 2026-09-19: "we need to bill based on work performed and materials and
+    -- mark-up after the job is done ... more info needs to be gathered from the
+    -- service tech on these." Two tables, one per kind of line, modelled on
+    -- service_ticket_flags: DIRECT tenancy (their own NOT NULL organization_id),
+    -- share_id and task_id SET NULL (revoking a link keeps what it sent; a
+    -- deleted building makes the line work-order-wide), a client_ref so a
+    -- retried Send stores one row, and a submitted/accepted/rejected lifecycle.
+    --
+    -- WHAT THE CREW TYPED IS A CLAIM, NOT A FACT. The claimed numbers are never
+    -- overwritten: the office's correction sits beside them (office_*), so a
+    -- tech who said 8 hours when it was 6 still has their 8 on the record.
+    -- source says who typed the line: a tech on a crew link, or the office on
+    -- their behalf (a tech who phoned it in is not a dead end). An office line
+    -- is born accepted — the office typing it IS the acceptance.
+    --
+    -- NO MONEY HERE. Rates, costs and sell prices belong to the billing phase
+    -- and will live in office-only columns; nothing on these rows is ever a
+    -- price, and the crew-facing projection is a whitelist.
+    CREATE TABLE IF NOT EXISTS service_ticket_labor (
+      id                TEXT PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      ticket_id         TEXT NOT NULL REFERENCES service_tickets(id) ON DELETE CASCADE,
+      task_id           TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+      share_id          TEXT REFERENCES service_ticket_shares(id) ON DELETE SET NULL,
+      source            TEXT NOT NULL,
+      author_label      TEXT,
+      entered_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      work_date         DATE NOT NULL,
+      crew_size         INTEGER NOT NULL,
+      hours             NUMERIC(6,2) NOT NULL,          -- on site, each person
+      work_performed    TEXT NOT NULL,
+      status            TEXT NOT NULL DEFAULT 'submitted',
+      office_crew_size  INTEGER,
+      office_hours      NUMERIC(6,2),
+      office_note       TEXT,
+      decided_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      decided_at        TIMESTAMPTZ,
+      client_ref        TEXT,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    DO $service_ticket_labor_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_ticket_labor_chk') THEN
+        ALTER TABLE service_ticket_labor ADD CONSTRAINT service_ticket_labor_chk
+          CHECK (source IN ('crew','office')
+             AND status IN ('submitted','accepted','rejected')
+             AND crew_size BETWEEN 1 AND 50 AND hours > 0 AND hours <= 24
+             AND (office_crew_size IS NULL OR office_crew_size BETWEEN 1 AND 50)
+             AND (office_hours IS NULL OR (office_hours > 0 AND office_hours <= 24)));
+      END IF;
+    END $service_ticket_labor_chk$;
+    CREATE INDEX IF NOT EXISTS idx_service_ticket_labor_ticket
+      ON service_ticket_labor(ticket_id, created_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_service_ticket_labor_client_ref
+      ON service_ticket_labor(ticket_id, client_ref) WHERE client_ref IS NOT NULL;
+
+    -- What the crew USED, as opposed to service_tickets.materials, which is what
+    -- the office told them to BRING. Two lists on purpose: one is an
+    -- instruction, the other a claim that gets billed.
+    CREATE TABLE IF NOT EXISTS service_ticket_materials_used (
+      id                TEXT PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      ticket_id         TEXT NOT NULL REFERENCES service_tickets(id) ON DELETE CASCADE,
+      task_id           TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+      share_id          TEXT REFERENCES service_ticket_shares(id) ON DELETE SET NULL,
+      source            TEXT NOT NULL,
+      author_label      TEXT,
+      entered_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      description       TEXT NOT NULL,
+      quantity          NUMERIC(12,2) NOT NULL,
+      unit              TEXT,
+      status            TEXT NOT NULL DEFAULT 'submitted',
+      office_quantity   NUMERIC(12,2),
+      office_note       TEXT,
+      decided_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      decided_at        TIMESTAMPTZ,
+      client_ref        TEXT,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    DO $service_ticket_materials_used_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_ticket_materials_used_chk') THEN
+        ALTER TABLE service_ticket_materials_used ADD CONSTRAINT service_ticket_materials_used_chk
+          CHECK (source IN ('crew','office')
+             AND status IN ('submitted','accepted','rejected')
+             AND quantity > 0
+             AND (office_quantity IS NULL OR office_quantity > 0));
+      END IF;
+    END $service_ticket_materials_used_chk$;
+    CREATE INDEX IF NOT EXISTS idx_service_ticket_materials_used_ticket
+      ON service_ticket_materials_used(ticket_id, created_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_service_ticket_materials_used_client_ref
+      ON service_ticket_materials_used(ticket_id, client_ref) WHERE client_ref IS NOT NULL;
+
     -- B5: the Work Orders page sorts and filters by due date across the org.
     CREATE INDEX IF NOT EXISTS idx_service_tickets_org_due
       ON service_tickets(organization_id, due_date) WHERE archived_at IS NULL;

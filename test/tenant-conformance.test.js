@@ -1278,7 +1278,17 @@ describe('R4 — classify() is checked, never consulted', () => {
   // are both ON DELETE SET NULL (a revoked link keeps the report, a deleted task
   // makes it ticket-level), and a flag whose tenant rode either pointer would
   // lose its tenancy at exactly that moment.
-  test('the fixture carries every table server/db.js creates (121) — nothing curated out', () => {
-    expect(TWO.ALL_TABLES.length).toBe(121);
+  //
+  // 121 -> 123: FIELD CAPTURE (Phase 3) — `service_ticket_labor` (a day of
+  // work on a work order billed after it: people, hours on site, what was
+  // done) and `service_ticket_materials_used` (what was used, as distinct from
+  // the materials the office said to bring). Both DIRECT, modelled on
+  // service_ticket_flags and for the same reason: share_id and task_id are ON
+  // DELETE SET NULL, so a line whose tenant rode either pointer would lose its
+  // tenancy the moment a link was revoked or a building deleted. Their own NOT
+  // NULL organization_id is the tenant, and every statement in
+  // services/service-ticket-field-capture.js carries it from the ticket row.
+  test('the fixture carries every table server/db.js creates (123) — nothing curated out', () => {
+    expect(TWO.ALL_TABLES.length).toBe(123);
   });
 });

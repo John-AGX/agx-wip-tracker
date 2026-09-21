@@ -466,18 +466,42 @@ describe('REGISTER 2 — the route population', () => {
     //      a caller from the other organization gets the same 404 for ours,
     //      and that no ticket row is written and no lead is marked sold on
     //      any refused path. No new router.
-    expect(R.routes).toBe(619);
+    //      619 -> 626: FIELD CAPTURE (Phase 3), seven doors registered onto
+    //      the service-ticket SHARE router (service-ticket-field-routes.js
+    //      registerFieldCaptureRoutes, called at the end of
+    //      service-ticket-share-routes.js, beside the flag doors) — no new
+    //      router. Two are PUBLIC and take the token as the credential:
+    //        POST /api/service-ticket-share/:token/labor
+    //        POST /api/service-ticket-share/:token/materials-used
+    //      Their organization_id, ticket_id and share_id come from the rows
+    //      loadTicketShare selected, never the body, which is read key by key.
+    //      Five are the office's, each through loadOwnedTicket
+    //      (`organization_id = $2`) and then ticketAccessOk:
+    //        GET  /api/service-tickets/:id/field-log                        (READ)
+    //        POST /api/service-tickets/:id/labor                            (WRITE)
+    //        POST /api/service-tickets/:id/materials-used                   (WRITE)
+    //        POST /api/service-tickets/:id/labor/:lineId/decide             (WRITE)
+    //        POST /api/service-tickets/:id/materials-used/:lineId/decide    (WRITE)
+    //      Every one is a write or takes a path parameter, so all seven are
+    //      waived here and driven instead by test/work-order-field-capture.test.js,
+    //      which names another organization's user against our ticket (the field
+    //      log and a decision both 404, the line untouched), a line from another
+    //      work order through this one (404), and asserts every crew line's
+    //      tenant came from the rows in hand. Both tables are DIRECT in
+    //      services/org-table-classification.js.
+    expect(R.routes).toBe(626);
     expect(R.routers).toBe(79);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (141 driven, 478 counted)', () => {
+  test('the DRIVEN / COUNTED-WAIVED split is committed (141 driven, 485 counted)', () => {
     // 466 -> 476: the ten Work Orders (1.30) routes above, every one waived.
     // 476 -> 477: POST /api/clients/merge, a write (see the note above).
     // 139 -> 141: the two Work Orders (1.33) reads above. Both are GETs with
     // no path parameter, so they are driven here — the waived side does not
     // move, and the param-less-GET predicate below still holds at zero.
     // 477 -> 478: POST /api/service-tickets/convert, a write (see above).
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 141, waived: 478 });
+    // 478 -> 485: the seven field-capture doors (see the note above).
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 141, waived: 485 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

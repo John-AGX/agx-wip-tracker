@@ -2203,6 +2203,9 @@ router.post('/:id/status', requireAuth, requireOrgId, async (req, res) => {
       expectedStatus: body.expected_status,
       reason: body.reason != null ? body.reason : body.note,
       override: body.override === true,
+      // Phase 3: "finish it anyway, there is no time on it" — asked apart
+      // from the buildings, so one yes never answers both.
+      overrideTime: body.override_time === true,
       copyScope: body.copy_scope === true,
       reopenTasks: body.reopen_tasks,
       actor,

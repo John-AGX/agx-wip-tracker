@@ -79,6 +79,9 @@ const review = require('../services/work-order-review');
 const uploadDedupe = require('../services/upload-dedupe');
 const inflight = require('../services/inflight');
 const subtaskDoor = require('../services/service-ticket-subtask-door');
+// Phase 3: a work order billed after the work is not finished without time,
+// and its crew link shows the time and materials that link sent.
+const fieldCaptureSvc = require('../services/service-ticket-field-capture');
 const flagSvc = require('../services/service-ticket-flags');
 const { formatInTz } = require('../timezone');
 
@@ -1024,6 +1027,23 @@ router.get('/service-ticket-share/:token',
         console.warn('[service-ticket-share] flags lookup failed', e && e.message);
       }
 
+      // Time and materials (Phase 3) — ONLY on a work order billed after the
+      // work, and only the lines THIS link sent: a tech sees the hours they
+      // typed, never the crew's total, never the office's corrections or
+      // notes. null on every other ticket, so the page shows no card at all.
+      // Best-effort: a failed read costs the crew the list, not the card.
+      let fieldCapture = null;
+      if (fieldCaptureSvc.fieldCaptureOn(ticket)) {
+        fieldCapture = { on: true, labor: [], materials: [] };
+        try {
+          const mine = await fieldCaptureSvc.listCrewLines(pool, ticket, share.id, tasks.rows.map((t) => t.id));
+          fieldCapture.labor = mine.labor;
+          fieldCapture.materials = mine.materials;
+        } catch (e) {
+          console.warn('[service-ticket-share] field capture lookup failed', e && e.message);
+        }
+      }
+
       res.json({
         ticket: svc.publicTicket(ticket, share),
         share: svc.publicShare(share),
@@ -1057,6 +1077,7 @@ router.get('/service-ticket-share/:token',
         site_photos: sitePhotos,
         send_back: sendBack,
         flags: flags,
+        field_capture: fieldCapture,
       });
     } catch (e) {
       console.error('[service-ticket-share] read failed', e);
@@ -1469,6 +1490,14 @@ router.patch('/service-ticket-share/:token',
                   open: openCount,
                   total: counts.total,
                 });
+              }
+              // Phase 3: a work order billed after the work is billed FROM the
+              // time and the work performed, so it cannot be finished before
+              // anybody has sent any. Keyed on bill_as alone — every ticket
+              // that predates the two kinds is 'none' and finishes as before.
+              // Asked of the LOCKED row, inside this transaction.
+              if (fieldCaptureSvc.fieldCaptureOn(locked) && !(await fieldCaptureSvc.hasUsableTime(client, locked))) {
+                return refuse(409, { error: fieldCaptureSvc.MSG.timeMissing, code: 'time_missing' });
               }
               reason = 'marked_complete';
             }
@@ -2050,6 +2079,19 @@ require('./service-ticket-flag-routes').registerFlagRoutes(router, {
   applyCrewName,
   storeShareImage,
   upload: { single: () => multerOnePhoto },
+  ticketAccessOk,
+  loadOwnedTicket,
+});
+
+// Field capture (Phase 3): the crew's time, work performed and materials
+// used, and the office's accept / correct / reject — on this router for the
+// same reason the flag doors are, held to the same token loader, crew gate,
+// crew actor and name write. Registration throws if any is missing.
+require('./service-ticket-field-routes').registerFieldCaptureRoutes(router, {
+  loadTicketShare,
+  crewGate,
+  crewActor,
+  applyCrewName,
   ticketAccessOk,
   loadOwnedTicket,
 });

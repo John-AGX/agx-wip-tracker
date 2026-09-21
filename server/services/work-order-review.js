@@ -33,6 +33,8 @@
 const svc = require('./service-tickets');
 // Phase 2: WO-#### / ST-####, minted when a draft is issued.
 const ticketNumbers = require('./ticket-numbers');
+// Phase 3: the stricter finish rule for a work order billed after the work.
+const fieldCapture = require('./service-ticket-field-capture');
 
 const REASON_MAX = 1000;
 const BUILDING_NOTE_MAX = 500;
@@ -384,7 +386,7 @@ async function changeStatus(db, opts) {
     };
 
     const lockedRes = await client.query(
-      `SELECT status, scope_proposed FROM service_tickets
+      `SELECT status, scope_proposed, bill_as FROM service_tickets
         WHERE id = $1 AND organization_id = $2 FOR UPDATE`,
       [ticket.id, orgId]
     );
@@ -406,6 +408,20 @@ async function changeStatus(db, opts) {
         }
         openInfo = { open: open, total: c.total };
       }
+    }
+
+    // A work order billed after the work, arriving at Work complete with no
+    // time on it (Phase 3). Its OWN override, not the buildings one: a person
+    // who said "finish it, the buildings are fine" has not been told there is
+    // no time, and one yes must not answer a question nobody asked. Taking
+    // back an approval is exempt for the same reason buildings are.
+    let timeOverridden = false;
+    if (next === 'work_complete' && from !== 'approved' && fieldCapture.fieldCaptureOn(locked) &&
+        !(await fieldCapture.hasUsableTime(client, ticket))) {
+      if (o.overrideTime !== true) {
+        return await rollback(refusal(409, fieldCapture.MSG.officeTimeMissing, { code: 'time_missing' }));
+      }
+      timeOverridden = true;
     }
 
     // Every building named on a send-back must be a live org subtask of THIS
@@ -521,6 +537,7 @@ async function changeStatus(db, opts) {
     if (note) detail.note = note;
     if (buildings.length) detail.buildings = buildings;
     if (copyScope && String(locked.scope_proposed == null ? '' : locked.scope_proposed).trim()) detail.scope_copied = true;
+    if (timeOverridden) detail.override_time = true;
     if (openInfo) {
       detail.override = 'buildings_open';
       detail.open = openInfo.open;

@@ -437,6 +437,24 @@ async function withTicketLock(db, ticket, work) {
   }
 }
 
+// Does the missing-time rule hold this ticket back from Work complete? The
+// callers lock the row with different column lists, so bill_as is read when
+// the row in hand does not carry it — a row that merely omitted the column
+// must not read as a ticket that bills nothing.
+async function timeHoldsArrival(db, ticket) {
+  let billAs = ticket.bill_as;
+  if (billAs === undefined) {
+    const r = await db.query(
+      'SELECT bill_as FROM service_tickets WHERE id = $1 AND organization_id = $2',
+      [ticket.id, ticket.organization_id]
+    );
+    billAs = r.rows[0] ? r.rows[0].bill_as : null;
+  }
+  const fieldCapture = require('./service-ticket-field-capture');
+  if (!fieldCapture.fieldCaptureOn({ bill_as: billAs })) return false;
+  return !(await fieldCapture.hasUsableTime(db, ticket));
+}
+
 /**
  * recountTicket(db, ticket, actor, hint) -> { ticketStatus, movedTo }
  *
@@ -456,7 +474,13 @@ async function recountTicket(db, ticket, actor, hint) {
   let movedTo = null;
   const c = await subtaskCounts(db, ticket);
   const allDone = c.total > 0 && c.done === c.total;
-  const next = svc.autoStatusForSubtasks(ticket.status, allDone);
+  let next = svc.autoStatusForSubtasks(ticket.status, allDone);
+  // Phase 3: the last building ticked is not Work complete on a work order
+  // billed after the work while nobody has sent any time — the same rule the
+  // crew's Finish and the office's status door apply, or it would be a rule
+  // with a side door. The ticket stays where it is and the crew's Finish, once
+  // there is time, takes it the rest of the way.
+  if (next === 'work_complete' && (await timeHoldsArrival(db, ticket))) next = null;
   if (next && next !== ticket.status) {
     const r = await db.query(
       `UPDATE service_tickets

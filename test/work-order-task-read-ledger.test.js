@@ -428,6 +428,16 @@ const FULL_LEDGER = {
     why: 'A change order prefilled from a flagged building reads that ticket\'s buildings for their titles.',
     check: pinnedReads('the change-order read'),
   },
+  'server/services/service-ticket-field-capture.js': {
+    kind: 'ticket-scoped',
+    why: 'Phase 3 field capture: the office list of time and material lines joins the building a line was sent against, for its title, matched on the line\'s own ticket and organization.',
+    check: pinnedReads('the field-line join'),
+  },
+  'server/routes/service-ticket-field-routes.js': {
+    kind: 'ticket-scoped',
+    why: 'Phase 3 field capture: the ids of the buildings on THIS work order, so a retried crew Send answers with its building still named. Never a list anyone reads as tasks.',
+    check: pinnedReads('the crew answer building ids'),
+  },
   'server/services/service-ticket-flags.js': {
     kind: 'ticket-scoped',
     why: 'The office flag list joins the flagged building for its title, matched on the flag\'s own ticket and organization.',

@@ -83,8 +83,14 @@ function mutant(find, replace) {
   const eol = src.includes('\r\n') ? '\r\n' : '\n';
   const f = find.split('\n').join(eol);
   if (src.split(f).length !== 2) throw new Error('MUTATION ANCHOR not found exactly once: ' + find.slice(0, 80));
+  // EVERY relative require is pointed back at the shipped module, not only
+  // ./service-tickets: a copy in the OS temp dir resolves './x' against the
+  // temp dir, and a require added to the file later (Phase 3 added one, inside
+  // a function) would otherwise make the mutant throw instead of mutate.
+  const dir = path.join(__dirname, '..', 'server', 'services');
   const out = src.replace(f, replace.split('\n').join(eol))
-    .replace("require('./service-tickets')", 'require(' + JSON.stringify(path.join(__dirname, '..', 'server', 'services', 'service-tickets.js').split(path.sep).join('/')) + ')');
+    .replace(/require\((['"])(\.[^'"]+)\1\)/g, (_m, _q, spec) =>
+      'require(' + JSON.stringify(require.resolve(path.resolve(dir, spec)).split(path.sep).join('/')) + ')');
   if (out === src) throw new Error('MUTATION CHANGED NO BYTES');
   const p = path.join(os.tmpdir(), '_p86_wo_' + process.pid + '_' + Math.random().toString(36).slice(2, 9) + '.js');
   fs.writeFileSync(p, out, 'utf8');
@@ -302,7 +308,7 @@ describe('MUTANTS', () => {
   });
 
   test('without the auto-move, finishing every subtask leaves the ticket open', async () => {
-    const W = mutant("  const next = svc.autoStatusForSubtasks(ticket.status, allDone);\n", '  const next = null;\n');
+    const W = mutant("  let next = svc.autoStatusForSubtasks(ticket.status, allDone);\n", '  let next = null;\n');
     photo('c1', 't782', []);
     photo('c2', 't784', []);
     await W.setSubtaskDone(eng.pool, { ticket: ticket('st1'), taskId: 't782', done: true, actor: ACTOR });
