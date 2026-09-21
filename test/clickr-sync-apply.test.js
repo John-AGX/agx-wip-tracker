@@ -1184,7 +1184,10 @@ describe('CLIENT CUSTOM FIELDS', () => {
     expect(fills.cmEmail).toBe('cam@oakhollow.test');
     expect(fills.cmPhone).toBe('(813) 555-0199');
     expect(Object.keys(fills)).not.toContain('website');
-    expect(JSON.stringify(row)).not.toMatch(/123456|market/i);
+    // Market is read (an option id) but means nothing until it is mapped.
+    expect(row.bt.marketOption).toBe('123456');
+    expect(row.bt.market).toBeNull();
+    expect(row.corrections.concat(row.heldBack).map((c) => c.field)).not.toContain('market');
   });
 
   test('apply writes them to the columns P86 already has; the client name is never touched', async () => {
@@ -1343,5 +1346,274 @@ describe('JOB CUSTOM FIELDS', () => {
     const u = await put('/api/admin/organizations/me?action=buildertrend-undo', ADMIN, { runId: run.id });
     expect(u.status).toBe(200);
     expect(jobData('j-1')).not.toHaveProperty('gateCode');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// MARKET MAPPING — Buildertrend sends a Market OPTION id, never a name. It
+// means a P86 market only once a person maps it; then it is an ordinary field
+// on the contact rule, written as market_id with its name beside it.
+// ══════════════════════════════════════════════════════════════════════════
+describe('MARKET MAPPING', () => {
+  const MAP = '/api/admin/organizations/me?action=buildertrend-market-map';
+  const PREVIEW = '/api/admin/organizations/me?view=buildertrend-preview&since=keep';
+  const btMarket = require('../server/services/clickr/bt-market');
+  const cf = (label, value) => ({ customFieldId: 1, label, tooltipText: '', type: 1, value });
+  const btc = (id) => BT_CLIENTS.find((r) => r.contactId === id);
+  const btj = (id) => BT_JOBS.find((r) => r.jobId === id);
+  const clientRow = (id) => engine.db.prepare('SELECT * FROM clients WHERE id = ?').get(id);
+  const jobMarket = (id) => engine.db.prepare('SELECT market_id FROM jobs WHERE id = ?').get(id).market_id;
+  const settings = () => JSON.parse(engine.db.prepare('SELECT settings FROM organizations WHERE id = 1').get().settings || '{}');
+  const clientRows = async () => {
+    const p86 = await preview.readP86(engine.pool, AGX);
+    return preview.matchRows('clients', BT_CLIENTS.map((x) => readRecord('clients', x)), p86);
+  };
+  const rowFor = (rows, id) => rows.find((r) => String(r.bt.btId) === id);
+  beforeEach(() => {
+    engine.db.exec("DELETE FROM markets; INSERT INTO markets (id, organization_id, name, code) VALUES (1, 1, 'Tampa', 'TPA'), (2, 1, 'Orlando', 'ORL'), (3, 2, 'Elsewhere', 'ELS');");
+    // Another setting the mapping must never disturb.
+    engine.db.prepare('UPDATE organizations SET settings = ? WHERE id = 1').run(JSON.stringify({ keepMe: 1 }));
+    for (const id of [9001, 9002, 9005, 9007]) btc(id).customFields = [cf('Market', [5001])];
+    btj(111).customFields = [cf('Market', [7001])];
+  });
+  afterEach(() => {
+    for (const id of [9001, 9002, 9005, 9007]) btc(id).customFields = [];
+    btj(111).customFields = [];
+    engine.db.exec('DELETE FROM markets;');
+    preview.forgetFetch(AGX);
+  });
+
+  test('the reader keeps the option id: a one-item list is its item, anything else is no option', () => {
+    expect(btMarket.optionOf([5001])).toBe('5001');
+    expect(btMarket.optionOf(5001)).toBe('5001');
+    expect(btMarket.optionOf([])).toBeNull();
+    expect(btMarket.optionOf([1, 2])).toBeNull();
+    expect(btMarket.optionOf({ id: 1 })).toBeNull();
+    expect(btMarket.optionOf(null)).toBeNull();
+  });
+
+  test('UNMAPPED, an option proposes nothing \u2014 and the evidence suggests only when linked records agree', async () => {
+    engine.db.exec("UPDATE clients SET market_id = 1 WHERE id IN ('c-h', 'c-bp')");
+    let rows = await clientRows();
+    expect(rowFor(rows, '9001').corrections.map((c) => c.field)).not.toContain('market');
+    let p86 = await preview.readP86(engine.pool, AGX);
+    let ev = btMarket.evidence(rows, p86.market.clients);
+    // Two filed records is not enough to suggest from.
+    expect(ev[0]).toMatchObject({ optionId: '5001', records: 4, suggestion: null, mappedTo: null });
+    expect(ev[0].p86).toEqual([{ marketId: '1', name: 'Tampa', count: 2 }]);
+    engine.db.exec("UPDATE clients SET market_id = 1 WHERE id = 'c-a'");
+    rows = await clientRows();
+    p86 = await preview.readP86(engine.pool, AGX);
+    ev = btMarket.evidence(rows, p86.market.clients);
+    expect(ev[0].suggestion).toBe('1');
+    // A split vote suggests nothing.
+    engine.db.exec("UPDATE clients SET market_id = 2 WHERE id = 'c-a'");
+    rows = await clientRows();
+    expect(btMarket.evidence(rows, (await preview.readP86(engine.pool, AGX)).market.clients)[0].suggestion).toBeNull();
+  });
+
+  test('the preview carries the evidence and the market list', async () => {
+    const r = await get(PREVIEW, ADMIN);
+    expect(r.status).toBe(200);
+    expect(r.json.markets.map((m) => m.name).sort()).toEqual(['Orlando', 'Tampa']);
+    expect(r.json.datasets.clients.marketOptions[0].optionId).toBe('5001');
+    expect(r.json.datasets.jobs.marketOptions[0].optionId).toBe('7001');
+  });
+
+  test('saving a mapping: only this organisation\u2019s markets, only the owner organisation, other settings untouched', async () => {
+    expect((await put(MAP, ADMIN, { kind: 'clients', optionId: '5001', marketId: '3' })).status).toBe(400);
+    expect((await put(MAP, ADMIN, { kind: 'leads', optionId: '5001', marketId: '1' })).status).toBe(400);
+    expect((await put(MAP, ADMIN, { kind: 'clients', optionId: '', marketId: '1' })).status).toBe(400);
+    expect((await put(MAP, OTHER_ADMIN, { kind: 'clients', optionId: '5001', marketId: '3' })).status).toBe(403);
+    const ok = await put(MAP, ADMIN, { kind: 'clients', optionId: '5001', marketId: '1' });
+    expect(ok.status).toBe(200);
+    expect(settings()).toEqual({ keepMe: 1, btMarketMap: { jobs: {}, clients: { 5001: '1' } } });
+    const un = await put(MAP, ADMIN, { kind: 'clients', optionId: '5001', marketId: null });
+    expect(un.status).toBe(200);
+    expect(settings()).toEqual({ keepMe: 1, btMarketMap: { jobs: {}, clients: {} } });
+  });
+
+  test('MAPPED: a client with no market is filled with market_id and the name beside it', async () => {
+    await put(MAP, ADMIN, { kind: 'clients', optionId: '5001', marketId: '1' });
+    const row = rowFor(await clientRows(), '9001');
+    expect(row.corrections.find((c) => c.field === 'market')).toMatchObject({ kind: 'fill', to: 'Tampa', value: '1' });
+    const r = await put(APPLY, ADMIN, { dataset: 'clients', btIds: ['9001'] });
+    expect(r.status).toBe(200);
+    expect([String(clientRow('c-a').market_id), clientRow('c-a').market]).toEqual(['1', 'Tampa']);
+  });
+
+  test('MAPPED: a client filed under ANOTHER market waits for a tick, and a tick moves it', async () => {
+    await put(MAP, ADMIN, { kind: 'clients', optionId: '5001', marketId: '1' });
+    engine.db.exec("UPDATE clients SET market_id = 2, market = 'Orlando' WHERE id = 'c-a'");
+    const row = rowFor(await clientRows(), '9001');
+    expect(row.heldBack.find((h) => h.field === 'market')).toMatchObject({ bt: 'Tampa', p86: 'Orlando', p86Id: '2', value: '1', applicable: true });
+    await put(APPLY, ADMIN, { dataset: 'clients', btIds: ['9001'], fields: [] });
+    expect(String(clientRow('c-a').market_id)).toBe('2');
+    preview.forgetFetch(AGX);
+    await put(APPLY, ADMIN, { dataset: 'clients', btIds: ['9001'], fields: ['market'] });
+    expect([String(clientRow('c-a').market_id), clientRow('c-a').market]).toEqual(['1', 'Tampa']);
+  });
+
+  test('a TICKED move is refused if P86 moved the client itself since the preview', async () => {
+    await put(MAP, ADMIN, { kind: 'clients', optionId: '5001', marketId: '1' });
+    engine.db.exec("UPDATE clients SET market_id = 2, market = 'Orlando' WHERE id = 'c-a'");
+    const real = engine.pool.connect;
+    engine.pool.connect = async () => {
+      const c = await real();
+      const q = c.query;
+      c.query = async (sql, params) => {
+        if (sql.indexOf('FROM clients WHERE id =') >= 0 && sql.indexOf('FOR UPDATE') >= 0 && params[0] === 'c-a') {
+          engine.db.exec("UPDATE clients SET market_id = NULL, market = NULL WHERE id = 'c-a'");
+        }
+        return q(sql, params);
+      };
+      return c;
+    };
+    let r;
+    try { r = await put(APPLY, ADMIN, { dataset: 'clients', btIds: ['9001'], fields: ['market'] }); } finally { engine.pool.connect = real; }
+    expect(clientRow('c-a').market_id).toBeNull();
+    expect(r.json.results[0].stale).toContain('Market');
+  });
+
+  test('a mapping to a market that has since gone is no mapping: nothing proposed, and the page is told', async () => {
+    await put(MAP, ADMIN, { kind: 'clients', optionId: '5001', marketId: '1' });
+    engine.db.exec('DELETE FROM markets WHERE id = 1');
+    const rows = await clientRows();
+    expect(rowFor(rows, '9001').corrections.map((c) => c.field)).not.toContain('market');
+    const p86 = await preview.readP86(engine.pool, AGX);
+    expect(btMarket.evidence(rows, p86.market.clients)[0]).toMatchObject({ mappedTo: null, mappedGone: true });
+  });
+
+  test('a map hand-edited to point at ANOTHER tenant\u2019s market proposes nothing and writes nothing', async () => {
+    engine.db.prepare('UPDATE organizations SET settings = ? WHERE id = 1').run(JSON.stringify({ btMarketMap: { clients: { 5001: '3' } } }));
+    const row = rowFor(await clientRows(), '9001');
+    expect(row.corrections.map((c) => c.field)).not.toContain('market');
+    await put(APPLY, ADMIN, { dataset: 'clients', btIds: ['9001'] });
+    expect(clientRow('c-a').market_id).toBeNull();
+  });
+
+  test('a client created from Buildertrend is filed under its mapped market', async () => {
+    await put(MAP, ADMIN, { kind: 'clients', optionId: '5001', marketId: '2' });
+    await put(APPLY, ADMIN, { dataset: 'clients', mode: 'create' });
+    const c = engine.db.prepare("SELECT * FROM clients WHERE bt_contact_id = '9007'").get();
+    expect([String(c.market_id), c.market]).toEqual(['2', 'Orlando']);
+  });
+
+  test('JOBS: a mapped option fills market_id and data.market; undo takes both back', async () => {
+    await put(MAP, ADMIN, { kind: 'jobs', optionId: '7001', marketId: '2' });
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'] });
+    expect(r.status).toBe(200);
+    expect(String(jobMarket('j-1'))).toBe('2');
+    expect(jobData('j-1').market).toBe('Orlando');
+    const run = engine.db.prepare('SELECT id FROM bt_sync_runs ORDER BY started_at DESC').get();
+    await put('/api/admin/organizations/me?action=buildertrend-undo', ADMIN, { runId: run.id });
+    expect(jobMarket('j-1')).toBeNull();
+    expect(jobData('j-1').market).toBeUndefined();
+  });
+
+  test('JOBS: a market set MID-PRESS wins, and the fill is reported stale', async () => {
+    await put(MAP, ADMIN, { kind: 'jobs', optionId: '7001', marketId: '2' });
+    const real = engine.pool.connect;
+    engine.pool.connect = async () => {
+      const c = await real();
+      const q = c.query;
+      c.query = async (sql, params) => {
+        if (sql.indexOf('FROM jobs WHERE id =') >= 0 && sql.indexOf('FOR UPDATE') >= 0 && params[0] === 'j-1') {
+          engine.db.exec("UPDATE jobs SET market_id = 1 WHERE id = 'j-1'");
+        }
+        return q(sql, params);
+      };
+      return c;
+    };
+    let r;
+    try { r = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'] }); } finally { engine.pool.connect = real; }
+    expect(String(jobMarket('j-1'))).toBe('1');
+    expect(r.json.results[0].stale).toContain('Market');
+  });
+});
+
+// RUN SYNC NOW — the whole sync once, pressed by a person: the unattended
+// run's own path, journalled as one run, undoable as one run.
+describe('RUN SYNC NOW', () => {
+  const RUN = '/api/admin/organizations/me?action=buildertrend-run-now';
+  const auto = require('../server/services/clickr/auto-sync');
+  const syncApply = require('../server/services/clickr/sync-apply');
+  afterEach(async () => { await auto.idle(); preview.forgetFetch(AGX); });
+
+  test('runs even with BT_AUTO_SYNC off, as the person who pressed it, and answers at once with the run id', async () => {
+    delete process.env.BT_AUTO_SYNC;
+    const r = await put(RUN, ADMIN, {});
+    expect(r.status).toBe(202);
+    expect(r.json.runId).toMatch(/^btrun_/);
+    await auto.idle();
+    const run = engine.db.prepare('SELECT * FROM bt_sync_runs WHERE id = ?').get(r.json.runId);
+    expect(run).toMatchObject({ trigger: 'manual', mode: 'auto', actor_user_id: 10 });
+    expect(run.finished_at).not.toBeNull();
+    // It did the unattended run's work: confident jobs linked, the blank start date filled.
+    expect(jobBt('j-1')).toBe('111');
+    expect(jobData('j-1').startDate).toBe('2026-02-25');
+  });
+
+  test('the history says what the last run did; another tenant is told nothing', async () => {
+    const r = await put(RUN, ADMIN, {});
+    await auto.idle();
+    const h = await get(HISTORY, ADMIN);
+    expect(h.json.live).toMatchObject({ running: false, live: null });
+    expect(h.json.live.last).toMatchObject({ runId: r.json.runId, trigger: 'manual' });
+    expect(h.json.live.last.totals.linked).toBeGreaterThan(0);
+    expect(h.json.runs[0]).toMatchObject({ id: r.json.runId, trigger: 'manual' });
+    const other = await get(HISTORY, OTHER_ADMIN);
+    expect(other.json.live).toBeNull();
+  });
+
+  test('the whole run is taken back by one undo', async () => {
+    const r = await put(RUN, ADMIN, {});
+    await auto.idle();
+    expect(jobBt('j-1')).toBe('111');
+    const u = await put(UNDO, ADMIN, { runId: r.json.runId });
+    expect(u.status).toBe(200);
+    expect(jobBt('j-1')).toBeNull();
+    expect(jobData('j-1').startDate || '').toBe('');
+    // Every record the run created is gone again.
+    expect(engine.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE bt_job_id IN ('444', '446')").get().n).toBe(0);
+  });
+
+  test('ONE writer at a time: no run while a press holds the lock, no press while a run does', async () => {
+    expect(syncApply.claim()).toBe(true);
+    try {
+      expect((await put(RUN, ADMIN, {})).status).toBe(429);
+    } finally { syncApply.release(); }
+    // And the other way round: the run takes the SAME lock a press does.
+    // Buildertrend is slowed so the run is certainly still going.
+    const fastFetch = global.fetch;
+    global.fetch = async (...a) => { await new Promise((res) => setTimeout(res, 150)); return fastFetch(...a); };
+    try {
+      const r = await put(RUN, ADMIN, {});
+      expect(r.status).toBe(202);
+      expect(auto.status().running).toBe(true);
+      expect((await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' })).status).toBe(429);
+      expect((await put(RUN, ADMIN, {})).status).toBe(429);
+      await auto.idle();
+    } finally { global.fetch = fastFetch; }
+    expect(syncApply.busy()).toBe(false);
+  });
+
+  test('a run cannot be taken back while it is still writing', async () => {
+    const fastFetch = global.fetch;
+    global.fetch = async (...x) => { await new Promise((res) => setTimeout(res, 150)); return fastFetch(...x); };
+    try {
+      const r = await put(RUN, ADMIN, {});
+      expect(auto.status().running).toBe(true);
+      const u = await put(UNDO, ADMIN, { runId: r.json.runId });
+      expect(u.status).toBe(409);
+      await auto.idle();
+      expect((await put(UNDO, ADMIN, { runId: r.json.runId })).status).toBe(200);
+    } finally { global.fetch = fastFetch; }
+  });
+
+  test('only the organisation the Buildertrend connection belongs to; no key is a refusal, not a crash', async () => {
+    expect((await put(RUN, OTHER_ADMIN, {})).status).toBe(403);
+    delete process.env.CLICKR_API_KEY;
+    expect((await put(RUN, ADMIN, {})).status).toBe(409);
   });
 });

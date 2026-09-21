@@ -46,6 +46,8 @@ function str(v) {
   return v == null ? '' : String(v);
 }
 
+const btMarket = require('./bt-market');
+
 const BLANK_WORDS = new Set(['n/a', 'unassigned', 'tbd']);
 
 // BLANK on the Buildertrend side: unknown, never a value.
@@ -627,6 +629,8 @@ function p86JobView(row) {
     // What Buildertrend last called it, as sync-apply.js recorded it (J2).
     btStatus: str(d.btStatus).trim(),
     ...Object.fromEntries(JOB_CUSTOM_FIELDS.map((f) => [f.field, str(d[f.key])])),
+    // A COLUMN, not data: the market dimension (markets table).
+    marketId: row.market_id == null ? '' : str(row.market_id),
     // jobs.bt_job_id — set only by sync-apply.js when an admin applies a match.
     btId: row.bt_job_id == null ? '' : str(row.bt_job_id).trim(),
   };
@@ -634,7 +638,7 @@ function p86JobView(row) {
 
 function jobCand(p, rungs) {
   return { id: p.id, jobNumber: p.jobNumber, title: p.title, status: p.status,
-    street: p.street, city: p.city, state: p.state, zip: p.zip, rungs: [...rungs] };
+    street: p.street, city: p.city, state: p.state, zip: p.zip, marketId: p.marketId || '', rungs: [...rungs] };
 }
 
 function jobProposals(bt, p, ctx) {
@@ -736,6 +740,7 @@ function jobProposals(bt, p, ctx) {
   for (const f of JOB_CUSTOM_FIELDS) {
     contactField(acc, { field: f.field, label: f.label, bt: bt[f.field], p86: p[f.field], same: f.same, multiline: f.multiline });
   }
+  btMarket.proposal(acc, bt, p, ctx && ctx.market);
   return { acc, notes };
 }
 
@@ -951,6 +956,8 @@ function matchJobs(btValues, p86Rows, ctx) {
       latitude: v.latitude == null ? null : v.latitude,
       longitude: v.longitude == null ? null : v.longitude,
       ...Object.fromEntries(JOB_CUSTOM_FIELDS.map((f) => [f.field, str(v[f.field])])),
+      marketOption: v.marketOption || '',
+      market: btMarket.btMarket(v.marketOption, c.market),
     };
     const contractView = parseMoney(v.contractPrice);
     bt.contractText = contractView.kind === 'unparsed' ? 'unparsed' : moneyText(contractView);
@@ -1678,6 +1685,7 @@ function p86ClientView(row) {
     parentId: row.parent_client_id == null ? '' : str(row.parent_client_id),
     btId: row.bt_contact_id == null ? '' : str(row.bt_contact_id).trim(),
     ...Object.fromEntries(CLIENT_CUSTOM_FIELDS.map((f) => [f.field, str(row[f.col])])),
+    marketId: row.market_id == null ? '' : str(row.market_id),
   };
 }
 
@@ -1756,7 +1764,7 @@ function sameClientProperty(a, b) {
 }
 
 function clientCand(p, rungs) {
-  return { id: p.id, title: p.name, email: p.email, street: p.street, city: p.city, state: p.state, zip: p.zip, rungs: [...rungs] };
+  return { id: p.id, title: p.name, email: p.email, street: p.street, city: p.city, state: p.state, zip: p.zip, marketId: p.marketId || '', rungs: [...rungs] };
 }
 
 function emailKey(v) {
@@ -1788,7 +1796,7 @@ function contactField(acc, spec) {
     note: 'P86 already has a different value. Never applied automatically — tick it to replace P86\'s value with Buildertrend\'s.' });
 }
 
-function clientProposals(bt, p) {
+function clientProposals(bt, p, ctx) {
   const acc = newAcc();
   const notes = [];
   if (!isBtBlank(bt.name) && textKey(bt.name) !== textKey(p.name)) {
@@ -1804,10 +1812,12 @@ function clientProposals(bt, p) {
   for (const f of CLIENT_CUSTOM_FIELDS) {
     contactField(acc, { field: f.field, label: f.label, bt: bt[f.field], p86: p[f.field], same: f.same, multiline: f.multiline });
   }
+  btMarket.proposal(acc, bt, p, ctx && ctx.market);
   return { acc, notes };
 }
 
-function matchClients(btValues, p86Rows) {
+function matchClients(btValues, p86Rows, ctx) {
+  const cx = ctx || {};
   const p86 = p86Rows.map(p86ClientView);
   const byBtId = indexBy(p86, (p) => p.btId);
   const byName = indexBy(p86, (p) => textKey(p.name));
@@ -1830,6 +1840,8 @@ function matchClients(btValues, p86Rows) {
       street: str(v.street), city: str(v.city), state: str(v.state), zip: str(v.zip),
       jobCount: v.jobCount, leadCount: v.leadCount, scope: 'all',
       ...Object.fromEntries(CLIENT_CUSTOM_FIELDS.map((f) => [f.field, str(v[f.field])])),
+      marketOption: v.marketOption || '',
+      market: btMarket.btMarket(v.marketOption, cx.market),
     };
     if (isBtBlank(v.displayName)) return unpairedRow(bt, 'refused', [], ['This Buildertrend contact has no name, so it cannot be matched and will never be created.']);
 
@@ -1860,7 +1872,7 @@ function matchClients(btValues, p86Rows) {
     const allCands = () => [...cands.values()].map((x) => clientCand(x.p, x.rungs)).concat(nearList);
     const amb = (note) => unpairedRow(bt, 'ambiguous', allCands(), [note]);
     const confidentRow = (p, rung, extraNotes) => {
-      const { acc, notes } = clientProposals(bt, p);
+      const { acc, notes } = clientProposals(bt, p, cx);
       const row = {
         bt, class: acc.corrections.length ? 'conflict' : 'matched', rung, p86: clientCand(p, [rung]),
         corrections: acc.corrections, btBlank: acc.btBlank, heldBack: acc.heldBack, flags: acc.flags,

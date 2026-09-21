@@ -53,6 +53,7 @@
 const { DATASETS, readRecord } = require('./field-map');
 const { fetchDataset } = require('./client');
 const match = require('./bt-match');
+const btMarket = require('./bt-market');
 const preview = require('./sync-preview');
 const { auditLog } = require('../../audit');
 const journal = require('./sync-journal');
@@ -127,7 +128,11 @@ const LEAD_REVENUE_COLUMNS = { estimatedRevenueMin: 'estimated_revenue_low', est
 // Client contact details: correction/held-back field -> clients column. The name is never written.
 const CLIENT_COLUMNS = Object.assign(
   { email: 'email', phone: 'phone', cell: 'cell', street: 'address', city: 'city', state: 'state', zip: 'zip' },
-  Object.fromEntries(match.CLIENT_CUSTOM_FIELDS.map((f) => [f.field, f.col])));
+  Object.fromEntries(match.CLIENT_CUSTOM_FIELDS.map((f) => [f.field, f.col])),
+  // Written by its own branch in applyClient (an id plus its name), never by
+  // the generic loop; listed here so writable() and pickedHeldBack() allow it
+  // and the locked SELECT reads market_id.
+  { market: 'market_id' });
 const CO_FIELDS = { title: 1, price: 1, cost: 1, status: 1 };
 const PO_FIELDS = { status: 1, title: 1, costCode: 1, scheduledCompletion: 1, sub: 1, cost: 1 };
 const PO_DATA_KEYS = { title: 'title', costCode: 'costCode', scheduledCompletion: 'scheduledCompletion' };
@@ -168,7 +173,7 @@ function isSafeCorrection(kind, c) {
 // the row applies. Safe mode is the blank start date only — never money.
 function writable(kind, row, mode, fields) {
   const allowed = kind === 'jobs'
-    ? Object.assign({ contractPrice: 1, coordinates: 1 }, JOB_FIELD_KEYS)
+    ? Object.assign({ contractPrice: 1, coordinates: 1, market: 1 }, JOB_FIELD_KEYS)
     : kind === 'changeOrders' ? CO_FIELDS
     : kind === 'purchaseOrders' ? PO_FIELDS
     : kind === 'bills' ? BILL_FIELDS
@@ -227,7 +232,7 @@ function pickedHeldBack(kind, row, mode, fields) {
   // A LEAD's notes: not money, but a REPLACEMENT for something a person may
   // have written in P86, so it reaches a write only through here — never
   // through safe mode and never through a press that names no fields.
-  const allowed = kind === 'jobs' ? Object.assign({ jobNumber: 1 }, JOB_CUSTOM_KEYS) : kind === 'clients' ? CLIENT_COLUMNS
+  const allowed = kind === 'jobs' ? Object.assign({ jobNumber: 1, market: 1 }, JOB_CUSTOM_KEYS) : kind === 'clients' ? CLIENT_COLUMNS
     : Object.assign({ notes: 1 }, LEAD_REVENUE_COLUMNS);
   const pick = new Set(fields);
   return (row.heldBack || []).filter((h) => h.applicable === true && allowed[h.field] && pick.has(h.field));
@@ -250,7 +255,7 @@ async function applyJob(db, orgId, row, mode, fields) {
   // fill to a job it read with no point; a geocode that lands after that read
   // is visible here and nowhere else, and a column not selected here reads as
   // undefined — which would pass the test and overwrite it.
-  const cur = await db.query('SELECT id, data, bt_job_id, geocode_lat, geocode_lng, geocode_status FROM jobs WHERE id = $1 AND organization_id = $2 FOR UPDATE', [row.p86.id, orgId]);
+  const cur = await db.query('SELECT id, data, bt_job_id, geocode_lat, geocode_lng, geocode_status, market_id FROM jobs WHERE id = $1 AND organization_id = $2 FOR UPDATE', [row.p86.id, orgId]);
   if (!cur.rows.length) return { skipped: 'The P86 job is no longer there.' };
   const job = cur.rows[0];
   const linkedTo = norm(job.bt_job_id);
@@ -262,7 +267,17 @@ async function applyJob(db, orgId, row, mode, fields) {
   const applied = [];
   const stale = [];
   let point = null;
+  let marketTo = null;
   for (const c of writable('jobs', row, mode, fields)) {
+    if (c.field === 'market') {
+      // A FILL: only while the job still has no market, and only to a market
+      // that is still this organisation's.
+      const m = job.market_id == null ? await btMarket.ownMarket(db, orgId, c.value) : null;
+      if (!m) { stale.push(c.label || c.field); continue; }
+      marketTo = m; data.market = m.name;
+      applied.push({ field: c.field, from: c.from, to: m.name });
+      continue;
+    }
     if (c.field === 'coordinates') {
       // Re-proved against the LOCKED row: a geocode that arrived between the
       // read and the write wins, and this becomes stale rather than an overwrite.
@@ -290,6 +305,14 @@ async function applyJob(db, orgId, row, mode, fields) {
   for (const h of pickedHeldBack('jobs', row, mode, fields)) {
     // A CUSTOM field ticked on purpose: P86's value is replaced only if it is
     // still the one the preview showed.
+    if (h.field === 'market') {
+      // Ticked: moved only while P86 still files it where the preview showed.
+      const m = String(job.market_id == null ? '' : job.market_id) === String(h.p86Id || '') ? await btMarket.ownMarket(db, orgId, h.value) : null;
+      if (!m) { stale.push(h.label || h.field); continue; }
+      marketTo = m; data.market = m.name;
+      applied.push({ field: h.field, from: h.p86, to: m.name });
+      continue;
+    }
     if (JOB_CUSTOM_KEYS[h.field]) {
       const key = JOB_CUSTOM_KEYS[h.field];
       if (norm(data[key]) !== norm(h.p86)) { stale.push(h.label || h.field); continue; }
@@ -322,6 +345,9 @@ async function applyJob(db, orgId, row, mode, fields) {
   if (point) data.geocodeSource = 'buildertrend';
   await db.query('UPDATE jobs SET data = $1::jsonb, bt_job_id = $2, updated_at = NOW() WHERE id = $3 AND organization_id = $4',
     [JSON.stringify(data), btId, job.id, orgId]);
+  if (marketTo) {
+    await db.query('UPDATE jobs SET market_id = $1 WHERE id = $2 AND organization_id = $3', [marketTo.id, job.id, orgId]);
+  }
   if (point) {
     // Written the way every other job geocode is (routes/job-routes.js), so the
     // map TRUSTS it: status 'ok', and geocode_address stamped with the job's
@@ -1505,12 +1531,26 @@ async function applyClient(db, orgId, row, mode, fields) {
   const applied = [];
   const stale = [];
   for (const c of writable('clients', row, mode, fields)) {
+    if (c.field === 'market') {
+      const m = client.market_id == null ? await btMarket.ownMarket(db, orgId, c.value) : null;
+      if (!m) { stale.push(c.label || c.field); continue; }
+      sets.market_id = m.id; sets.market = m.name;
+      applied.push({ field: c.field, from: c.from, to: m.name });
+      continue;
+    }
     const col = CLIENT_COLUMNS[c.field];
     if (norm(client[col]) !== norm(c.from)) { stale.push(c.label || c.field); continue; }
     sets[col] = c.to;
     applied.push({ field: c.field, from: c.from, to: c.to });
   }
   for (const h of pickedHeldBack('clients', row, mode, fields)) {
+    if (h.field === 'market') {
+      const m = String(client.market_id == null ? '' : client.market_id) === String(h.p86Id || '') ? await btMarket.ownMarket(db, orgId, h.value) : null;
+      if (!m) { stale.push(h.label || h.field); continue; }
+      sets.market_id = m.id; sets.market = m.name;
+      applied.push({ field: h.field, from: h.p86, to: m.name });
+      continue;
+    }
     const col = CLIENT_COLUMNS[h.field];
     if (norm(client[col]) !== norm(h.p86)) { stale.push(h.label || h.field); continue; }
     sets[col] = h.value;
@@ -1584,7 +1624,9 @@ async function createClient(db, orgId, row) {
       + ' WHERE id = $' + (custom.length + 1) + ' AND organization_id = $' + (custom.length + 2),
       custom.map((f) => match.fieldText(bt[f.field], f.multiline)).concat([id, orgId]));
   }
-  return { created: id, fields: ['name'].concat(['email', 'phone', 'cell', 'street', 'city', 'state', 'zip'].filter((k) => val(bt[k]))).concat(custom.map((f) => f.field)) };
+  const m = bt.market ? await btMarket.ownMarket(db, orgId, bt.market.id) : null;
+  if (m) await db.query('UPDATE clients SET market_id = $1, market = $2 WHERE id = $3 AND organization_id = $4', [m.id, m.name, id, orgId]);
+  return { created: id, fields: ['name'].concat(['email', 'phone', 'cell', 'street', 'city', 'state', 'zip'].filter((k) => val(bt[k]))).concat(custom.map((f) => f.field)).concat(m ? ['market'] : []) };
 }
 
 async function createLead(db, orgId, row, user) {
@@ -1675,11 +1717,14 @@ async function createJob(db, orgId, row, user) {
   data.address = [data.street_address, data.city, data.state, data.zip].filter(Boolean).join(', ');
   const id = genId('job');
   data.id = id;
+  const mkt = bt.market ? await btMarket.ownMarket(db, orgId, bt.market.id) : null;
+  if (mkt) data.market = mkt.name;
   const lat = bt.latitude; const lng = bt.longitude;
   const onMap = lat != null && lng != null && !(lat === 0 && lng === 0);
   if (onMap) data.geocodeSource = 'buildertrend';
   await db.query('INSERT INTO jobs (id, owner_id, data, organization_id, bt_job_id, client_id) VALUES ($1, $2, $3::jsonb, $4, $5, $6)',
     [id, user && user.id != null ? user.id : null, JSON.stringify(data), orgId, btId, client ? client.id : null]);
+  if (mkt) await db.query('UPDATE jobs SET market_id = $1 WHERE id = $2 AND organization_id = $3', [mkt.id, id, orgId]);
   if (onMap) {
     // Born on the map, with no geocoding call spent on it.
     await db.query(
@@ -2177,4 +2222,16 @@ async function handle(req, res, deps) {
   }
 }
 
-module.exports = { handle, handleArchiveList, apply, rowsFor, parseInput, writable, pickedHeldBack, p86JobStatus, ACTION_PARAM, grantPoSubAccessAfterCommit };
+// The press lock, for the whole-sync run (auto-sync.js): while a run holds it
+// every press answers 429, and a run will not start while a press is writing.
+// Two writers interleaving would each re-read a world the other is changing.
+function claim() {
+  if (inFlight) return false;
+  inFlight = true;
+  return true;
+}
+function release() { inFlight = false; }
+function busy() { return inFlight; }
+
+module.exports = { handle, handleArchiveList, apply, rowsFor, parseInput, writable, pickedHeldBack, p86JobStatus, ACTION_PARAM, grantPoSubAccessAfterCommit,
+  claim, release, busy, geocodeLeadLater };

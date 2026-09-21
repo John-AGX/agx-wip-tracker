@@ -542,6 +542,22 @@ router.put('/:id', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), a
     if (req.params.id !== 'me') return res.status(400).json({ error: 'Buildertrend undo runs on /me only.' });
     return require('../services/clickr/sync-journal').handleUndo(req, res, { pool });
   }
+  // ?action=buildertrend-market-map — say which P86 market a Buildertrend
+  // Market OPTION means (Buildertrend sends the option's id, not its name).
+  // Kept in organizations.settings.btMarketMap. See services/clickr/bt-market.js.
+  if (req.query && req.query.action === 'buildertrend-market-map') {
+    if (req.params.id !== 'me') return res.status(400).json({ error: 'Market mapping runs on /me only.' });
+    return require('../services/clickr/bt-market').handleMap(req, res, { pool });
+  }
+  // ?action=buildertrend-run-now — run the whole Buildertrend sync ONCE, now,
+  // the way the unattended run does it, whether or not BT_AUTO_SYNC is on. It
+  // answers 202 with the run's id as soon as the run has started; progress and
+  // the result are read from ?view=buildertrend-history. See
+  // services/clickr/auto-sync.js.
+  if (req.query && req.query.action === 'buildertrend-run-now') {
+    if (req.params.id !== 'me') return res.status(400).json({ error: 'A Buildertrend run starts on /me only.' });
+    return require('../services/clickr/auto-sync').handleRunNow(req, res, { pool });
+  }
   try {
     const targetId = assertOrgScope(req, req.params.id);
     const updates = [];

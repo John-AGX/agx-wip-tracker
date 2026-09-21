@@ -2411,14 +2411,95 @@ describe('OVERVIEW — js/bt-sync-preview.js', () => {
     T.setTab('overview');
   });
 
-  test('the automatic sync has a place to land, and the page says there is not one yet', () => {
+  test('RUN SYNC NOW sits first on the Overview, and says what it does before it is pressed', () => {
     T.setTab('overview');
+    T.setHistory({ live: { running: false, live: null, last: null }, runs: [] });
     const html = T.render(page());
     expect(html).toContain('data-btp-run-slot="1"');
-    expect(html).toContain('No sync runs on its own yet');
-    expect(html).toContain('its last run, what it changed and its undo appear in this block');
+    expect(html).toMatch(/data-btp-run-now="1">Run sync now</);
+    expect(html).toContain('No run has changed anything yet.');
     // It is the FIRST thing on the tab, above everything a person presses.
     expect(html.indexOf('data-btp-run-slot="1"')).toBeLessThan(html.indexOf('data-btp-dash="dependencies"'));
+  });
+
+  test('while a run is going the button is off and the page says where it is; runs carry their own Undo', () => {
+    T.setTab('overview');
+    T.setHistory({
+      live: { running: true, live: { runId: 'r3', dataset: 'clients', done: ['jobs', 'leads'] }, last: null },
+      runs: [
+        { id: 'r3', trigger: 'manual', started_at: '2026-09-21T10:00:00Z', finished_at: null, changeCount: 4, undoneCount: 0, records: 2 },
+        { id: 'r2', trigger: 'manual', started_at: '2026-09-21T09:00:00Z', finished_at: '2026-09-21T09:01:00Z', actor: '<b>Ana</b>', changeCount: 12, createdCount: 3, undoneCount: 0, records: 9 },
+        { id: 'r1', trigger: 'press', dataset: 'jobs', mode: 'safe', started_at: '2026-09-20T09:00:00Z', finished_at: '2026-09-20T09:00:05Z', undone_at: '2026-09-20T10:00:00Z', changeCount: 2, undoneCount: 2, records: 2 },
+      ],
+    });
+    const html = T.render(page());
+    expect(html).toMatch(/data-btp-run-now="1" disabled>Running/);
+    expect(html).toContain('Running \u2014 on Clients (2 of 8 done)');
+    // A finished, untaken-back run offers Undo (disabled while another runs);
+    // the running one and the taken-back one do not.
+    expect(html).toMatch(/data-btp-undo-run="r2" disabled>Undo run</);
+    expect(html).not.toContain('data-btp-undo-run="r3"');
+    expect(html).not.toContain('data-btp-undo-run="r1"');
+    expect(html).toContain('taken back');
+    // A name out of the users table is escaped like every other server string.
+    expect(html).not.toContain('<b>Ana</b>');
+    expect(html).toContain('&lt;b&gt;Ana&lt;/b&gt;');
+    T.setHistory(null);
+  });
+
+  test('a run a restart cut off is shown as interrupted and CAN be taken back', () => {
+    T.setTab('overview');
+    T.setHistory({ live: { running: false, live: null, last: null }, runs: [
+      { id: 'rx', trigger: 'manual', started_at: '2026-09-21T08:00:00Z', finished_at: null, changeCount: 40, undoneCount: 0, records: 30 },
+    ] });
+    const html = T.render(page());
+    expect(html).toContain('interrupted before it finished');
+    expect(html).toMatch(/data-btp-undo-run="rx">Undo run</);
+    T.setHistory(null);
+  });
+
+  test('the run\u2019s confirmation counts creates, fills, replacements and money from the preview on screen', () => {
+    const linked = (o) => Object.assign({ bt: { btId: '1', raw: 'x' }, class: 'conflict', rung: 'Buildertrend ID', p86: { id: 'p1' },
+      corrections: [], btBlank: [], heldBack: [], flags: [], candidates: [], notes: [] }, o);
+    const data = page({ clients: ds('clients', { rows: [
+      linked({ corrections: [{ field: 'companyName', kind: 'fill', to: 'CMG' }, { field: 'cmEmail', kind: 'fill', to: 'a@b.test' }] }),
+      linked({ bt: { btId: '2', raw: 'y' }, heldBack: [{ field: 'companyName', reason: 'differs', applicable: true }, { field: 'x', reason: 'differs', applicable: false }] }),
+    ] }), purchaseOrders: ds('purchaseOrders', { rows: [
+      linked({ bt: { btId: '9', raw: 'po' }, heldBack: [{ field: 'cost', money: true, applicable: true }, { field: 'close', reason: 'permanent', applicable: true }] }),
+    ] }) });
+    T.render(data);
+    expect(T.runPlan()).toEqual({ creates: 0, fills: 2, replaces: 1, money: 1, permanent: 1 });
+    const text = T.runConfirmText();
+    expect(text).toContain('fill about 2 blank fields');
+    expect(text).toContain('replace about 1 value Project 86 holds differently');
+    expect(text).toContain('apply about 1 money change');
+    expect(text).toContain('a purchase order is never closed by a run (1 left for you)');
+    expect(text).toContain('Undo run takes the whole of it back');
+  });
+
+  test('MARKET: each Buildertrend option with its evidence, the suggestion marked, the mapped one chosen', () => {
+    const data = page();
+    data.markets = [{ id: '1', name: 'Tampa', active: true }, { id: '2', name: 'Orlando', active: true }];
+    const cds = ds('clients', { marketOptions: [
+      { optionId: '5001', records: 40, linked: 30, p86: [{ marketId: '1', name: 'Tampa', count: 28 }], unfiled: 2, states: [{ value: 'FL', count: 40 }], cities: [{ value: 'Tampa', count: 30 }], suggestion: '1', mappedTo: null },
+      { optionId: '5002', records: 9, linked: 0, p86: [], unfiled: 0, states: [{ value: 'CO', count: 9 }], cities: [], suggestion: null, mappedTo: '2' },
+      { optionId: '<i>5003</i>', records: 1, linked: 0, p86: [], unfiled: 0, states: [], cities: [], suggestion: null, mappedTo: null, mappedGone: true },
+    ] });
+    data.datasets.clients = cds;
+    T.render(data);
+    const html = T.marketPanelHTML(cds);
+    expect(html).toContain('2 of 3 Buildertrend options not mapped yet');
+    expect(html).toContain('Tampa 28, no market 2');
+    expect(html).toContain('>Tampa \u2014 suggested</option>');
+    // The suggestion is shown, never chosen for you.
+    expect(html).not.toMatch(/value="1" selected/);
+    expect(html).toMatch(/data-btp-mkt-opt="5002"[\s\S]*?value="2" selected>Orlando</);
+    expect(html).toContain('Was mapped to a market that no longer exists');
+    expect(html).not.toContain('<i>5003</i>');
+  });
+
+  test('MARKET: no options, no panel', () => {
+    expect(T.marketPanelHTML(ds('jobs'))).toBe('');
   });
 
   test('every server string the Overview prints is escaped', () => {

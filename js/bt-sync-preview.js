@@ -100,6 +100,22 @@
   var _archiveErr = null;
   var _archiveNote = null;
   var NOUN = { jobs: 'job', leads: 'lead', clients: 'client', changeOrders: 'change order', purchaseOrders: 'purchase order', bills: 'bill', estimates: 'estimate', tasks: 'task' };
+  // The whole-sync run (server/services/clickr/auto-sync.js) and the market
+  // mapping (bt-market.js). History is read in its summary form: counts per run,
+  // not every change, because it is polled while a run is going.
+  var HISTORY_ENDPOINT = '/api/admin/organizations/me?view=buildertrend-history&summary=1';
+  var RUN_ENDPOINT = '/api/admin/organizations/me?action=buildertrend-run-now';
+  var UNDO_ENDPOINT = '/api/admin/organizations/me?action=buildertrend-undo';
+  var MARKET_ENDPOINT = '/api/admin/organizations/me?action=buildertrend-market-map';
+  var _hist = null;          // { live: { running, live, last }, runs: [...] }
+  var _histErr = null;
+  var _histTimer = null;
+  var _wasRunning = false;
+  var _runStarting = false;
+  var _undoing = null;       // the run id being taken back
+  var _runNote = null;       // { ok, text }
+  var _mktSaving = null;     // 'clients:<optionId>'
+  var _mktNote = { jobs: null, clients: null };
   var _tab = 'overview';
   try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'overview' || _savedTab === 'jobs' || _savedTab === 'leads' || _savedTab === 'clients' || _savedTab === 'changeOrders' || _savedTab === 'purchaseOrders' || _savedTab === 'bills' || _savedTab === 'estimates' || _savedTab === 'tasks' || _savedTab === 'archive') _tab = _savedTab; } catch (e) { /* storage blocked */ }
 
@@ -230,6 +246,21 @@
       '.btp-code{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;overflow-wrap:anywhere;}',
       '.btp-run{border:1px dashed var(--border);border-radius:10px;background:var(--surface);padding:10px 12px;margin:0 0 14px;color:var(--text-dim);font-size:12px;line-height:1.5;}',
       '.btp-run b{color:var(--text);}',
+      '.btp-run-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 6px;}',
+      '.btp-run-head b{font-size:13px;}',
+      '.btp-run-live{margin:8px 0 0;padding:7px 10px;border-radius:8px;background:var(--surface2,rgba(127,127,127,.08));color:var(--text);}',
+      '.btp-run-list{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:4px;}',
+      '.btp-run-list li{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:5px 0;border-top:1px solid var(--border);}',
+      '.btp-run-list .btp-btn{padding:3px 9px;font-size:11px;}',
+      '.btp-mkt{border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:8px 12px;margin:0 0 12px;font-size:12px;color:var(--text-dim);}',
+      '.btp-mkt summary{cursor:pointer;color:var(--text);}',
+      '.btp-mkt-wrap{overflow-x:auto;margin:8px 0 0;}',
+      '.btp-mkt table{border-collapse:collapse;width:100%;min-width:560px;}',
+      '.btp-mkt th,.btp-mkt td{text-align:left;padding:5px 8px;border-top:1px solid var(--border);vertical-align:top;}',
+      '.btp-mkt th{font-weight:600;color:var(--text-dim);font-size:11px;}',
+      '.btp-mkt td{color:var(--text);}',
+      '.btp-mkt select{width:170px;max-width:100%;}',
+      '.btp-mkt-opt{font-family:ui-monospace,Menlo,Consolas,monospace;}',
       '.btp-dash-sec{border:1px solid var(--border);border-radius:10px;background:var(--card-bg);padding:12px 14px;margin:0 0 16px;min-width:0;}',
       '.btp-dash-h{font-size:15px;font-weight:700;}',
       '.btp-dash-w{color:var(--text-dim);font-size:12px;line-height:1.45;margin:3px 0 10px;}',
@@ -1112,6 +1143,7 @@
         ds.mapping.missingKeys.map(esc).join(', ') + '</b>. Nothing can be proposed from ' + (ds.mapping.missingKeys.length > 1 ? 'them' : 'it') + '.</div>';
     }
 
+    if (ds.classified) html += marketPanelHTML(ds);
     if (ds.classified) {
       html += sinceHTML(ds);
       var cc = countsFor(ds, ui);
@@ -1631,10 +1663,200 @@
   // runStatusHTML() renders its last run, what it wrote and its undo in place
   // of this sentence, reading its own field off the response. Nothing below
   // moves, because nothing below reads this block.
+  // ── THE WHOLE-SYNC RUN ─────────────────────────────────────────────────
+  // What pressing "Run sync now" would do, read off the preview on screen. The
+  // run re-reads Buildertrend first, so these are "about" numbers.
+  function runPlan() {
+    var out = { creates: 0, fills: 0, replaces: 0, money: 0, permanent: 0 };
+    if (!_data || !_data.datasets) return out;
+    DS_ORDER.forEach(function (k) {
+      var ds = _data.datasets[k];
+      if (!ds || !ds.classified) return;
+      out.creates += createCount(ds);
+      (ds.rows || []).forEach(function (r) {
+        if (r['class'] !== 'matched' && r['class'] !== 'conflict') return;
+        if (!r.bt || r.bt.btId == null || r.bt.btId === '') return;
+        (r.corrections || []).forEach(function (c) { if (c.kind === 'fill') out.fills++; else if (isMoneyItem(c)) out.money++; else out.replaces++; });
+        (r.heldBack || []).forEach(function (h) {
+          if (h.applicable !== true) return;
+          if (h.reason === 'permanent') out.permanent++;
+          else if (isMoneyItem(h)) out.money++;
+          else out.replaces++;
+        });
+      });
+    });
+    return out;
+  }
+
+  function runConfirmText() {
+    var p = runPlan();
+    var parts = [];
+    if (p.creates) parts.push('create about ' + p.creates + ' record' + (p.creates === 1 ? '' : 's') + ' Buildertrend has and Project 86 does not (jobs only when Open or Warranty)');
+    if (p.fills) parts.push('fill about ' + p.fills + ' blank field' + (p.fills === 1 ? '' : 's'));
+    if (p.replaces) parts.push('replace about ' + p.replaces + ' value' + (p.replaces === 1 ? '' : 's') + ' Project 86 holds differently with Buildertrend\u2019s');
+    if (p.money) parts.push('apply about ' + p.money + ' money change' + (p.money === 1 ? '' : 's') + ' (prices, costs, amounts)');
+    return 'Run the whole Buildertrend sync now? ' +
+      (parts.length ? 'From the preview on screen it would ' + parts.join('; ') + ', and link every confident match on the way. ' : 'It links every confident match and applies whatever Buildertrend has changed. ') +
+      'Ambiguous rows and possible duplicates are never touched, and a purchase order is never closed by a run' + (p.permanent ? ' (' + p.permanent + ' left for you)' : '') + '. ' +
+      'Everything it does is recorded as one run, and Undo run takes the whole of it back. It re-reads Buildertrend first, so the real numbers can differ a little.';
+  }
+
+  var TRIGGER = { manual: 'Run now', schedule: 'Automatic', press: 'Press' };
+
+  function runLine(r) {
+    var when = r.started_at ? new Date(r.started_at).toLocaleString() : '';
+    var what = (TRIGGER[r.trigger] || esc(r.trigger || 'Run')) + (r.trigger === 'press' && r.dataset ? ' \u00b7 ' + esc(r.dataset) + (r.mode ? ' ' + esc(r.mode) : '') : '');
+    var n = (r.changeCount || 0) + ' change' + (r.changeCount === 1 ? '' : 's') + (r.createdCount ? ', ' + r.createdCount + ' created' : '') + (r.records ? ' on ' + r.records + ' record' + (r.records === 1 ? '' : 's') : '');
+    // Running means THE run this server is doing now. Any other run with no
+    // finish time was cut off (a deploy restarts the server mid-run), and
+    // what it wrote before that is journalled like any other run's, so it can
+    // be taken back.
+    var live = isRunning() && _hist.live.live && _hist.live.live.runId === r.id;
+    var state = r.undone_at ? ' \u00b7 taken back' + (r.refusedCount ? ' (' + r.refusedCount + ' left \u2014 changed since)' : '')
+      : live ? ' \u00b7 running' : (!r.finished_at ? ' \u00b7 interrupted before it finished' : '');
+    var canUndo = !r.undone_at && !live && (r.changeCount || 0) > (r.undoneCount || 0);
+    return '<li><span><b>' + what + '</b> \u00b7 ' + esc(when) + (r.actor ? ' \u00b7 ' + esc(r.actor) : '') + ' \u00b7 ' + n + state + '</span>' +
+      (canUndo ? '<button type="button" class="btp-btn" data-btp-undo-run="' + esc(r.id) + '"' + (_undoing || _runStarting || isRunning() ? ' disabled' : '') + '>' + (_undoing === r.id ? 'Taking back\u2026' : 'Undo run') + '</button>' : '') + '</li>';
+  }
+
+  function isRunning() { return !!(_hist && _hist.live && _hist.live.running); }
+
   function runStatusHTML() {
-    return '<div class="btp-run" data-btp-run-slot="1"><b>Every change here is one you press.</b> ' +
-      'No sync runs on its own yet, so nothing below is a record of an automatic write and there is nothing to undo. ' +
-      'When an automatic sync arrives, its last run, what it changed and its undo appear in this block.</div>';
+    var live = _hist && _hist.live;
+    var running = isRunning();
+    var html = '<div class="btp-run" data-btp-run-slot="1">';
+    html += '<div class="btp-run-head"><b>Run the whole sync now</b>' +
+      '<button type="button" class="btp-btn btp-apply" data-btp-run-now="1"' + (running || _runStarting || _applying || _undoing ? ' disabled' : '') + '>' +
+      (running ? 'Running\u2026' : _runStarting ? 'Starting\u2026' : 'Run sync now') + '</button></div>';
+    html += '<div>Does in one press what the automatic sync does: links every confident match, fills what Project 86 is missing, creates what Buildertrend has and Project 86 does not, and applies Buildertrend\u2019s changes \u2014 money included. Every change is recorded, and any run can be taken back from here.</div>';
+    if (running && live.live) {
+      var l = live.live;
+      html += '<div class="btp-run-live">Running' + (l.dataset ? ' \u2014 on ' + esc(dsLabel(l.dataset)) : '') + ' (' + (l.done ? l.done.length : 0) + ' of ' + DS_ORDER.length + ' done). You can leave this page; it carries on.</div>';
+    } else if (live && live.last) {
+      var t = live.last.totals || {};
+      html += '<div class="btp-run-live">Last ' + (live.last.trigger === 'manual' ? 'run' : 'automatic run') + ': ' +
+        (t.created || 0) + ' created, ' + (t.applied || 0) + ' updated, ' + (t.linked || 0) + ' linked' + (t.failed ? ', ' + t.failed + ' failed' : '') +
+        (live.last.permanentLeft ? ' \u00b7 ' + live.last.permanentLeft + ' purchase-order close' + (live.last.permanentLeft === 1 ? '' : 's') + ' left for you' : '') +
+        (live.last.errors && live.last.errors.length ? ' \u00b7 not read: ' + live.last.errors.map(function (e) { return esc(dsLabel(e.dataset)); }).join(', ') : '') +
+        (live.last.dropped ? ' \u00b7 nothing needed changing' : '') + '.</div>';
+    }
+    if (_runNote) html += '<div class="btp-sentence ' + (_runNote.ok ? 'is-ok' : 'is-bad') + '">' + esc(_runNote.text) + '</div>';
+    if (_histErr) html += '<div class="btp-sentence is-bad">' + esc(_histErr) + '</div>';
+    var runs = (_hist && _hist.runs) || [];
+    if (runs.length) html += '<ul class="btp-run-list">' + runs.slice(0, 6).map(runLine).join('') + '</ul>';
+    else if (_hist) html += '<div class="btp-run-live">No run has changed anything yet.</div>';
+    return html + '</div>';
+  }
+
+  function loadHistory() {
+    if (!(window.p86Api && typeof window.p86Api.get === 'function')) return;
+    if (_histTimer) { clearTimeout(_histTimer); _histTimer = null; }
+    window.p86Api.get(HISTORY_ENDPOINT).then(function (h) {
+      _hist = h || null;
+      _histErr = null;
+      var running = isRunning();
+      if (_wasRunning && !running) {
+        // Just finished: what it changed is now on the P86 side of every tab.
+        _runNote = null;
+        load({ keepMarker: true });
+      }
+      _wasRunning = running;
+      if (running) _histTimer = setTimeout(loadHistory, 3000);
+      if (_tab === 'overview') paint();
+    }).catch(function (e) {
+      _histErr = 'The run history could not be read' + (e && e.status ? ' (HTTP ' + e.status + ')' : '') + '.';
+      if (_tab === 'overview') paint();
+    });
+  }
+
+  function startRun() {
+    if (_runStarting || isRunning() || !(window.p86Api && typeof window.p86Api.put === 'function')) return;
+    _runStarting = true;
+    _runNote = null;
+    paint();
+    window.p86Api.put(RUN_ENDPOINT, {}).then(function () {
+      _runStarting = false;
+      _wasRunning = true;
+      _runNote = { ok: true, text: 'Started. Progress shows here; when it finishes, every tab reloads with what it changed.' };
+      loadHistory();
+    }).catch(function (e) {
+      _runStarting = false;
+      _runNote = { ok: false, text: e && e.data && typeof e.data.error === 'string' ? e.data.error : 'The run could not start' + (e && e.status ? ' (HTTP ' + e.status + ')' : '') + '.' };
+      paint();
+    });
+  }
+
+  function undoRun(runId) {
+    if (_undoing || !(window.p86Api && typeof window.p86Api.put === 'function')) return;
+    _undoing = runId;
+    paint();
+    window.p86Api.put(UNDO_ENDPOINT, { runId: runId }).then(function (res) {
+      _undoing = null;
+      var n = (res && res.undone) || 0;
+      var left = (res && res.refused) || 0;
+      _runNote = { ok: true, text: 'Took back ' + n + ' change' + (n === 1 ? '' : 's') + '.' + (left ? ' ' + left + ' left as they are: somebody changed them after the run, or something now depends on a record it created.' : '') };
+      loadHistory();
+      load({ keepMarker: true });
+    }).catch(function (e) {
+      _undoing = null;
+      _runNote = { ok: false, text: e && e.data && typeof e.data.error === 'string' ? e.data.error : 'The undo failed' + (e && e.status ? ' (HTTP ' + e.status + ')' : '') + '.' };
+      paint();
+    });
+  }
+
+  // ── MARKET ─────────────────────────────────────────────────────────────
+  // Buildertrend sends a market as an OPTION number, not a name, so a person
+  // says once which P86 market each option is. The evidence is what the
+  // already-linked records say.
+  function marketEvidence(o) {
+    var parts = (o.p86 || []).map(function (x) { return esc(x.name) + ' ' + x.count; });
+    if (o.unfiled) parts.push('no market ' + o.unfiled);
+    return parts.length ? parts.join(', ') : (o.linked ? 'none filed yet' : 'none linked yet');
+  }
+
+  function marketPanelHTML(ds) {
+    var opts = ds.marketOptions || [];
+    var markets = (_data && _data.markets) || [];
+    if (!opts.length) return '';
+    var unmapped = opts.filter(function (o) { return !o.mappedTo; }).length;
+    var html = '<details class="btp-mkt" data-btp-mkt="' + esc(ds.key) + '"' + (unmapped ? ' open' : '') + '><summary><b>Market</b> \u2014 ' +
+      (unmapped ? unmapped + ' of ' + opts.length + ' Buildertrend option' + (opts.length === 1 ? '' : 's') + ' not mapped yet' : 'all ' + opts.length + ' Buildertrend option' + (opts.length === 1 ? '' : 's') + ' mapped') + '</summary>';
+    html += '<div style="margin:6px 0 0;">Buildertrend sends a market as an option number, never its name. Say which Project 86 market each one is. Until you do, nothing is filled from it; once you do, a ' + esc(NOUN[ds.key] || 'record') + ' with no market gets this one, and one filed under a different market waits for a tick.</div>';
+    if (!markets.length) html += '<div class="btp-sentence is-warn">This organization has no markets yet. Add them in Admin first.</div>';
+    html += '<div class="btp-mkt-wrap"><table><thead><tr><th>Buildertrend option</th><th>Records</th><th>Linked ones are in P86 as</th><th>Buildertrend says they are in</th><th>Project 86 market</th></tr></thead><tbody>';
+    opts.forEach(function (o) {
+      var where = (o.states || []).map(function (x) { return esc(x.value) + ' ' + x.count; }).join(', ') + (o.cities && o.cities.length ? '<br><span style="color:var(--text-dim);">' + o.cities.map(function (x) { return esc(x.value); }).join(', ') + '</span>' : '');
+      var sel = '<select data-btp-mkt-kind="' + esc(ds.key) + '" data-btp-mkt-opt="' + esc(o.optionId) + '"' + (_mktSaving || !markets.length ? ' disabled' : '') + ' aria-label="Project 86 market for Buildertrend option ' + esc(o.optionId) + '">' +
+        '<option value="">\u2014 not mapped \u2014</option>' + markets.map(function (m) {
+          var chosen = o.mappedTo != null && String(o.mappedTo) === String(m.id);
+          var sug = !o.mappedTo && o.suggestion != null && String(o.suggestion) === String(m.id);
+          return '<option value="' + esc(m.id) + '"' + (chosen ? ' selected' : '') + '>' + esc(m.name) + (sug ? ' \u2014 suggested' : '') + (m.active === false ? ' (inactive)' : '') + '</option>';
+        }).join('') + '</select>';
+      html += '<tr><td class="btp-mkt-opt">' + esc(o.optionId) + '</td><td>' + esc(o.records) + (o.linked ? ' <span style="color:var(--text-dim);">(' + o.linked + ' linked)</span>' : '') + '</td>' +
+        '<td>' + marketEvidence(o) + '</td><td>' + (where || '\u2014') + '</td><td>' + sel +
+        (o.mappedGone ? '<div class="btp-sentence is-warn">Was mapped to a market that no longer exists. Choose again.</div>' : '') +
+        (_mktSaving === ds.key + ':' + o.optionId ? ' <span>Saving\u2026</span>' : '') + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+    var note = _mktNote[ds.key];
+    if (note) html += '<div class="btp-sentence ' + (note.ok ? 'is-ok' : 'is-bad') + '">' + esc(note.text) + '</div>';
+    return html + '</details>';
+  }
+
+  function saveMarket(kind, optionId, marketId) {
+    if (_mktSaving || !(window.p86Api && typeof window.p86Api.put === 'function')) return;
+    _mktSaving = kind + ':' + optionId;
+    _mktNote[kind] = null;
+    repaint(kind);
+    window.p86Api.put(MARKET_ENDPOINT, { kind: kind, optionId: optionId, marketId: marketId || null }).then(function (res) {
+      _mktSaving = null;
+      _mktNote[kind] = { ok: true, text: res && res.market ? 'Option ' + optionId + ' is ' + res.market + '. Reloading to show what it fills.' : 'Option ' + optionId + ' is no longer mapped.' };
+      load({ keepMarker: true });
+    }).catch(function (e) {
+      _mktSaving = null;
+      _mktNote[kind] = { ok: false, text: e && e.data && typeof e.data.error === 'string' ? e.data.error : 'The mapping could not be saved' + (e && e.status ? ' (HTTP ' + e.status + ')' : '') + '.' };
+      repaint(kind);
+    });
   }
 
   function depHTML() {
@@ -1876,6 +2098,17 @@
   function wire() {
     var r = _host.querySelector('[data-btp-refresh]');
     if (r) r.addEventListener('click', function () { load(); });
+    var runNow = _host.querySelector('[data-btp-run-now]');
+    if (runNow) runNow.addEventListener('click', function () { askThen(runConfirmText(), 'Run sync now', startRun); });
+    Array.prototype.forEach.call(_host.querySelectorAll('[data-btp-undo-run]'), function (b) {
+      b.addEventListener('click', function () {
+        var id = b.getAttribute('data-btp-undo-run');
+        askThen('Take back everything this run did? Each value goes back to what it was, unless somebody has changed it since; each record it created is deleted, unless something now depends on it.', 'Undo run', function () { undoRun(id); }, true);
+      });
+    });
+    Array.prototype.forEach.call(_host.querySelectorAll('[data-btp-mkt-opt]'), function (sel) {
+      sel.addEventListener('change', function () { saveMarket(sel.getAttribute('data-btp-mkt-kind'), sel.getAttribute('data-btp-mkt-opt'), sel.value); });
+    });
     // Every counted button on the Overview carries its own target, and the
     // target is what countTarget() measured.
     Array.prototype.forEach.call(_host.querySelectorAll('[data-btp-go]'), function (b) {
@@ -1992,6 +2225,7 @@
     if (!host) return;
     if (_data || _loading) paint();
     else load();
+    loadHistory();
   }
 
   window.p86BtSyncPreview = {
@@ -2018,6 +2252,10 @@
       applyResultText: applyResultText,
       safeConfirmText: safeConfirmText,
       rowConfirm: rowConfirm,
+      runPlan: runPlan,
+      runConfirmText: runConfirmText,
+      marketPanelHTML: marketPanelHTML,
+      setHistory: function (h) { _hist = h; _histErr = null; },
       pickedFields: pickedFields,
       createAllConfirmText: createAllConfirmText,
       // The Overview: each figure it prints, and the click that goes with it.

@@ -34,6 +34,12 @@ describe('the switch', () => {
     expect(r.skipped).toMatch(/BT_AUTO_SYNC is not on/);
   });
 
+  test('a MANUAL run is not held back by the switch \u2014 the switch is for the clock, not for a person', async () => {
+    const r = await auto.runOnce({ env: {}, pool: null, manual: true });
+    // Past the switch, stopped only by the missing key.
+    expect(r.skipped).toMatch(/No Clickr key/);
+  });
+
   test('on, but with no Clickr key, is still a refusal and not a crash', async () => {
     const r = await auto.runOnce({ env: { BT_AUTO_SYNC: 'on' }, pool: null });
     expect(r.skipped).toMatch(/No Clickr key/);

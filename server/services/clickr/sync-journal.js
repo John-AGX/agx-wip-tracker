@@ -223,7 +223,8 @@ const REFERRERS = {
     ['tasks', 'entity_id'], ['projects', 'job_id'], ['leads', 'job_id'],
   ],
   clients: [['leads', 'client_id'], ['projects', 'client_id'], ['jobs', 'client_id'], ['clients', 'parent_client_id']],
-  leads: [['estimates', 'lead_id']],
+  // An estimate's lead is in its data, not a column: estimates has no lead_id.
+  leads: [['estimates', "data->>'lead_id'"]],
   job_purchase_orders: [['job_vendor_bills', 'po_id']],
   job_change_orders: [],
   job_vendor_bills: [],
@@ -298,6 +299,9 @@ const MAX_RUNS = 25;
 
 async function handleHistory(req, res, deps) {
   const orgId = req.user.organization_id;
+  // ?summary=1: counts per run without every change — what the page polls while
+  // a run is going. The changes list of a whole-sync run runs to thousands.
+  const summary = !!(req.query && req.query.summary === '1');
   try {
     const runs = await deps.pool.query(
       'SELECT r.id, r.started_at, r.finished_at, r.trigger, r.dataset, r.mode, r.counts, r.undone_at, u.name AS actor '
@@ -313,8 +317,17 @@ async function handleHistory(req, res, deps) {
     const byRun = new Map(ids.map((id) => [id, []]));
     for (const c of changes.rows) (byRun.get(c.run_id) || []).push(c);
     res.set('Cache-Control', 'no-store');
+    // The run in flight on this server, if any, and the one before it. Only
+    // for the organisation the Buildertrend connection belongs to: auto-sync
+    // runs for no other, and another tenant has no business seeing it.
+    let live = null;
+    try {
+      const preview = require('./sync-preview');
+      if (req.organization && String(req.organization.slug || '') === preview.ownerSlug(process.env)) live = require('./auto-sync').status();
+    } catch (e) { live = null; }
     res.json({
       readOnly: false,
+      live,
       runs: runs.rows.map((r) => {
         const list = byRun.get(r.id) || [];
         return Object.assign({}, r, {
@@ -323,7 +336,7 @@ async function handleHistory(req, res, deps) {
           undoneCount: list.filter((c) => c.undone_at).length,
           refusedCount: list.filter((c) => c.undo_refused).length,
           records: [...new Set(list.map((c) => c.target_table + ':' + c.target_id))].length,
-          changes: list,
+          changes: summary ? undefined : list,
         });
       }),
     });
@@ -341,6 +354,13 @@ async function handleUndo(req, res, deps) {
   const runId = body.runId == null ? null : String(body.runId);
   const oneChange = body.changeId == null ? null : String(body.changeId);
   if (!runId && !oneChange) return res.status(400).json({ error: 'Name the run or the change to take back.' });
+  // Not while it is still writing: the undo would race the run it is undoing.
+  try {
+    const st = require('./auto-sync').status();
+    if (runId && st.live && st.live.runId === runId) {
+      return res.status(409).json({ error: 'That run is still going. Take it back once it has finished.' });
+    }
+  } catch (e) { /* no runner loaded: nothing is running */ }
   const userId = req.user && req.user.id != null ? req.user.id : null;
 
   const client = await deps.pool.connect();

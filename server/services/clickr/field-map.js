@@ -18,6 +18,7 @@
 // Clickr internals (_id, accountId, integrationId, builderId) are never read.
 
 const { isBtBlank } = require('./bt-match');
+const { optionOf: marketOptionOf } = require('./bt-market');
 
 const REQUIRED_SHARE = 0.95;
 // Carried by every record and deliberately never read (see the header).
@@ -465,6 +466,8 @@ function readJob(rec) {
     latitude: coord(r.latitude, 90),
     longitude: coord(r.longitude, 180),
     ...Object.fromEntries(JOB_CUSTOM.map(([k, label]) => [k, scalarText(customField(r, label))])),
+    // An OPTION id, not a name (bt-market.js). It means a market only once mapped.
+    marketOption: marketOptionOf(customField(r, 'Market')),
   };
 }
 
@@ -517,6 +520,7 @@ function readClient(rec) {
     jobCount: typeof r.jobCount === 'number' ? r.jobCount : null,
     leadCount: typeof r.leadCount === 'number' ? r.leadCount : null,
     ...Object.fromEntries(CLIENT_CUSTOM.map(([k, label]) => [k, scalarText(customField(r, label))])),
+    marketOption: marketOptionOf(customField(r, 'Market')),
   };
 }
 

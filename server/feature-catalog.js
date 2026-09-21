@@ -526,9 +526,22 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.47';
+const APP_VERSION = '1.48';
 
 const releases = [
+  {
+    version: '1.48',
+    date: '2026-09-21',
+    name: 'Run the Buildertrend sync now, and map its markets',
+    summary: 'One press on the Buildertrend page now runs the whole sync — every dataset, the way the automatic sync would — and every run it makes can be taken back from the same place. And Buildertrend’s Market field finally means something in Project 86, once you say which market each of its options is.',
+    changes: [
+      { type: 'new', text: 'Run sync now. At the top of the Buildertrend page’s Overview. Before it starts it says what it is about to do, counted from the preview on screen: how many records it would create, how many blanks it would fill, how many values Project 86 holds differently it would replace, and how many money changes it would apply. It links every confident match on the way. Ambiguous rows and possible duplicates are never touched, and it never closes a purchase order — those stay for you. While it runs, the page shows which part it is on, and you can leave; it carries on.' },
+      { type: 'new', text: 'Undo run. The last few runs are listed under the button — yours, the automatic ones, and single presses — each with what it changed and an Undo. Undo puts every value back unless somebody has changed it since, and deletes every record the run created unless something now depends on it; whatever it leaves, it tells you. A run cut off part-way by a server restart is shown as interrupted, and can be taken back the same way. A run cannot be taken back while it is still going.' },
+      { type: 'new', text: 'Market mapping. Buildertrend sends a market as an option number, never its name, so the Jobs and Clients tabs now list each option with the evidence to decide from: how the records carrying it that are already linked are filed in Project 86, and which states and cities Buildertrend puts them in. When the linked ones agree, the market is marked as suggested; you choose. Once an option is mapped, a job or client with no market gets it, one filed under a different market waits for a tick, and a new one arrives already filed.' },
+      { type: 'improved', text: 'One writer at a time. A run and a press can no longer write at the same moment: while one is going, the other waits and says so.' },
+      { type: 'fixed', text: 'Undoing a sync that had created a lead failed with an error and changed nothing. It checked for estimates on that lead in a place estimates do not keep it. It now looks where they do, so a created lead is taken back — and one an estimate still depends on is kept.' },
+    ],
+  },
   {
     version: '1.47',
     date: '2026-09-21',

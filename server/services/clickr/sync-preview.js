@@ -51,6 +51,7 @@ const taskMatch = require('./task-match');
 const subtaskDoor = require('../service-ticket-subtask-door');
 const coMoney = require('../money/change-order-totals');
 const since = require('./since-refresh');
+const btMarket = require('./bt-market');
 
 const VIEW_PARAM = 'buildertrend-preview';
 
@@ -110,9 +111,9 @@ const JOB_KEYS = ['jobNumber', 'title', 'name', 'status', 'street_address', 'cit
 async function readP86(pool, orgId) {
   const jobsRaw = await pool.query(
     'SELECT id, ' + JOB_KEYS.map((k) => "data->>'" + k + "' AS \"" + k + '"').join(', ')
-    + ", data->'changeOrders' AS legacy_cos, data->'purchaseOrders' AS legacy_pos, bt_job_id, geocode_lat, geocode_lng, geocode_status FROM jobs WHERE organization_id = $1 AND bt_archived_at IS NULL", [orgId]);
+    + ", data->'changeOrders' AS legacy_cos, data->'purchaseOrders' AS legacy_pos, bt_job_id, geocode_lat, geocode_lng, geocode_status, market_id FROM jobs WHERE organization_id = $1 AND bt_archived_at IS NULL", [orgId]);
   const jobRows = jobsRaw.rows.map((r) => ({ id: r.id, legacy_cos: r.legacy_cos, legacy_pos: r.legacy_pos, bt_job_id: r.bt_job_id,
-    geocode_lat: r.geocode_lat, geocode_lng: r.geocode_lng, geocode_status: r.geocode_status,
+    geocode_lat: r.geocode_lat, geocode_lng: r.geocode_lng, geocode_status: r.geocode_status, market_id: r.market_id,
     data: Object.fromEntries(JOB_KEYS.map((k) => [k, r[k] == null ? '' : r[k]])) }));
   const leads = await pool.query(
     'SELECT l.id, l.title, l.status, l.street_address, l.city, l.state, l.zip, l.source, l.confidence, '
@@ -230,10 +231,15 @@ async function readP86(pool, orgId) {
     // one of them, and a column not selected here reads as blank — which would
     // offer a 'fill' over a value P86 already holds.
     'SELECT id, name, first_name, last_name, email, phone, cell, address, city, state, zip, parent_client_id, bt_contact_id, '
-    + 'company_name, community_name, gate_code, community_manager, cm_phone, cm_email, additional_pocs, property_address, property_phone, website, maintenance_manager, mm_phone, mm_email '
+    + 'company_name, community_name, gate_code, community_manager, cm_phone, cm_email, additional_pocs, property_address, property_phone, website, maintenance_manager, mm_phone, mm_email, market_id '
     + 'FROM clients WHERE organization_id = $1 AND bt_archived_at IS NULL', [orgId]);
   // Rows with no organization: all rows minus the rows that carry one. Counted,
   // never read — no id, title or value of theirs is selected.
+  // The market dimension and the organisation's Buildertrend Market mapping
+  // (bt-market.js). Read here so apply, which re-runs this, sees the same.
+  const marketRows = await pool.query('SELECT id, name, active FROM markets WHERE organization_id = $1 ORDER BY sort, name', [orgId]);
+  const orgRow = await pool.query('SELECT settings FROM organizations WHERE id = $1', [orgId]);
+  const market = btMarket.contexts(marketRows.rows, orgRow.rows[0] ? orgRow.rows[0].settings : null);
   const orphanJobs = await pool.query('SELECT COUNT(*) - COUNT(organization_id) AS n FROM jobs');
   const orphanLeads = await pool.query('SELECT COUNT(*) - COUNT(organization_id) AS n FROM leads');
   return {
@@ -248,6 +254,7 @@ async function readP86(pool, orgId) {
     subs: subs.rows,
     directory: { users: users.rows.map((r) => ({ id: r.id, name: r.name })), clients: clients.rows.map((r) => ({ id: r.id, name: r.name })) },
     clients: clients.rows,
+    market,
     unscopedJobs: Number((orphanJobs.rows[0] && orphanJobs.rows[0].n) || 0),
     unscopedLeads: Number((orphanLeads.rows[0] && orphanLeads.rows[0].n) || 0),
   };
@@ -305,8 +312,8 @@ function notInBtSentence(ds, reliable, fr, p86Error, n, notListed) {
 
 // The one place a dataset's records meet its matcher; Apply re-runs the same.
 function matchRows(kind, values, p86) {
-  if (kind === 'jobs') return match.matchJobs(values, p86.jobs, { coTotals: p86.coTotals });
-  if (kind === 'clients') return match.matchClients(values, p86.clients || []);
+  if (kind === 'jobs') return match.matchJobs(values, p86.jobs, { coTotals: p86.coTotals, market: p86.market && p86.market.jobs });
+  if (kind === 'clients') return match.matchClients(values, p86.clients || [], { market: p86.market && p86.market.clients });
   if (kind === 'changeOrders') return coMatch.matchChangeOrders(values, { jobs: p86.jobs, coRows: p86.coRows || [] });
   if (kind === 'purchaseOrders') return poMatch.matchPurchaseOrders(values, { jobs: p86.jobs, poRows: p86.poRows || [], subs: p86.subs || [] });
   // Bills need poRows too: a bill's purchase order is resolved ONLY through the
@@ -370,6 +377,9 @@ function buildDataset(kind, fr, p86, p86Error) {
   out.classified = true;
   out.rows = rows;
   out.summary = match.summarise(rows);
+  // What each Buildertrend Market option seems to mean, from the records
+  // already linked, for a person to map (bt-market.js).
+  if ((kind === 'jobs' || kind === 'clients') && p86.market) out.marketOptions = btMarket.evidence(rows, p86.market[kind]);
   if (kind === 'jobs') out.summaryOpen = match.summarise(rows, (r) => r.bt.scope === 'open');
   out.notInBuildertrend = {
     reliable, count: nib.rows.length, notListed: nib.notListed,
@@ -554,6 +564,7 @@ async function buildPreview(org, deps) {
     organization: { id: org.id, slug: org.slug, name: org.name },
     keyConfigured: !!apiKey,
     p86: { jobs: p86.jobs.length, leads: p86.leads.length, clients: (p86.clients || []).length, unscopedJobs: p86.unscopedJobs, unscopedLeads: p86.unscopedLeads, error: p86Error },
+    markets: p86.market ? p86.market.list : [],
     datasets,
     elapsedMs: (deps.now || Date.now)() - started,
   };
