@@ -318,11 +318,29 @@ function cfLabelProblem(label) {
 // rule 3 withholds an object whole — which says only that the field exists.
 // So one level is opened exactly the way the list was: 'Market › name' is a
 // label of its own, and its values face the same four rules. A list holding
-// exactly one object is that object. Deeper than one level is not opened, and
-// a list of several objects (a multi-select) stays whole and withheld.
-function cfPut(row, label, v) {
+// exactly one object is that object, and a list holding exactly one plain
+// value is that value. Deeper than one level is not opened.
+//
+// A list of SEVERAL (a multi-select, or a dropdown that sends every option
+// with a flag on the chosen one) stays whole and withheld on the record; its
+// ENTRIES are collected and summarised on their own afterwards, as
+// 'Market [] › name', counted per entry rather than per record.
+function cfPut(row, label, v, entries) {
   let inner = v;
   if (Array.isArray(inner) && inner.length === 1 && isPlainObject(inner[0])) inner = inner[0];
+  if (Array.isArray(inner) && inner.length === 1 && !isPlainObject(inner[0]) && !Array.isArray(inner[0])) { row[label] = inner[0]; return; }
+  if (Array.isArray(inner)) {
+    if (entries) {
+      for (const el of inner) {
+        const e = Object.create(null);
+        if (isPlainObject(el)) { for (const k of Object.keys(el)) e[label + ' [] › ' + k] = el[k]; }
+        else e[label + ' []'] = el;
+        entries.push(e);
+      }
+    }
+    row[label] = v;
+    return;
+  }
   if (!isPlainObject(inner)) { row[label] = v; return; }
   const ks = Object.keys(inner);
   if (!ks.length) { row[label] = null; return; }
@@ -338,6 +356,7 @@ function summarizeCustomFields(records) {
   let shape = null;
   const elementKeys = new Map();
   const flat = [];
+  const entries = [];
   for (const r of recs) {
     if (!isPlainObject(r) || !Object.prototype.hasOwnProperty.call(r, 'customFields')) continue;
     carriedBy++;
@@ -355,11 +374,11 @@ function summarizeCustomFields(records) {
         }
         const lk = CF_LABEL_KEYS.find((k) => typeof el[k] === 'string' && el[k].trim() !== '');
         if (!lk) { unlabelled++; continue; }
-        cfPut(row, el[lk].trim(), Object.prototype.hasOwnProperty.call(el, 'value') ? el.value : null);
+        cfPut(row, el[lk].trim(), Object.prototype.hasOwnProperty.call(el, 'value') ? el.value : null, entries);
       }
     } else if (isPlainObject(cf)) {
       if (!shape) shape = 'object';
-      for (const k of Object.keys(cf)) if (k.trim() !== '') cfPut(row, k.trim(), cf[k]);
+      for (const k of Object.keys(cf)) if (k.trim() !== '') cfPut(row, k.trim(), cf[k], entries);
     } else {
       notLists++;
       continue;
@@ -375,6 +394,14 @@ function summarizeCustomFields(records) {
     if (why) { labelsWithheld++; continue; }
     const { key, ...rest } = f;
     fields.push(Object.assign({ label: key }, rest));
+  }
+  // The entries of several-value lists: the same summary and the same label
+  // rules, over entries instead of records ('unit' says which).
+  for (const f of summarize(entries).fields) {
+    const why = cfLabelProblem(f.key) || (f.carriedBy < RULE.recordsPerDistinct ? 'sparse' : null);
+    if (why) { labelsWithheld++; continue; }
+    const { key, ...rest } = f;
+    fields.push(Object.assign({ label: key, unit: 'entries' }, rest));
   }
   return {
     carriedBy: carriedBy,

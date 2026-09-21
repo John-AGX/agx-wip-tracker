@@ -718,8 +718,39 @@ describe('CUSTOM FIELDS — labels are named, values keep the rule', () => {
     expect(by('Market')).toBeUndefined();
     expect(by('Region › name').values.map((v) => v.value)).toEqual(['North', 'South']);
     expect(by('Trades').withheldRule).toBe('shape');
+    // ...and its ENTRIES are summarised on their own, per entry.
+    expect(by('Trades [] › name')).toMatchObject({ unit: 'entries', carriedBy: 24 });
+    expect(by('Trades [] › name').values).toEqual([{ value: 'Paint', count: 12 }, { value: 'Roof0', count: 6 }, { value: 'Roof1', count: 6 }]);
     expect([by('Blank Pick').carriedBy, by('Blank Pick').nonEmpty]).toEqual([12, 0]);
     expect(JSON.stringify(o)).not.toMatch(/9001\d\d/);
+  });
+
+  test('a list of plain values: one value is that value, several are summarised per entry', () => {
+    const recs = Array.from({ length: 8 }, (_, i) => ({ customFields: [
+      { label: 'Pick', value: [i % 2 ? 'Tampa' : 'Orlando'] },
+      { label: 'Tags', value: ['Roof', i % 2 ? 'Paint' : 'Stucco'] },
+      // Per-entry values that label entries rather than group them stay counted only.
+      { label: 'Refs', value: ['ZZREF' + i, 'ZZREF' + (i + 100)] },
+    ] }));
+    const o = scout.summarizeCustomFields(recs);
+    const by = (label) => o.fields.find((f) => f.label === label);
+    expect(by('Pick').values).toEqual([{ value: 'Orlando', count: 4 }, { value: 'Tampa', count: 4 }]);
+    expect(by('Pick').unit).toBeUndefined();
+    expect(by('Tags').withheldRule).toBe('shape');
+    expect(by('Tags []')).toMatchObject({ unit: 'entries', carriedBy: 16 });
+    expect(by('Tags []').values).toEqual([{ value: 'Roof', count: 8 }, { value: 'Paint', count: 4 }, { value: 'Stucco', count: 4 }]);
+    expect(by('Refs []').values).toBeNull();
+    expect(JSON.stringify(o)).not.toMatch(/ZZREF/);
+  });
+
+  test('an entry key is held to the same label rules as a field label', () => {
+    // Carried by 8 entries, so only the label's own text can withhold it.
+    const recs = Array.from({ length: 8 }, () => ({ customFields: [
+      { label: 'Odd', value: [{ name: 'X', 'zzkey@example.test': 'y' }, { name: 'Y' }] },
+    ] }));
+    const o = scout.summarizeCustomFields(recs);
+    expect(o.fields.map((f) => f.label)).toEqual(['Odd', 'Odd [] › name']);
+    expect(JSON.stringify(o)).not.toMatch(/zzkey/);
   });
 
   test('a name-keyed object is read the same way as a list', () => {
