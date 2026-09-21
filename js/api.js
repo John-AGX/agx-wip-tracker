@@ -577,6 +577,14 @@
     create: function(payload) {
       return post('/api/service-tickets', payload || {});
     },
+    // The third door of the three-way convert: a won lead becomes a work
+    // order or a service ticket instead of a job. One atomic call — the
+    // ticket is created, numbered and issued, the lead is marked sold and
+    // stamped with what it became, and the estimate is marked sold to it.
+    // payload: { lead_id, kind, estimate_id?, title?, contract_amount?, … }
+    convert: function(payload) {
+      return post('/api/service-tickets/convert', payload || {});
+    },
     update: function(id, payload) {
       return patch('/api/service-tickets/' + encodeURIComponent(id), payload || {});
     },

@@ -526,9 +526,23 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.42';
+const APP_VERSION = '1.43';
 
 const releases = [
+  {
+    version: '1.43',
+    date: '2026-09-20',
+    name: 'Work orders, service tickets and what a lead becomes',
+    summary: 'A ticket now says what it is \u2014 an urgent call billed afterwards, or a sold service job with a price agreed up front \u2014 and finally carries a number you can say down the phone. And a won lead can become any of the three: a job, a service ticket or a work order.',
+    changes: [
+      { type: 'new', text: 'Every work order and service ticket has a NUMBER. WO-0042 for a call billed after the work, ST-0031 for a sold service job \u2014 the series follows how it bills, so a number can never say one thing while the record does another. It is given the moment the ticket is issued; a draft has none, because a draft has not gone anywhere yet. Every ticket already in the system has been numbered, oldest first.' },
+      { type: 'new', text: 'A ticket says which of the two it is. A WORK ORDER is the urgent, approved-on-the-phone call \u2014 go and do this \u2014 billed afterwards from labour, materials and markup, so it carries no price up front. A SERVICE TICKET is a smaller sold job, usually $10,000 or under, that already has a contract price and an estimate behind it: it cannot be created without its price, taken from the estimate or typed in. Every ticket raised before this keeps working exactly as it did.' },
+      { type: 'new', text: 'Convert asks what this is becoming. A won lead can now turn into a job, a service ticket or a work order, on one screen that says what each one is and what it carries over. A service ticket takes its price AND its scope from the estimate \u2014 and the scope is read from exactly the groups whose prices make the total, so an option that was quoted but not sold never arrives as scope on the ticket nobody bought it on. Over the $10,000 line the screen says so and lets you decide; it never refuses.' },
+      { type: 'improved', text: 'A lead becomes one thing, once. A lead that already became a ticket can no longer also be made into a job, and an estimate sold on a ticket can no longer be sold to a job or linked to one \u2014 until now that guard only ran in one direction, which is not a guard. The lead itself says which record it became, and the chip on it takes you there.' },
+      { type: 'improved', text: 'Changing a ticket from one kind to the other renumbers it into the right series and REMEMBERS the old number, so a number somebody wrote on a purchase order is never handed to a different ticket later. Turning a service ticket back into a work order drops its contract price rather than leaving money on a record that has none.' },
+      { type: 'improved', text: 'Who the work is for travels with it. Converting a lead carries its client and its address onto whichever record it becomes \u2014 copied, not looked up, so correcting the lead next month cannot quietly reprint a work order somebody already worked to.' },
+    ],
+  },
   {
     version: '1.42',
     date: '2026-09-20',

@@ -1671,7 +1671,7 @@
                                          never calls that function, so the button is correctly absent
                                          there without a second divergent wiring list. -->
                                     <button class="ee-btn secondary" id="ld-ticket-btn" style="display:none;" onclick="window.p86ServiceTickets && window.p86ServiceTickets.createForLead()" data-cap="LEADS_EDIT" title="Raise a service ticket on this lead">&#x1F527; Service Ticket</button>
-                                    <button class="ee-btn success" id="ld-convert-btn" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Create a job from this lead">&#x1F3D7; Create Job</button>
+                                    <button class="ee-btn success" id="ld-convert-btn" style="display:none;" onclick="startLeadConvert()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Turn this lead into a job, a service ticket or a work order">&#x1F3D7; Convert&hellip;</button>
                                     <span class="p86-ask86-mount"></span>
                                 </div>
                                 <div id="ld-status-msg" style="font-size:12px;min-height:14px;color:var(--text-dim,#888);"></div>
@@ -2880,11 +2880,11 @@
           <div style="display:flex;align-items:center;gap:10px;">
             <span style="color:#34d399;font-size:14px;">&#x2713;</span>
             <div>
-              <div style="font-size:13px;font-weight:600;color:#34d399;">Sold &mdash; linked to a job</div>
+              <div id="leadEditor_linkedJobHead" style="font-size:13px;font-weight:600;color:#34d399;">Sold &mdash; linked to a job</div>
               <div id="leadEditor_linkedJobLabel" style="font-size:11px;color:var(--text-dim,#888);"></div>
             </div>
           </div>
-          <button class="ee-btn secondary" onclick="openLinkedJobFromLead()">Open Job &rarr;</button>
+          <button id="leadEditor_linkedJobBtn" class="ee-btn secondary" data-chip="job" onclick="openLeadConvertedRecord()">Open Job &rarr;</button>
         </div>
 
         <!-- General tab: original form fields on the left, contextual
@@ -3127,7 +3127,7 @@
 
         <div class="modal-footer" id="leadEditor_modalFooter">
           <button id="leadEditor_deleteBtn" class="danger" style="margin-right:auto;display:none;" onclick="deleteLeadFromEditor()">Delete</button>
-          <button id="leadEditor_convertJobBtn" class="success" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN">&#x1F3D7; Create Job from Lead</button>
+          <button id="leadEditor_convertJobBtn" class="success" style="display:none;" onclick="startLeadConvert()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Turn this lead into a job, a service ticket or a work order">&#x1F3D7; Convert this Lead&hellip;</button>
           <button onclick="closeModal('leadEditorModal')" class="secondary">Cancel</button>
           <button onclick="submitLeadEditor()" class="primary" id="leadEditor_submitBtn">Save Lead</button>
         </div>
@@ -3519,7 +3519,7 @@
          server can never be two opinions. Pure math, no DOM. Loads before
          nodegraph/ui.js (the CO editor) and js/job-audit.js (R12). -->
     <script src="js/co-draw.js?v=1"></script>
-    <script src="js/api.js?v=105"></script>
+    <script src="js/api.js?v=106"></script>
     <!-- Multi-market M1: client-side markets cache. Must load BEFORE any
          surface whose picker calls window.p86MarketNames() (jobs.js). -->
     <script src="js/markets.js?v=7"></script>
@@ -3576,10 +3576,11 @@
     <script src="js/table-enhancements.js?v=15"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
     <script src="js/job-finalize.js?v=8"></script>
+    <script src="js/convert-picker.js?v=1"></script>
     <!-- Site Conditions panel (window.p86SiteConditions). Loads BEFORE
          leads.js, which delegates its weather host to it. -->
     <script src="js/site-conditions.js?v=2"></script>
-    <script src="js/leads.js?v=103"></script>
+    <script src="js/leads.js?v=104"></script>
     <script src="js/job-costs-import.js?v=17"></script>
     <script src="js/qb-costs-view.js?v=25"></script>
     <script src="js/insights.js?v=14"></script>

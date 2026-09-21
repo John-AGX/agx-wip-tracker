@@ -1997,7 +1997,7 @@ function p86Ask(message, opts) {
         window.p86Auth.hasCapability('JOBS_EDIT_ANY') ||
         window.p86Auth.hasCapability('JOBS_EDIT_OWN')
       );
-      convertBtn.style.display = (canEditJobs && !l.job_id) ? '' : 'none';
+      convertBtn.style.display = (canEditJobs && !l.job_id && !l.service_ticket_id) ? '' : 'none';
     }
     // Service Ticket — needs a SAVED lead, so it lives here and only here.
     // openNewLeadModal() never calls refreshLeadDetailHeader(), so the New
@@ -2160,16 +2160,30 @@ function p86Ask(message, opts) {
     }
   }
 
-  // Show the green "Sold — linked to a job" chip when the lead has a job_id.
-  // Clicking the chip's button jumps to that job's detail view.
+  // The green "Sold" chip: what this lead BECAME, which since the three-way
+  // convert is either a job or a ticket. The ticket case keeps the same chip
+  // rather than growing a second one — a lead becomes one thing, so two chips
+  // could only ever disagree — and points at the Service Tickets panel on this
+  // same screen, where the ticket already is.
   function refreshLinkedJobChip(l) {
     var chip = document.getElementById('leadEditor_linkedJob');
     var labelEl = document.getElementById('leadEditor_linkedJobLabel');
+    var headEl = document.getElementById('leadEditor_linkedJobHead');
+    var btnEl = document.getElementById('leadEditor_linkedJobBtn');
     if (!chip) return;
-    if (!l || !l.job_id) {
+    if (!l || (!l.job_id && !l.service_ticket_id)) {
       chip.style.display = 'none';
       return;
     }
+    if (!l.job_id) {
+      if (headEl) headEl.textContent = 'Sold \u2014 became a ticket';
+      if (labelEl) labelEl.textContent = _ticketChipLabel(l);
+      if (btnEl) { btnEl.textContent = 'Open ticket'; btnEl.setAttribute('data-chip', 'ticket'); }
+      chip.style.display = 'flex';
+      return;
+    }
+    if (headEl) headEl.textContent = 'Sold \u2014 linked to a job';
+    if (btnEl) { btnEl.textContent = 'Open Job \u2192'; btnEl.setAttribute('data-chip', 'job'); }
     var jobs = (window.appData && appData.jobs) || [];
     var job = jobs.find(function(j) { return j.id === l.job_id; });
     if (labelEl) {
@@ -2180,9 +2194,32 @@ function p86Ask(message, opts) {
     chip.style.display = 'flex';
   }
 
-  // Hide the convert button on already-converted leads (they have a job_id)
-  // and on roles without job-edit capability. Keeping the button always
-  // visible would tempt double-conversion of the same lead.
+  // What the chip says for a converted TICKET. The ticket itself is on the
+  // Service Tickets panel of this same screen, so the chip only has to point
+  // at it. The NUMBER is shown when this session is the one that made it —
+  // the lead row the list route serves does not carry it, and a chip that
+  // guessed at one would be worse than a chip that does not name it.
+  function _ticketChipLabel(l) {
+    var num = l && l.service_ticket_number;
+    return num ? (String(num) + ' \u2014 on the Service Tickets panel below')
+               : 'On the Service Tickets panel below';
+  }
+
+  // Open whatever this lead became. The job road navigates; the ticket is on
+  // this very screen, so it scrolls to it rather than pretending to go away.
+  window.openLeadConvertedRecord = function() {
+    var l = _leads.find(function(x) { return x.id === _currentEditingLeadId; });
+    if (l && !l.job_id && l.service_ticket_id) {
+      var host = document.getElementById('leadEditor_ticketsHost');
+      if (host && host.scrollIntoView) host.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (typeof window.openLinkedJobFromLead === 'function') window.openLinkedJobFromLead();
+  };
+
+  // Hide the convert button on already-converted leads (they have a job_id
+  // or a service_ticket_id) and on roles without job-edit capability. Keeping
+  // it visible would tempt double-conversion of the same lead.
   function refreshConvertJobButton(l) {
     var btn = document.getElementById('leadEditor_convertJobBtn');
     if (!btn) return;
@@ -2190,7 +2227,7 @@ function p86Ask(message, opts) {
       window.p86Auth.hasCapability('JOBS_EDIT_ANY') ||
       window.p86Auth.hasCapability('JOBS_EDIT_OWN')
     );
-    btn.style.display = (canEditJobs && (!l || !l.job_id)) ? '' : 'none';
+    btn.style.display = (canEditJobs && (!l || (!l.job_id && !l.service_ticket_id))) ? '' : 'none';
   }
 
   // Open the currently-editing lead in the Site Plan as a pre-sale survey.
@@ -2267,6 +2304,9 @@ function p86Ask(message, opts) {
   // Modal picker for when a lead has >1 estimate. Resolves to the chosen
   // estimate, or null if the user cancels. Each row shows the estimate's
   // proposal total so the user picks by the bid that will seed the contract.
+  // Asked BEFORE "what is this becoming?", because the answer is the same
+  // whichever of the three records the lead turns into: this is the estimate
+  // it was sold on.
   function _pickEstimate(ests) {
     return new Promise(function(resolve) {
       function esc(s) {
@@ -2290,8 +2330,8 @@ function p86Ask(message, opts) {
       var card = document.createElement('div');
       card.style.cssText = 'background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:12px;max-width:520px;width:100%;max-height:80vh;overflow:auto;padding:18px;';
       card.innerHTML =
-        '<div style="font-size:15px;font-weight:700;margin-bottom:4px;">Which estimate becomes the job?</div>' +
-        '<div style="font-size:12px;color:var(--text-muted,#9aa);margin-bottom:10px;">Its proposal total seeds the job\'s Contract Amount, and its workspace carries over.</div>' +
+        '<div style="font-size:15px;font-weight:700;margin-bottom:4px;">Which estimate is this sold on?</div>' +
+        '<div style="font-size:12px;color:var(--text-muted,#9aa);margin-bottom:10px;">Its proposal total is the price. On a job, its workspace carries over too.</div>' +
         rowsHtml +
         '<button data-pick="cancel" style="margin-top:10px;padding:8px 14px;border:1px solid var(--border,#333);border-radius:8px;background:transparent;color:var(--text-muted,#9aa);cursor:pointer;">Cancel</button>';
       ov.appendChild(card);
@@ -2363,6 +2403,121 @@ function p86Ask(message, opts) {
   }
   window.p86ComposeJobTitle = _composeJobTitle;
 
+  // Everything this convert has to SAY goes through the shipped dialog. In an
+  // installed PWA window.alert is a no-op that returns undefined without
+  // throwing (test/native-dialogs-in-the-pwa.test.js), so a native one here
+  // would be a refusal nobody ever sees — and the convert would read as a
+  // button that does nothing.
+  function _convertSays(message) {
+    if (typeof window.p86Alert === 'function') { window.p86Alert(String(message)); return; }
+    if (typeof showToast === 'function') { showToast(String(message), 'error'); return; }
+    console.warn('[lead-convert]', message);
+  }
+
+  // WHAT IS THIS BECOMING? — the three-way convert, and the entry point every
+  // Convert button now calls.
+  //
+  // John, 2026-09-19: work orders are the urgent approved-on-the-phone call
+  // billed afterwards; service tickets are the smaller sold jobs with a
+  // contract price and an estimate behind them; a job is everything else. For
+  // as long as this screen has existed the only answer available was JOB, so a
+  // two-day service call somebody sold was born with a job number, a schedule
+  // and a workbook, or as a work order raised by hand that nothing tied back
+  // to the pursuit it came from.
+  //
+  // The estimate is chosen FIRST, because the answer is the same whichever of
+  // the three it becomes — this is the estimate it was sold on — and because
+  // its total is what the picker shows and nudges on.
+  async function startLeadConvert(preChosenEstId) {
+    if (window._p86ConvertingJob) return;
+    var leadId = _currentEditingLeadId;
+    var l = _leads.find(function(x) { return x.id === leadId; });
+    if (!l) return;
+    if (l.job_id) {
+      _convertSays('This lead is already linked to a job. Use the Open Job button.');
+      return;
+    }
+    if (l.service_ticket_id) {
+      _convertSays('This lead already became a ticket. It is on the Service Tickets panel below.');
+      return;
+    }
+
+    var ests = _estimatesForLead(leadId);
+    var chosen = null;
+    if (preChosenEstId) chosen = ests.find(function(e) { return e.id === preChosenEstId; }) || null;
+    if (!chosen) {
+      if (ests.length === 1) chosen = ests[0];
+      else if (ests.length > 1) {
+        chosen = await _pickEstimate(ests);
+        if (chosen === null) return;   // cancelled the picker
+      }
+    }
+
+    // No picker module (a stale cached bundle) must not mean no convert: the
+    // road that has always existed is the one it falls back to.
+    var picked = (window.p86ConvertPicker && window.p86ConvertPicker.open)
+      ? await window.p86ConvertPicker.open({
+          leadTitle: l.title || 'This lead',
+          hasEstimate: !!chosen,
+          estimateTotal: chosen ? _estimateProposalTotal(chosen) : 0
+        })
+      : { target: 'job' };
+    if (!picked) return;
+
+    if (picked.target === 'job') {
+      return convertLeadToJob(chosen ? chosen.id : preChosenEstId);
+    }
+    return _convertLeadToTicket(l, picked, chosen);
+  }
+
+  // The ticket half of the convert. ONE server call — POST
+  // /api/service-tickets/convert creates the ticket, numbers it, issues it,
+  // marks the lead sold and stamps the estimate, all in one transaction — so
+  // there is nothing here to leave half-done if it fails.
+  async function _convertLeadToTicket(l, picked, chosen) {
+    if (window._p86ConvertingJob) return;
+    window._p86ConvertingJob = true;
+    try {
+      var payload = {
+        lead_id: l.id,
+        kind: picked.target === 'service_ticket' ? 'service_ticket' : 'work_order'
+      };
+      // A price and an estimate belong to a service ticket alone: a work
+      // order is billed from what was actually done, and the server refuses
+      // either on one by name.
+      if (picked.target === 'service_ticket') {
+        if (chosen) payload.estimate_id = chosen.id;
+        if (picked.contractAmount != null) payload.contract_amount = String(picked.contractAmount);
+      }
+      var res = await window.p86Api.serviceTickets.convert(payload);
+      var t = (res && res.ticket) || null;
+      if (!t) throw new Error('The convert answered without a ticket.');
+
+      // Keep the copy in memory in step with what the server stored, the way
+      // the job road does: a later saveData() must not push a lead that still
+      // says "new" back over the sold one.
+      l.status = 'sold';
+      l.service_ticket_id = t.id;
+      l.service_ticket_number = t.ticket_number || null;
+      l.converted_at = t.created_at || new Date().toISOString();
+
+      var word = picked.target === 'service_ticket' ? 'Service ticket' : 'Work order';
+      var num = t.ticket_number ? (' ' + t.ticket_number) : '';
+      if (typeof showToast === 'function') showToast(word + num + ' created from this lead', 'success');
+
+      try { refreshLeadDetailHeader(); } catch (e) { /* header is decoration here */ }
+      try { refreshLinkedJobChip(l); } catch (e) { /* chip is decoration here */ }
+      try { refreshConvertJobButton(l); } catch (e) { /* button is decoration here */ }
+      try { renderLeadTickets(l.id, l); } catch (e) { /* the panel reloads on its own */ }
+      var host = document.getElementById('leadEditor_ticketsHost');
+      if (host && host.scrollIntoView) host.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch (e) {
+      console.error('[lead-convert] ticket convert failed', e);
+      _convertSays((e && e.message) || 'Could not convert this lead.');
+    } finally {
+      window._p86ConvertingJob = false;
+    }
+  }
   async function convertLeadToJob(preChosenEstId) {
     if (window._p86ConvertingJob) return;   // D4: block double-submit / dual-side convert
     window._p86ConvertingJob = true;
@@ -3586,6 +3741,7 @@ function p86Ask(message, opts) {
   window.switchLeadEditorTab = switchLeadEditorTab;
   window.createEstimateFromLead = createEstimateFromLead;
   window.convertLeadToJob = convertLeadToJob;
+  window.startLeadConvert = startLeadConvert;
   window.openLinkedJobFromLead = openLinkedJobFromLead;
   // Reused by the estimate-side "Create Job" (estimate-editor.js) so both
   // entry points snapshot an estimate's workspace the same way.
