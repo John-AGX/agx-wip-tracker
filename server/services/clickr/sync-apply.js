@@ -92,7 +92,12 @@ const { overbillVerdict } = require('../money/overbill');
 const ACTION_PARAM = 'buildertrend-apply';
 const MAX_ROWS = 200;
 
-const JOB_FIELD_KEYS = { title: 'title', street: 'street_address', city: 'city', state: 'state', zip: 'zip', status: 'status', startDate: 'startDate' };
+const JOB_FIELD_KEYS = Object.assign(
+  { title: 'title', street: 'street_address', city: 'city', state: 'state', zip: 'zip', status: 'status', startDate: 'startDate' },
+  Object.fromEntries(match.JOB_CUSTOM_FIELDS.map((f) => [f.field, f.key])));
+// The job custom fields a person may TICK when P86 already holds a different
+// value (gate code, client PO/WO). Never money, never a match key.
+const JOB_CUSTOM_KEYS = Object.fromEntries(match.JOB_CUSTOM_FIELDS.map((f) => [f.field, f.key]));
 const LEAD_FIELD_COLUMNS = { title: 'title', street: 'street_address', city: 'city', state: 'state', zip: 'zip', source: 'source', confidence: 'confidence', notes: 'notes' };
 const LEAD_ADDRESS = ['street', 'city', 'state', 'zip'];
 const JOB_ADDRESS = ['street', 'city', 'state', 'zip'];
@@ -120,7 +125,9 @@ function withBtStatus(data, text) {
 const moneyEq = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) < 0.005;
 const LEAD_REVENUE_COLUMNS = { estimatedRevenueMin: 'estimated_revenue_low', estimatedRevenueMax: 'estimated_revenue_high' };
 // Client contact details: correction/held-back field -> clients column. The name is never written.
-const CLIENT_COLUMNS = { email: 'email', phone: 'phone', cell: 'cell', street: 'address', city: 'city', state: 'state', zip: 'zip' };
+const CLIENT_COLUMNS = Object.assign(
+  { email: 'email', phone: 'phone', cell: 'cell', street: 'address', city: 'city', state: 'state', zip: 'zip' },
+  Object.fromEntries(match.CLIENT_CUSTOM_FIELDS.map((f) => [f.field, f.col])));
 const CO_FIELDS = { title: 1, price: 1, cost: 1, status: 1 };
 const PO_FIELDS = { status: 1, title: 1, costCode: 1, scheduledCompletion: 1, sub: 1, cost: 1 };
 const PO_DATA_KEYS = { title: 'title', costCode: 'costCode', scheduledCompletion: 'scheduledCompletion' };
@@ -220,7 +227,7 @@ function pickedHeldBack(kind, row, mode, fields) {
   // A LEAD's notes: not money, but a REPLACEMENT for something a person may
   // have written in P86, so it reaches a write only through here — never
   // through safe mode and never through a press that names no fields.
-  const allowed = kind === 'jobs' ? { jobNumber: 1 } : kind === 'clients' ? CLIENT_COLUMNS
+  const allowed = kind === 'jobs' ? Object.assign({ jobNumber: 1 }, JOB_CUSTOM_KEYS) : kind === 'clients' ? CLIENT_COLUMNS
     : Object.assign({ notes: 1 }, LEAD_REVENUE_COLUMNS);
   const pick = new Set(fields);
   return (row.heldBack || []).filter((h) => h.applicable === true && allowed[h.field] && pick.has(h.field));
@@ -281,6 +288,15 @@ async function applyJob(db, orgId, row, mode, fields) {
     applied.push({ field: c.field, from: c.from, to: value });
   }
   for (const h of pickedHeldBack('jobs', row, mode, fields)) {
+    // A CUSTOM field ticked on purpose: P86's value is replaced only if it is
+    // still the one the preview showed.
+    if (JOB_CUSTOM_KEYS[h.field]) {
+      const key = JOB_CUSTOM_KEYS[h.field];
+      if (norm(data[key]) !== norm(h.p86)) { stale.push(h.label || h.field); continue; }
+      data[key] = h.value;
+      applied.push({ field: h.field, from: h.p86, to: h.value });
+      continue;
+    }
     // JOB NUMBER, ticked on purpose. Still refused when P86 changed it since the
     // preview, or when another job of this organization already carries it.
     if (norm(data.jobNumber) !== norm(h.p86)) { stale.push(h.label || h.field); continue; }
@@ -1471,7 +1487,13 @@ async function applyLead(db, orgId, row, mode, fields) {
 // ── clients ──────────────────────────────────────────────────────────────
 async function applyClient(db, orgId, row, mode, fields) {
   const btId = norm(row.bt.btId);
-  const cur = await db.query('SELECT id, name, email, phone, cell, address, city, state, zip, bt_contact_id FROM clients WHERE id = $1 AND organization_id = $2 FOR UPDATE', [row.p86.id, orgId]);
+  // Every column a correction can write is re-read on THIS locked row: the
+  // 'is P86 still what the preview saw?' test below compares against it, and a
+  // column missing from the SELECT reads as blank and passes that test.
+  // Built from CLIENT_COLUMNS, whose values are constants, so the two cannot
+  // drift apart.
+  const cols = [...new Set(Object.values(CLIENT_COLUMNS))].join(', ');
+  const cur = await db.query('SELECT id, name, ' + cols + ', bt_contact_id FROM clients WHERE id = $1 AND organization_id = $2 FOR UPDATE', [row.p86.id, orgId]);
   if (!cur.rows.length) return { skipped: 'The P86 client is no longer there.' };
   const client = cur.rows[0];
   const linkedTo = norm(client.bt_contact_id);
@@ -1496,11 +1518,11 @@ async function applyClient(db, orgId, row, mode, fields) {
   }
   const wasLinked = linkedTo === btId;
   if (!applied.length && wasLinked) return { unchanged: true, stale };
-  const cols = Object.keys(sets);
-  const params = cols.map((k) => sets[k]);
+  const setCols = Object.keys(sets);
+  const params = setCols.map((k) => sets[k]);
   params.push(btId, client.id, orgId);
   const n = params.length;
-  await db.query('UPDATE clients SET ' + cols.map((k, i) => k + ' = $' + (i + 1)).concat(['bt_contact_id = $' + (n - 2), 'updated_at = NOW()']).join(', ')
+  await db.query('UPDATE clients SET ' + setCols.map((k, i) => k + ' = $' + (i + 1)).concat(['bt_contact_id = $' + (n - 2), 'updated_at = NOW()']).join(', ')
     + ' WHERE id = $' + (n - 1) + ' AND organization_id = $' + n, params);
   return { applied, linked: !wasLinked, stale };
 }
@@ -1554,7 +1576,15 @@ async function createClient(db, orgId, row) {
   await db.query(
     'INSERT INTO clients (id, organization_id, name, email, phone, cell, address, city, state, zip, bt_contact_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
     [id, orgId, norm(bt.name), val(bt.email), val(bt.phone), val(bt.cell), val(bt.street), val(bt.city), val(bt.state), val(bt.zip), btId]);
-  return { created: id, fields: ['name'].concat(['email', 'phone', 'cell', 'street', 'city', 'state', 'zip'].filter((k) => val(bt[k]))) };
+  // Its custom fields, written as a fill would write them. A separate UPDATE
+  // so the INSERT above keeps its fixed shape; only filled ones are named.
+  const custom = match.CLIENT_CUSTOM_FIELDS.filter((f) => !match.isBtBlank(bt[f.field]) && match.fieldText(bt[f.field], f.multiline) !== '');
+  if (custom.length) {
+    await db.query('UPDATE clients SET ' + custom.map((f, i) => f.col + ' = $' + (i + 1)).join(', ')
+      + ' WHERE id = $' + (custom.length + 1) + ' AND organization_id = $' + (custom.length + 2),
+      custom.map((f) => match.fieldText(bt[f.field], f.multiline)).concat([id, orgId]));
+  }
+  return { created: id, fields: ['name'].concat(['email', 'phone', 'cell', 'street', 'city', 'state', 'zip'].filter((k) => val(bt[k]))).concat(custom.map((f) => f.field)) };
 }
 
 async function createLead(db, orgId, row, user) {
@@ -1638,6 +1668,10 @@ async function createJob(db, orgId, row, user) {
     createdAt: now,
     updatedAt: now,
   };
+  for (const f of match.JOB_CUSTOM_FIELDS) {
+    const t = match.isBtBlank(bt[f.field]) ? '' : match.fieldText(bt[f.field], f.multiline);
+    if (t) data[f.key] = t;
+  }
   data.address = [data.street_address, data.city, data.state, data.zip].filter(Boolean).join(', ');
   const id = genId('job');
   data.id = id;

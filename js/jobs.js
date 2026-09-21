@@ -3740,6 +3740,21 @@ function renderJobsMain() {
             if (contractEl) contractEl.textContent = `Total Income: ${formatCurrency(w.totalIncome)}`;
 
             document.getElementById('job-info-number').textContent = job.jobNumber || '—';
+            // BUILDERTREND CUSTOM FIELDS — gate code, and the CLIENT's own PO and
+            // WO numbers (not P86 purchase orders, not WO-series tickets). Cells
+            // appear only when the job has a value: most jobs have none, and three
+            // dashes on every job would read as three things somebody forgot.
+            (function () {
+                var slot = document.getElementById('job-info-btfields');
+                if (!slot) return;
+                var cells = [['gateCode', 'Gate Code'], ['clientPoNumber', 'Client PO #'], ['clientWoNumber', 'Client WO #']]
+                    .filter(function (f) { return job[f[0]] != null && String(job[f[0]]).trim() !== ''; })
+                    .map(function (f) {
+                        return '<div style="min-width:0;"><div style="font-size:11px;color:var(--text-dim);margin-bottom:2px;" title="From Buildertrend">' + f[1] + '</div>'
+                            + '<div style="font-size:13px;color:var(--text);white-space:pre-wrap;word-break:break-word;">' + escapeHTML(String(job[f[0]])) + '</div></div>';
+                    });
+                slot.innerHTML = cells.join('');
+            })();
             document.getElementById('job-info-title').textContent = job.title;
             document.getElementById('job-info-client').textContent = job.client || '—';
             document.getElementById('job-info-pm').textContent = getJobOwnerName(job);

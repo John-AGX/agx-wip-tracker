@@ -526,9 +526,22 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.45';
+const APP_VERSION = '1.46';
 
 const releases = [
+  {
+    version: '1.46',
+    date: '2026-09-21',
+    name: 'Buildertrend custom fields come across',
+    summary: 'The fields your team added in Buildertrend — company and community names, gate codes, community and maintenance manager contacts, property details, and a job’s gate code and client PO and WO numbers — now reach Project 86. They fill what is empty and never overwrite what you have written.',
+    changes: [
+      { type: 'new', text: 'Client custom fields. Company Name, Community Name, Gate Code and notes, Community Manager, CM phone and email, Additional POCs, Property Address and Phone, Website, Maintenance Manager, and MM phone and email land in the client fields Project 86 already has for them. An empty field is filled. Where Project 86 already holds something different, it is held for you with both versions shown, and changes only when you tick it. A blank in Buildertrend never erases anything.' },
+      { type: 'new', text: 'Job custom fields. A job’s Gate Code, and the client’s own PO and WO numbers, come across on the same terms and show on the job’s information card when a job has them. They are labelled Client PO # and Client WO # so they are never mistaken for Project 86’s own purchase orders to subs or its WO-numbered tickets.' },
+      { type: 'improved', text: 'A gate code or a note keeps its line breaks. Names are compared the way names are (a stray comma is not a change); a gate code is compared exactly, because in *1234# the star and the hash are the keypad.' },
+      { type: 'fixed', text: 'The Buildertrend sync preview listed every linked job as having its Buildertrend status still to record, even after it had been recorded. The stored word was never read back, so the job always looked due. It now reads it, and a job shows as due only when Buildertrend’s word has actually changed.' },
+      { type: 'fixed', text: 'The safe button on the Jobs tab now counts a job whose only blank to fill is its map location, and says so: “Link confident matches + fill blank start dates and map locations”. Until now such a job was only counted because of the bug above; with that fixed, the button would have shown 0 and stayed disabled, and the location would never have arrived.' },
+    ],
+  },
   {
     version: '1.45',
     date: '2026-09-21',

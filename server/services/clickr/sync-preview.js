@@ -98,7 +98,13 @@ function changeOrderTotals(jobRows, coRows) {
   return out;
 }
 
-const JOB_KEYS = ['jobNumber', 'title', 'name', 'status', 'street_address', 'city', 'state', 'zip', 'startDate', 'contractAmount'];
+// Every jobs.data key bt-match's p86JobView reads. A key missing here reaches
+// the matcher as '' — which is how data.btStatus went unread and every
+// linked job looked permanently 'status word due', and how a custom field
+// P86 already holds would be offered as a blank to fill. Keys are
+// constants; they are spliced into the SELECT below.
+const JOB_KEYS = ['jobNumber', 'title', 'name', 'status', 'street_address', 'city', 'state', 'zip', 'startDate', 'contractAmount', 'btStatus']
+  .concat(match.JOB_CUSTOM_FIELDS.map((f) => f.key));
 
 // P86 side. SELECT only, every statement `organization_id = $1`.
 async function readP86(pool, orgId) {
@@ -220,7 +226,12 @@ async function readP86(pool, orgId) {
   const users = await pool.query(
     'SELECT id, name FROM users WHERE organization_id = $1 AND active = true', [orgId]);
   const clients = await pool.query(
-    'SELECT id, name, first_name, last_name, email, phone, cell, address, city, state, zip, parent_client_id, bt_contact_id FROM clients WHERE organization_id = $1 AND bt_archived_at IS NULL', [orgId]);
+    // The custom-field columns ride along: bt-match's p86ClientView reads every
+    // one of them, and a column not selected here reads as blank — which would
+    // offer a 'fill' over a value P86 already holds.
+    'SELECT id, name, first_name, last_name, email, phone, cell, address, city, state, zip, parent_client_id, bt_contact_id, '
+    + 'company_name, community_name, gate_code, community_manager, cm_phone, cm_email, additional_pocs, property_address, property_phone, website, maintenance_manager, mm_phone, mm_email '
+    + 'FROM clients WHERE organization_id = $1 AND bt_archived_at IS NULL', [orgId]);
   // Rows with no organization: all rows minus the rows that carry one. Counted,
   // never read — no id, title or value of theirs is selected.
   const orphanJobs = await pool.query('SELECT COUNT(*) - COUNT(organization_id) AS n FROM jobs');

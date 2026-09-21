@@ -368,14 +368,59 @@ function usableName(v) {
   return t != null && !isBtBlank(t);
 }
 
-// The Buildertrend custom field with this exact label, or null.
+// A custom field's label as a key: letters and digits only, lower case. So
+// Buildertrend's "*Gate Code/Addt'l Notes" and a later "Gate Code / Addtl
+// Notes" are one field, and an admin tidying punctuation does not unmap it.
+function labelKey(s) {
+  return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+// The Buildertrend custom field with this label (compared by labelKey), or
+// null. The live shape (scout, 2026-09-21) is a list of {customFieldId, label,
+// tooltipText, type, value}. Two entries answering to one label is a question
+// this cannot settle, so it answers null rather than pick one.
 function customField(rec, label) {
   const list = has(rec, 'customFields') && Array.isArray(rec.customFields) ? rec.customFields : [];
+  const want = labelKey(label);
+  let hit = null;
+  let n = 0;
   for (const f of list) {
-    if (isPlainObject(f) && f.label === label) return f.value == null ? null : f.value;
+    if (isPlainObject(f) && typeof f.label === 'string' && labelKey(f.label) === want) { n++; hit = f; }
   }
-  return null;
+  if (n !== 1) return null;
+  return hit.value == null ? null : hit.value;
 }
+
+// Buildertrend CONTACT custom fields that Project 86 already has a column for —
+// the same set the Buildertrend CSV import maps (js/clients.js BT_HEADER_MAP).
+// Labels are Buildertrend's own, read off the live scout. The file slots
+// (Property Map, Reference/Resource-File 1-5) are not text and are not read;
+// Market is a dropdown and a markets-table question, and is not read here.
+// Buildertrend JOB custom fields (live scout 2026-09-21: 492 of 708 jobs carry
+// the list). PO# and WO# are the CLIENT's numbers — a property manager's
+// purchase order or work order — and not P86's own purchase orders or
+// WO-series tickets. Market is an option id and is not read here.
+const JOB_CUSTOM = [
+  ['gateCode', 'Gate Code (if applicable)'],
+  ['clientPo', 'PO# (if applicable)'],
+  ['clientWo', 'WO# (if applicable)'],
+];
+
+const CLIENT_CUSTOM = [
+  ['companyName', 'Company Name'],
+  ['communityName', 'Community Name'],
+  ['gateCode', "Gate Code/Addt'l Notes"],
+  ['communityManager', 'Community Manager/CAM'],
+  ['cmPhone', 'CM Direct Phone'],
+  ['cmEmail', 'CM Email'],
+  ['additionalPocs', 'Additional POCs'],
+  ['propertyAddress', 'Property Address'],
+  ['propertyPhone', 'Property Phone'],
+  ['website', 'Website'],
+  ['maintenanceManager', 'Maintenance Manager'],
+  ['mmPhone', 'MM Direct Phone'],
+  ['mmEmail', 'MM Email'],
+];
 
 function names(list) {
   if (!Array.isArray(list)) return [];
@@ -419,6 +464,7 @@ function readJob(rec) {
     // geocoding each one from scratch.
     latitude: coord(r.latitude, 90),
     longitude: coord(r.longitude, 180),
+    ...Object.fromEntries(JOB_CUSTOM.map(([k, label]) => [k, scalarText(customField(r, label))])),
   };
 }
 
@@ -470,6 +516,7 @@ function readClient(rec) {
     zip: scalarText(r.zip),
     jobCount: typeof r.jobCount === 'number' ? r.jobCount : null,
     leadCount: typeof r.leadCount === 'number' ? r.leadCount : null,
+    ...Object.fromEntries(CLIENT_CUSTOM.map(([k, label]) => [k, scalarText(customField(r, label))])),
   };
 }
 
@@ -745,4 +792,4 @@ function describeMapping(kind, records) {
   };
 }
 
-module.exports = { DATASETS, REQUIRED_SHARE, readRecord, readJob, readLead, readChangeOrder, readPurchaseOrder, readBill, readEstimateLine, readTask, describeMapping, customField, isPlainObject };
+module.exports = { DATASETS, REQUIRED_SHARE, readRecord, readJob, readLead, readChangeOrder, readPurchaseOrder, readBill, readEstimateLine, readTask, describeMapping, customField, labelKey, CLIENT_CUSTOM, JOB_CUSTOM, isPlainObject };

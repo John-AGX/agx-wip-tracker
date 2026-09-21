@@ -759,7 +759,7 @@ describe('PAGE — Apply buttons appear only where an apply can do something', (
     expect(html).not.toContain('data-btp-apply="333"');
     expect(html).toContain('>Linked<');
     // Safe button counts the two unlinked confident rows.
-    expect(html).toMatch(/Link confident matches \+ fill blank start dates \(2\)/);
+    expect(html).toMatch(/Link confident matches \+ fill blank start dates and map locations \(2\)/);
   });
 
 
@@ -1116,6 +1116,22 @@ describe('MAP LOCATION', () => {
     expect([Number(g.geocode_lat), Number(g.geocode_lng), g.geocode_status]).toEqual([28.53834, -81.37924, 'ok']);
   });
 
+  test('the SAFE button counts a linked job whose only safe update is its map location', () => {
+    // js/bt-sync-preview.js disables the button at a count of 0, so a job
+    // left out here never receives the fill at all.
+    const { extractFunction } = require('./helpers/browser-fn');
+    const src = extractFunction(require('fs').readFileSync(require('path').join(__dirname, '..', 'js', 'bt-sync-preview.js'), 'utf8'), 'safeCount');
+    const safeCount = new Function('return ' + src)();
+    const linked = (corrections) => ({ class: 'matched', rung: 'Buildertrend ID', bt: { btId: '111' }, btStatusDue: false, corrections });
+    const ds = { key: 'jobs', rows: [
+      linked([{ field: 'coordinates', kind: 'fill', from: '', to: '27.9, -82.4' }]),
+      linked([{ field: 'startDate', kind: 'fill', from: '', to: '2026-02-25' }]),
+      linked([]),
+      linked([{ field: 'gateCode', kind: 'fill', from: '', to: '1234' }]),
+    ] };
+    expect(safeCount(ds)).toBe(2);
+  });
+
   test('UNDO takes the location back, because the journal photographs columns too', async () => {
     await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
     expect(geo('j-1').geocode_lat).not.toBeNull();
@@ -1123,5 +1139,209 @@ describe('MAP LOCATION', () => {
     const u = await put('/api/admin/organizations/me?action=buildertrend-undo', ADMIN, { runId: run.id });
     expect(u.status).toBe(200);
     expect(geo('j-1').geocode_lat).toBeNull();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// CLIENT CUSTOM FIELDS — Buildertrend's own contact fields (Company Name, Gate
+// Code, CM Email ...) onto the client columns P86 already has. The contact
+// rule throughout: a blank fills, a different value waits for a tick, and a
+// Buildertrend blank never erases.
+// ══════════════════════════════════════════════════════════════════════════
+describe('CLIENT CUSTOM FIELDS', () => {
+  const clientRow = (id) => engine.db.prepare('SELECT * FROM clients WHERE id = ?').get(id);
+  const btc = (id) => BT_CLIENTS.find((r) => r.contactId === id);
+  // The live shape (scout, 2026-09-21).
+  const cf = (label, value) => ({ customFieldId: 1, label, tooltipText: '', type: 1, value });
+  const row9001 = async () => {
+    const p86 = await preview.readP86(engine.pool, AGX);
+    return match.matchClients(BT_CLIENTS.map((x) => readRecord('clients', x)), p86.clients).find((r) => String(r.bt.btId) === '9001');
+  };
+  beforeEach(() => {
+    btc(9001).customFields = [
+      cf('Company Name', 'CMG Management'),
+      cf("*Gate Code/Addt'l Notes", '  Gate #1234*   \n\n  Call   Ana first  '),
+      cf('CM Email', 'cam@oakhollow.test'),
+      cf('CM Direct Phone', '(813) 555-0199'),
+      cf('Website', ''),
+      // An option id, not a name: Market is a markets-table question, not read here.
+      cf('Market', [123456]),
+      cf('*Property Map', null),
+    ];
+    btc(9007).customFields = [cf('Community Name', 'Seaside Towers'), cf('Property Phone', '727-555-0100')];
+  });
+  afterEach(() => {
+    btc(9001).customFields = [];
+    btc(9007).customFields = [];
+    preview.forgetFetch(AGX);
+  });
+
+  test('each one is offered as a fill; a note keeps its lines; a blank, a file slot and Market offer nothing', async () => {
+    const row = await row9001();
+    const fills = Object.fromEntries(row.corrections.map((c) => [c.field, c.to]));
+    expect(fills.companyName).toBe('CMG Management');
+    expect(fills.gateCode).toBe('Gate #1234*\nCall Ana first');
+    expect(fills.cmEmail).toBe('cam@oakhollow.test');
+    expect(fills.cmPhone).toBe('(813) 555-0199');
+    expect(Object.keys(fills)).not.toContain('website');
+    expect(JSON.stringify(row)).not.toMatch(/123456|market/i);
+  });
+
+  test('apply writes them to the columns P86 already has; the client name is never touched', async () => {
+    const r = await put(APPLY, ADMIN, { dataset: 'clients', btIds: ['9001'] });
+    expect(r.status).toBe(200);
+    const c = clientRow('c-a');
+    expect([c.company_name, c.gate_code, c.cm_email, c.cm_phone]).toEqual(['CMG Management', 'Gate #1234*\nCall Ana first', 'cam@oakhollow.test', '(813) 555-0199']);
+    expect(c.name).toBe('Oak Hollow HOA');
+  });
+
+  test('a DIFFERENT P86 value waits for a tick; the same one after tidying is left alone', async () => {
+    engine.db.prepare("UPDATE clients SET company_name = 'CMG Mgmt Group', cm_phone = '813.555.0199' WHERE id = 'c-a'").run();
+    const row = await row9001();
+    expect(row.heldBack.map((h) => h.field)).toEqual(['companyName']);
+    expect(row.corrections.map((c) => c.field)).not.toContain('cmPhone');
+    await put(APPLY, ADMIN, { dataset: 'clients', btIds: ['9001'], fields: [] });
+    expect(clientRow('c-a').company_name).toBe('CMG Mgmt Group');
+    preview.forgetFetch(AGX);
+    await put(APPLY, ADMIN, { dataset: 'clients', btIds: ['9001'], fields: ['companyName'] });
+    expect(clientRow('c-a').company_name).toBe('CMG Management');
+    expect(clientRow('c-a').cm_phone).toBe('813.555.0199');
+  });
+
+  test('a Buildertrend blank never erases what P86 holds', async () => {
+    engine.db.prepare("UPDATE clients SET website = 'oakhollow.test' WHERE id = 'c-a'").run();
+    await put(APPLY, ADMIN, { dataset: 'clients', btIds: ['9001'] });
+    expect(clientRow('c-a').website).toBe('oakhollow.test');
+  });
+
+  test('a label tidied in Buildertrend still reads; a label that answers twice reads as nothing', async () => {
+    btc(9001).customFields = [cf('Gate Code / Addtl Notes', 'Gate 77'), cf('Company Name', 'A Co'), cf('company  name', 'B Co')];
+    const row = await row9001();
+    const fills = Object.fromEntries(row.corrections.map((c) => [c.field, c.to]));
+    expect(fills.gateCode).toBe('Gate 77');
+    expect(Object.keys(fills)).not.toContain('companyName');
+  });
+
+  test('a client created from Buildertrend carries its custom fields', async () => {
+    const r = await put(APPLY, ADMIN, { dataset: 'clients', mode: 'create' });
+    expect(r.status).toBe(200);
+    const c = engine.db.prepare("SELECT * FROM clients WHERE bt_contact_id = '9007'").get();
+    expect([c.community_name, c.property_phone]).toEqual(['Seaside Towers', '727-555-0100']);
+    expect(c.company_name).toBeNull();
+  });
+
+  test('a value typed into P86 MID-PRESS wins, and the fill is reported stale', async () => {
+    // The preview saw a blank; a person fills it before the write. Only the
+    // locked re-read can see that, and only if it SELECTs the column.
+    const real = engine.pool.connect;
+    engine.pool.connect = async () => {
+      const c = await real();
+      const q = c.query;
+      c.query = async (sql, params) => {
+        if (sql.indexOf('FROM clients WHERE id =') >= 0 && sql.indexOf('FOR UPDATE') >= 0 && params[0] === 'c-a') {
+          engine.db.prepare("UPDATE clients SET company_name = 'Typed Mid Press' WHERE id = 'c-a'").run();
+        }
+        return q(sql, params);
+      };
+      return c;
+    };
+    let r;
+    try { r = await put(APPLY, ADMIN, { dataset: 'clients', btIds: ['9001'] }); } finally { engine.pool.connect = real; }
+    expect(clientRow('c-a').company_name).toBe('Typed Mid Press');
+    expect(r.json.results[0].stale).toContain('Company name');
+    // The other fields on the row still went in.
+    expect(clientRow('c-a').cm_email).toBe('cam@oakhollow.test');
+  });
+
+  test('UNDO puts the columns back', async () => {
+    await put(APPLY, ADMIN, { dataset: 'clients', btIds: ['9001'] });
+    expect(clientRow('c-a').gate_code).not.toBeNull();
+    const run = engine.db.prepare('SELECT id FROM bt_sync_runs ORDER BY started_at DESC').get();
+    const u = await put('/api/admin/organizations/me?action=buildertrend-undo', ADMIN, { runId: run.id });
+    expect(u.status).toBe(200);
+    const c = clientRow('c-a');
+    expect([c.company_name, c.gate_code, c.cm_email]).toEqual([null, null, null]);
+  });
+});
+
+// JOB CUSTOM FIELDS — gate code, and the CLIENT's own PO and WO numbers, kept
+// in jobs.data on the same contact rule.
+describe('JOB CUSTOM FIELDS', () => {
+  const btj = (id) => BT_JOBS.find((r) => r.jobId === id);
+  const cf = (label, value) => ({ customFieldId: 1, label, tooltipText: '', type: 1, value });
+  const setData = (id, patch) => {
+    const d = jobData(id);
+    engine.db.prepare('UPDATE jobs SET data = ? WHERE id = ?').run(JSON.stringify(Object.assign(d, patch)), id);
+  };
+  beforeEach(() => {
+    btj(111).customFields = [
+      cf('Gate Code (if applicable)', ' #4455 \n back gate '),
+      cf('PO# (if applicable)', 'PO-7788'),
+      cf('WO# (if applicable)', ''),
+      cf('Market', [123456]),
+    ];
+    btj(444).customFields = [cf('WO# (if applicable)', 'WO-12')];
+  });
+  afterEach(() => {
+    btj(111).customFields = [];
+    btj(444).customFields = [];
+    preview.forgetFetch(AGX);
+  });
+
+  test('apply fills them into jobs.data; a note keeps its lines; a blank writes nothing', async () => {
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'] });
+    expect(r.status).toBe(200);
+    const d = jobData('j-1');
+    expect([d.gateCode, d.clientPoNumber]).toEqual(['#4455\nback gate', 'PO-7788']);
+    expect(d).not.toHaveProperty('clientWoNumber');
+    expect(JSON.stringify(d)).not.toMatch(/123456/);
+  });
+
+  test('safe mode does not write them \u2014 safe stays the start date and the map point', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    expect(jobData('j-1')).not.toHaveProperty('gateCode');
+  });
+
+  test('a DIFFERENT P86 value waits for a tick, and a tick replaces it', async () => {
+    setData('j-1', { clientPoNumber: 'PO-0001' });
+    await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+    expect(jobData('j-1').clientPoNumber).toBe('PO-0001');
+    preview.forgetFetch(AGX);
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: ['clientPo'] });
+    expect(r.json.results[0].fields).toEqual([{ field: 'clientPo', from: 'PO-0001', to: 'PO-7788' }]);
+    expect(jobData('j-1').clientPoNumber).toBe('PO-7788');
+  });
+
+  test('a Buildertrend blank never erases what P86 holds', async () => {
+    setData('j-1', { clientWoNumber: 'WO-P86' });
+    await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'] });
+    expect(jobData('j-1').clientWoNumber).toBe('WO-P86');
+  });
+
+  test('a job created from Buildertrend carries them', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create' });
+    const made = engine.db.prepare("SELECT data FROM jobs WHERE bt_job_id = '444'").get();
+    expect(JSON.parse(made.data).clientWoNumber).toBe('WO-12');
+  });
+
+  test('what P86 stored reaches the matcher: a stored status word is not due again, a held value is not a blank', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'] });
+    expect(jobData('j-1').btStatus).toBe('Open');
+    preview.forgetFetch(AGX);
+    const p86 = await preview.readP86(engine.pool, AGX);
+    const row = match.matchJobs(BT_JOBS.map((x) => readRecord('jobs', x)), p86.jobs, { coTotals: p86.coTotals }).find((r) => String(r.bt.btId) === '111');
+    expect(row.btStatusDue).toBe(false);
+    // Filled last press, so nothing is offered for them now.
+    expect(row.corrections.map((c) => c.field)).not.toContain('gateCode');
+    expect(row.corrections.map((c) => c.field)).not.toContain('clientPo');
+  });
+
+  test('UNDO takes them back out', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'] });
+    expect(jobData('j-1').gateCode).toBeTruthy();
+    const run = engine.db.prepare('SELECT id FROM bt_sync_runs ORDER BY started_at DESC').get();
+    const u = await put('/api/admin/organizations/me?action=buildertrend-undo', ADMIN, { runId: run.id });
+    expect(u.status).toBe(200);
+    expect(jobData('j-1')).not.toHaveProperty('gateCode');
   });
 });

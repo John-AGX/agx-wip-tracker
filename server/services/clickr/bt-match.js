@@ -626,6 +626,7 @@ function p86JobView(row) {
     geocodeStatus: str(row.geocode_status),
     // What Buildertrend last called it, as sync-apply.js recorded it (J2).
     btStatus: str(d.btStatus).trim(),
+    ...Object.fromEntries(JOB_CUSTOM_FIELDS.map((f) => [f.field, str(d[f.key])])),
     // jobs.bt_job_id — set only by sync-apply.js when an admin applies a match.
     btId: row.bt_job_id == null ? '' : str(row.bt_job_id).trim(),
   };
@@ -729,6 +730,11 @@ function jobProposals(bt, p, ctx) {
   if (btHasPoint && !p86HasPoint) {
     acc.corrections.push({ field: 'coordinates', label: 'Map location', kind: 'fill', from: '',
       to: bt.latitude.toFixed(5) + ', ' + bt.longitude.toFixed(5), value: { lat: bt.latitude, lng: bt.longitude } });
+  }
+  // CUSTOM FIELDS, on the contact rule: a blank fills, a different value
+  // waits for a tick, a Buildertrend blank never erases.
+  for (const f of JOB_CUSTOM_FIELDS) {
+    contactField(acc, { field: f.field, label: f.label, bt: bt[f.field], p86: p[f.field], same: f.same, multiline: f.multiline });
   }
   return { acc, notes };
 }
@@ -944,6 +950,7 @@ function matchJobs(btValues, p86Rows, ctx) {
       // Enumerated view: a key missing here is read and thrown away again.
       latitude: v.latitude == null ? null : v.latitude,
       longitude: v.longitude == null ? null : v.longitude,
+      ...Object.fromEntries(JOB_CUSTOM_FIELDS.map((f) => [f.field, str(v[f.field])])),
     };
     const contractView = parseMoney(v.contractPrice);
     bt.contractText = contractView.kind === 'unparsed' ? 'unparsed' : moneyText(contractView);
@@ -1670,7 +1677,54 @@ function p86ClientView(row) {
     zip: str(row.zip),
     parentId: row.parent_client_id == null ? '' : str(row.parent_client_id),
     btId: row.bt_contact_id == null ? '' : str(row.bt_contact_id).trim(),
+    ...Object.fromEntries(CLIENT_CUSTOM_FIELDS.map((f) => [f.field, str(row[f.col])])),
   };
+}
+
+// A client's Buildertrend CUSTOM fields and the P86 column each one fills.
+// Every one follows contactField's rule: a blank P86 value is filled, a
+// different one is held back for a person to tick, and a Buildertrend blank
+// never erases what P86 holds. Names compare as names (punctuation is
+// noise); a gate code or a note compares on spacing and case only, because
+// in '*1234#' the star and the hash are the keypad.
+const looseText = (v) => str(v).replace(/\s+/g, ' ').trim().toLowerCase();
+const sameName = (a, b) => textKey(a) !== '' && textKey(a) === textKey(b);
+const sameLoose = (a, b) => looseText(a) === looseText(b);
+const samePhone = (a, b) => (phoneKey(a) !== '' && phoneKey(a) === phoneKey(b)) || sameLoose(a, b);
+const sameEmail = (a, b) => (emailKey(a) !== '' && emailKey(a) === emailKey(b)) || sameLoose(a, b);
+// A job's Buildertrend CUSTOM fields and the key each one is kept under in
+// jobs.data. The client's PO and WO numbers are named that way on purpose:
+// P86's own purchase orders go to subs, and its own WO-0042 tickets are
+// another thing again.
+const JOB_CUSTOM_FIELDS = [
+  { field: 'gateCode', label: 'Gate code', key: 'gateCode', same: (a, b) => sameLoose(a, b), multiline: true },
+  { field: 'clientPo', label: 'Client PO #', key: 'clientPoNumber', same: (a, b) => sameLoose(a, b) },
+  { field: 'clientWo', label: 'Client WO #', key: 'clientWoNumber', same: (a, b) => sameLoose(a, b) },
+];
+
+const CLIENT_CUSTOM_FIELDS = [
+  { field: 'companyName', label: 'Company name', col: 'company_name', same: sameName },
+  { field: 'communityName', label: 'Community name', col: 'community_name', same: sameName },
+  { field: 'gateCode', label: 'Gate code / notes', col: 'gate_code', same: sameLoose, multiline: true },
+  { field: 'communityManager', label: 'Community manager', col: 'community_manager', same: sameName },
+  { field: 'cmPhone', label: 'CM phone', col: 'cm_phone', same: samePhone },
+  { field: 'cmEmail', label: 'CM email', col: 'cm_email', same: sameEmail },
+  { field: 'additionalPocs', label: 'Additional contacts', col: 'additional_pocs', same: sameLoose, multiline: true },
+  { field: 'propertyAddress', label: 'Property address', col: 'property_address', same: sameLoose },
+  { field: 'propertyPhone', label: 'Property phone', col: 'property_phone', same: samePhone },
+  { field: 'website', label: 'Website', col: 'website', same: sameLoose },
+  { field: 'maintenanceManager', label: 'Maintenance manager', col: 'maintenance_manager', same: sameName },
+  { field: 'mmPhone', label: 'MM phone', col: 'mm_phone', same: samePhone },
+  { field: 'mmEmail', label: 'MM email', col: 'mm_email', same: sameEmail },
+];
+
+// The text a field is written as. One line fields collapse their spacing, as
+// every contact field does; a note keeps its LINES (tidied, blank ones
+// dropped), because 'Gate 1234 / call Ana first' on one line is not what
+// somebody typed on two.
+function fieldText(v, multiline) {
+  if (!multiline) return str(v).trim().replace(/\s+/g, ' ');
+  return str(v).split(/\r?\n/).map((l) => l.replace(/[ \t]+/g, ' ').trim()).filter(Boolean).join('\n');
 }
 
 // "CMG Management - Caravel 1": the company is shared by every property it
@@ -1724,7 +1778,7 @@ function contactField(acc, spec) {
     if (!isP86Blank(p86)) acc.btBlank.push({ field, label, p86: str(p86) });
     return;
   }
-  const to = str(bt).trim().replace(/\s+/g, ' ');
+  const to = fieldText(bt, spec.multiline);
   if (isP86Blank(p86)) {
     acc.corrections.push({ field, label, kind: 'fill', from: '', to });
     return;
@@ -1747,6 +1801,9 @@ function clientProposals(bt, p) {
   contactField(acc, { field: 'city', label: 'City', bt: bt.city, p86: p.city, same: (a, b) => cityKey(a) === cityKey(b) });
   contactField(acc, { field: 'state', label: 'State', bt: bt.state, p86: p.state, same: (a, b) => stateKey(a) === stateKey(b) });
   contactField(acc, { field: 'zip', label: 'Zip', bt: bt.zip, p86: p.zip, same: (a, b) => zipKey(a) === zipKey(b) });
+  for (const f of CLIENT_CUSTOM_FIELDS) {
+    contactField(acc, { field: f.field, label: f.label, bt: bt[f.field], p86: p[f.field], same: f.same, multiline: f.multiline });
+  }
   return { acc, notes };
 }
 
@@ -1772,6 +1829,7 @@ function matchClients(btValues, p86Rows) {
       email: str(v.email), phone: str(v.phone), cell: str(v.cell),
       street: str(v.street), city: str(v.city), state: str(v.state), zip: str(v.zip),
       jobCount: v.jobCount, leadCount: v.leadCount, scope: 'all',
+      ...Object.fromEntries(CLIENT_CUSTOM_FIELDS.map((f) => [f.field, str(v[f.field])])),
     };
     if (isBtBlank(v.displayName)) return unpairedRow(bt, 'refused', [], ['This Buildertrend contact has no name, so it cannot be matched and will never be created.']);
 
@@ -1854,7 +1912,7 @@ function matchClients(btValues, p86Rows) {
 }
 
 module.exports = {
-  matchJobs, matchLeads, matchClients, p86ClientView, clientCore, sameClientProperty, emailKey, phoneKey, notInBuildertrend, summarise, RATE_CLASSES,
+  matchJobs, matchLeads, matchClients, p86ClientView, CLIENT_CUSTOM_FIELDS, JOB_CUSTOM_FIELDS, fieldText, clientCore, sameClientProperty, emailKey, phoneKey, notInBuildertrend, summarise, RATE_CLASSES,
   parseJobName, exactNumberKey, looseNumberKey, namesAgree, nameEvidence, placeEvidence, streetsMatchStrict, streetsAgree, samePlace,
   nearIndex, nearKey, nearTitles, bigrams, GENERIC,
   isBtBlank, isP86Blank, textKey, streetKey, cityKey, stateKey, zipKey, dateKey, fuzzyEq, osa, charSimilarity,

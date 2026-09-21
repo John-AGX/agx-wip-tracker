@@ -1977,14 +1977,14 @@ describe('PAGE — js/bt-sync-preview.js', () => {
     expect(html).toContain('<span class="btp-tag is-linked">Linked</span>');
     expect(html).not.toContain('data-btp-apply="11"');
     // The safe press reaches it, counts it, and names what it will record.
-    expect(html).toMatch(/data-btp-apply-safe="1">Link confident matches \+ fill blank start dates \(1\)</);
+    expect(html).toMatch(/data-btp-apply-safe="1">Link confident matches \+ fill blank start dates and map locations \(1\)</);
     expect(html).toContain('Records what Buildertrend now calls 1 job, beside the P86 status, which does not change.');
     expect(T.safeConfirmText('jobs', ds)).toContain('Records what Buildertrend now calls 1 job');
 
     // Once every word is recorded there is nothing left to press.
     const done = Object.assign(jobsDs(), { rows: [linkedJob(11, false), linkedJob(12, false)] });
     expect(T.render(pageWith({ jobs: done })))
-      .toMatch(/data-btp-apply-safe="1" disabled>Link confident matches \+ fill blank start dates \(0\)</);
+      .toMatch(/data-btp-apply-safe="1" disabled>Link confident matches \+ fill blank start dates and map locations \(0\)</);
     expect(T.safeConfirmText('jobs', done)).toBe('Nothing is left to link. Start dates are filled only where P86 has none. No P86 status, money or other field changes.');
   });
 
@@ -1996,7 +1996,7 @@ describe('PAGE — js/bt-sync-preview.js', () => {
     T.setView('jobs', 'all', 'open');
     const html = T.render(pageWith({ jobs: jobsDs() }));
     expect(html).toContain('>5 shown</span>');
-    expect(html).toMatch(/data-btp-apply-safe="1">Link confident matches \+ fill blank start dates \(6\)</);
+    expect(html).toMatch(/data-btp-apply-safe="1">Link confident matches \+ fill blank start dates and map locations \(6\)</);
     expect(html).toContain('Every confident match counts here, including Buildertrend jobs the scope above hides.');
   });
 

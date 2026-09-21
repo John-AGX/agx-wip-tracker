@@ -801,7 +801,10 @@
       if (r.rung !== 'Buildertrend ID') return true;
       if (ds.key === 'purchaseOrders' && (r.subAccessDue === true || r.approvalKindDue === true)) return true;
       if (r.btStatusDue === true) return true;
-      return ds.key === 'jobs' && (r.corrections || []).some(function (c) { return c.field === 'startDate' && c.kind === 'fill'; });
+      // The two blanks a safe press fills on a job (sync-apply isSafeCorrection).
+      // Leave one out and a linked job whose only safe update is that fill
+      // counts 0, the button disables, and the fill never lands.
+      return ds.key === 'jobs' && (r.corrections || []).some(function (c) { return c.kind === 'fill' && (c.field === 'startDate' || c.field === 'coordinates'); });
     }).length;
   }
 
@@ -843,7 +846,7 @@
   // What the safe press does, named. Every value in it is a count this page
   // computed, so there is nothing here to escape.
   function safeSubText(ds) {
-    var t = 'Saves the Buildertrend id on each confident match' + (ds.key === 'jobs' ? ' and fills a start date only where P86 has none' : '') + '.';
+    var t = 'Saves the Buildertrend id on each confident match' + (ds.key === 'jobs' ? ' and fills a start date and a map location only where P86 has none' : '') + '.';
     var w = statusWordCount(ds);
     if (w) t += ' Records what Buildertrend now calls ' + w + ' ' + (NOUN[ds.key] || 'record') + (w === 1 ? '' : 's') + ', beside the P86 status, which does not change.';
     if (ds.key === 'estimates') {
@@ -1116,7 +1119,7 @@
       var sc = safeCount(ds);
       var busySafe = _applying === ds.key + ':safe';
       html += '<div class="btp-filters"><button type="button" class="btp-btn btp-apply" data-btp-apply-safe="1"' + (_applying || !sc || !f.complete ? ' disabled' : '') + '>' +
-        (busySafe ? 'Applying…' : (ds.key === 'jobs' ? 'Link confident matches + fill blank start dates' : ds.key === 'purchaseOrders' ? 'Link confident matches + give subs portal access' : 'Link confident matches') + ' (' + sc + ')') + '</button>' +
+        (busySafe ? 'Applying…' : (ds.key === 'jobs' ? 'Link confident matches + fill blank start dates and map locations' : ds.key === 'purchaseOrders' ? 'Link confident matches + give subs portal access' : 'Link confident matches') + ' (' + sc + ')') + '</button>' +
         '<span class="btp-sub">' + (f.complete ? safeSubText(ds) : 'Needs a complete Buildertrend read.') + '</span></div>';
       var cn = createCount(ds);
       var busyCreate = _applying === ds.key + ':create:bulk';
