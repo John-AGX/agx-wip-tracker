@@ -911,3 +911,65 @@ describe('MUTANT: the guards removed', () => {
     expect(row('a_only').entity_type).toBe('job');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REPLY ONLY (1.50). A line of kind 'follow_up' is finished without a
+// completion photo (services/service-tickets.js subtaskNeedsPhoto), so a photo
+// on it is never its last proof: rule (c) does not hold it. Rules (a) and (b)
+// — the approved record — are not about proof, and still do.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('a reply-only line keeps no minimum', () => {
+  const replyOnly = (id) => mockEng.db.exec("UPDATE tasks SET kind = 'follow_up' WHERE id = '" + id + "'");
+
+  test('the only completion photo on a DONE reply-only line deletes: 200, logged, blobs gone', async () => {
+    replyOnly('t_784');
+    const b = await serve();
+    expect((await del(b, 'a_only')).status).toBe(200);
+    expect(exists('a_only')).toBe(false);
+    expect(events().map((e) => e.kind)).toEqual(['photo_removed']);
+    expect(deletes().map((c) => c[1])).toContain('k/a_only_orig.jpg');
+  });
+
+  test('…and retags as a before photo', async () => {
+    replyOnly('t_784');
+    const b = await serve();
+    expect((await putTags(b, 'a_only', ['before'])).status).toBe(200);
+    expect(tagsOf('a_only')).toEqual(['before']);
+  });
+
+  test('…and moves off the line', async () => {
+    replyOnly('t_784');
+    const b = await serve();
+    expect((await move(b, 'a_only')).status).toBe(200);
+    expect(row('a_only').entity_type).toBe('job');
+  });
+
+  test('CONTROL: the same photo on field work is still the last proof: 409 last_completion_photo', async () => {
+    const b = await serve();
+    expect((await del(b, 'a_only')).body).toEqual({ error: LAST('delete the photo'), code: 'last_completion_photo' });
+  });
+
+  test('an APPROVED work order still keeps every photo, reply only or not: 409 photo_locked', async () => {
+    replyOnly('t_900');
+    const b = await serve();
+    expect((await del(b, 'a_appr_c1')).body).toEqual({ error: LOCKED_DELETE, code: 'photo_locked' });
+    expect(exists('a_appr_c1')).toBe(true);
+  });
+
+  test('MUTANT: the guard\'s task read without kind -> the reply-only line\'s photo is held as proof it never needed', async () => {
+    replyOnly('t_784');
+    const b = await serveMutant([], [[
+      '`SELECT id, title, status, archived_at, service_ticket_id, kind FROM tasks',
+      '`SELECT id, title, status, archived_at, service_ticket_id FROM tasks']]);
+    expect((await del(b, 'a_only')).body.code).toBe('last_completion_photo');
+    expect(exists('a_only')).toBe(true);
+  });
+
+  test('MUTANT: rule (c) no longer asking the kind -> the same refusal', async () => {
+    replyOnly('t_784');
+    const b = await serveMutant([], [[
+      "status !== 'cancelled' &&\n      svc.subtaskNeedsPhoto(task)) {",
+      "status !== 'cancelled') {"]]);
+    expect((await del(b, 'a_only')).body.code).toBe('last_completion_photo');
+  });
+});

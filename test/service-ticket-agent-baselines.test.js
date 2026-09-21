@@ -245,8 +245,8 @@ describe('the approval card no longer treats a building owner as harmless', () =
     // own filename — nothing on disk is touched (other agents are working in
     // this checkout) and no sibling module is involved, because payload-describe
     // requires none.
-    const WAS = "ticketTask: bagSpec({ low: ['title', 'notes', 'priority', 'due_date'] })";
-    const MUT = "ticketTask: bagSpec({ low: ['title', 'notes', 'priority', 'due_date'], lowIds: ['assignee_user_id'] })";
+    const WAS = "ticketTask: bagSpec({ low: ['title', 'notes', 'priority', 'due_date', 'kind'] })";
+    const MUT = "ticketTask: bagSpec({ low: ['title', 'notes', 'priority', 'due_date', 'kind'], lowIds: ['assignee_user_id'] })";
     expect(fs.readFileSync(DESCRIBE_PATH, 'utf8')).toContain(WAS);
     const script = `
       const Module = require('module');

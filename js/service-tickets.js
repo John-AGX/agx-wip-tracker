@@ -1176,6 +1176,8 @@
     return canEdit
       ? '<div class="p86-st-task-add">' +
           '<input type="text" class="p86-st-task-new" placeholder="Add a subtask — e.g. Bldg 790 — Side A: …" />' +
+          '<label class="p86-st-task-reply" title="For a call, an email or a confirmation: it can be checked off without a completion photo">' +
+            '<input type="checkbox" class="p86-st-task-replyonly" /> Reply only</label>' +
           '<button class="ee-btn secondary p86-st-task-go">Add</button>' +
         '</div>' +
         '<div class="p86-st-task-note">Buildings live on the work order. They are not on the ' +
@@ -1214,6 +1216,9 @@
     var completion = photos.filter(function (p) { return p.kind !== 'before'; }).length;
     var before = photos.length - completion;
     var isDone = t.status === 'done';
+    // REPLY ONLY (kind follow_up): finished without a completion photo. The
+    // server's rule is services/service-tickets.js subtaskNeedsPhoto.
+    var replyOnly = t.kind === 'follow_up';
     var open = !!_state.openSubs[t.id];
     var sideSummary = parsed.sides.map(function (sd) {
       return sd.label ? sd.label + ' (' + sd.items.length + ')' : sd.items.length + ' item' + (sd.items.length === 1 ? '' : 's');
@@ -1224,7 +1229,7 @@
       '<div class="p86-wo-sub-head">' +
         '<button type="button" class="p86-wo-check" aria-pressed="' + (isDone ? 'true' : 'false') + '"' +
           (canEdit ? '' : ' disabled') +
-          ' title="' + (isDone ? 'Reopen this subtask' : (completion ? 'Mark complete' : 'Add a completion photo to mark this complete')) + '">' +
+          ' title="' + (isDone ? 'Reopen this subtask' : (replyOnly ? 'Mark done — reply only, no photo needed' : (completion ? 'Mark complete' : 'Add a completion photo to mark this complete'))) + '">' +
           (isDone ? '&#x2713;' : '') +
         '</button>' +
         '<button type="button" class="p86-wo-sub-toggle" aria-expanded="' + (open ? 'true' : 'false') + '">' +
@@ -1238,7 +1243,9 @@
           (notes.length ? '<span class="p86-wo-chip">' + notes.length + ' note' + (notes.length === 1 ? '' : 's') + '</span>' : '') +
           (isDone
             ? '<span class="p86-wo-doneby">Done' + (t.completed_by ? ' · ' + esc(t.completed_by) : '') + '</span>'
-            : (completion ? '' : '<span class="p86-wo-needs">Needs photo</span>')) +
+            : (replyOnly
+              ? '<span class="p86-wo-reply" title="Reply only — no completion photo needed">Reply only</span>'
+              : (completion ? '' : '<span class="p86-wo-needs">Needs photo</span>'))) +
           extHtml('cardMeta', t, ctx) +
         '</span>' +
       '</div>' +
@@ -1279,6 +1286,10 @@
         // The camera controls are hidden where the pointer is not a finger,
         // and on Windows (styles.css): there capture is ignored and "Take
         // photo" would only open the file dialog.
+        (canEdit
+          ? '<label class="p86-wo-replyonly"><input type="checkbox" class="p86-wo-replyonly-in"' + (replyOnly ? ' checked' : '') + ' /> ' +
+              'Reply only — can be checked off without a completion photo</label>'
+          : '') +
         (canEdit
           ? '<div class="p86-wo-sub-actions">' +
               '<label class="ee-btn primary p86-wo-up p86-wo-cam is-completion">' + CAM_ICON_BTN + 'Take completion photo<input type="file" accept="image/*" capture="environment" hidden data-kind="completion" /></label>' +
@@ -1959,12 +1970,28 @@
       if (tap && card.contains(tap)) card._p86LastTap = tap;
     }, true);
 
+    var replySwitch = card.querySelector('.p86-wo-replyonly-in');
+    if (replySwitch) replySwitch.addEventListener('change', function () {
+      var ctx = ctxNow();
+      var want = replySwitch.checked;
+      replySwitch.disabled = true;
+      window.p86Api.tasks.update(taskId, { kind: want ? 'follow_up' : 'todo' }).then(function () {
+        toast(want ? 'Reply only: this line can be checked off without a photo.' : 'This line needs a completion photo again.');
+        return updateDetail(d, ctx.ticketId, { anchor: card }).catch(noop);
+      }, function (e) {
+        replySwitch.checked = !want;
+        toast(e && e.message ? e.message : 'Could not change this line', 'error');
+      }).then(function () {
+        if (replySwitch.isConnected) replySwitch.disabled = false;
+      });
+    });
+
     var check = card.querySelector('.p86-wo-check');
     if (check) check.addEventListener('click', function () {
       var ctx = ctxNow();
       var done = task().status !== 'done';
       var hasCompletion = photos().some(function (p) { return p.kind !== 'before'; });
-      if (done && !hasCompletion) {
+      if (done && !hasCompletion && task().kind !== 'follow_up') {
         setOpen(true);
         toast('Add a completion photo before marking this complete.', 'error');
         return;
@@ -2673,13 +2700,17 @@
       var title = (addIn && addIn.value || '').trim();
       if (!title || !window.p86Api || !window.p86Api.tasks) return;
       addGo.disabled = true;
-      window.p86Api.tasks.create({
+      var replyBox = d.querySelector('.p86-st-task-replyonly');
+      var payload = {
         title: title,
         service_ticket_id: t.id,
         entity_type: t.job_id ? 'job' : 'lead',
         entity_id: t.job_id || t.lead_id
-      }).then(function () {
+      };
+      if (replyBox && replyBox.checked) payload.kind = 'follow_up';
+      window.p86Api.tasks.create(payload).then(function () {
         if (addIn) addIn.value = '';
+        if (replyBox) replyBox.checked = false;
         // In place: whatever else is typed on the ticket stays in its box.
         return updateDetail(d, t.id, { anchor: d.querySelector('.p86-st-task-add') }).catch(noop);
       }).catch(function (e) {

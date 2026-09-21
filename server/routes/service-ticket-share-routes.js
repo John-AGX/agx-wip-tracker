@@ -961,7 +961,7 @@ router.get('/service-ticket-share/:token',
       // `scope = 'org'`; without it, sharing a work order sent the titles of
       // a PM's private to-dos to whoever holds the link.
       const tasks = await pool.query(
-        `SELECT id, title, status, due_date, completed_at FROM tasks
+        `SELECT id, title, status, due_date, completed_at, kind FROM tasks
           WHERE service_ticket_id = $1 AND organization_id = $2 AND archived_at IS NULL
             AND scope = 'org'
           ORDER BY created_at ASC`,
@@ -1059,6 +1059,9 @@ router.get('/service-ticket-share/:token',
             id: t.id,
             title: t.title,
             done: t.status === 'done',
+            // A reply-only line is finished without a completion photo. The flag,
+            // not the kind: the crew has no use for the office's task kinds.
+            reply_only: !svc.subtaskNeedsPhoto(t),
             due_date: t.due_date,
             completed_at: t.status === 'done' ? t.completed_at : null,
             completed_by: t.status === 'done' ? act.completed_by : null,

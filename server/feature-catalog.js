@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.49';
+const APP_VERSION = '1.50';
 
 const releases = [
+  {
+    version: '1.50',
+    date: '2026-09-21',
+    name: 'Reply-only lines on a work order',
+    summary: 'Not every line on a punch list is field work. A call to an owner, an email back, a confirmation — there is nothing to photograph, and the photo rule made those lines impossible to tick. Mark one Reply only and it can be checked off without a completion photo. Every other line still needs one.',
+    changes: [
+      { type: 'new', text: 'Reply only. Tick the Reply only box beside Add when you add a line, or open a line and switch it on. The line is tagged Reply only where field work says Needs photo, and it can be checked off with no completion photo — from the office, and on the crew’s link, where it says “Reply only — no photo needed.” instead of asking for one.' },
+      { type: 'new', text: '86 can draft a line as reply only. Say which lines are calls, emails or confirmations, and the work order it drafts marks them.' },
+      { type: 'improved', text: 'Only someone who can edit the job can switch a line to reply only or back, and not on an approved or closed work order. The crew lead on a work order can still tick its lines and add notes, but cannot excuse a line from its photo.' },
+      { type: 'improved', text: 'A finished reply-only line cannot quietly become one that needs a photo it does not have: switching it back asks for the photo first, or for the line to be reopened. The photo on a reply-only line is not its only proof, so it can be deleted or retagged; an approved work order still keeps every photo, as before.' },
+    ],
+  },
   {
     version: '1.49',
     date: '2026-09-21',

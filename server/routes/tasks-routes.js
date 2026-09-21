@@ -764,6 +764,15 @@ router.patch('/:id', requireAuth, async (req, res) => {
     const assignChange = assignTo !== undefined && (assignTo === null || Number.isInteger(assignTo)) &&
       Number(before.assignee_user_id) !== Number(assignTo);
     const statusChange = !!statusIn && statusIn !== before.status;
+    // REPLY ONLY (1.50). A line's kind decides whether it needs a completion
+    // photo (svc.subtaskNeedsPhoto), so turning reply only on or off for a
+    // building changes what its work order's punch list asks for proof of. It
+    // is the door's, under the punch-list rule — never a quiet field edit the
+    // crew lead could make on a line they are about to tick. A kind change that
+    // leaves the photo question alone (todo <-> punch) is an ordinary edit.
+    const kindIn = has('kind') && KINDS.has(String(body.kind)) ? String(body.kind) : null;
+    const photoRuleMoves = (row) => !!kindIn && svc.subtaskNeedsPhoto({ kind: kindIn }) !== svc.subtaskNeedsPhoto(row);
+    const kindChange = photoRuleMoves(before);
 
     // A BUILDING IS NEVER ASSIGNED TO ANYBODY (1.35). Not by the office, not by
     // a job editor, not by the person it used to name. This is no longer a
@@ -790,7 +799,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
     if (assignChange && endsUpABuilding) return sendRefusal(res, subtaskDoor.assignVerdict());
 
     const throughDoor = before.scope === 'org' && !before.archived_at &&
-      ((touchesDone && onWorkOrder) || linkChange || (onWorkOrder && (statusChange || assignChange)));
+      ((touchesDone && onWorkOrder) || linkChange || (onWorkOrder && (statusChange || assignChange || kindChange)));
     // The door owns status and completed_at when done-ness changes on a task
     // that ends up on a work order. A task being taken OFF one keeps the
     // generic status write, because it is no longer a subtask afterwards.
@@ -934,12 +943,35 @@ router.patch('/:id', requireAuth, async (req, res) => {
         }
         if (newTicket && finalStatus === 'done') {
           const photos = (await workOrder.taskPhotosByTask(client, orgId, [before.id])).get(String(before.id)) || [];
-          if (!svc.subtaskMayComplete(photos).ok) {
+          // The kind the task will HAVE after this request: a finished follow-up
+          // may join a work order without a photo, as a reply-only line.
+          const kindAfter = kindIn || current.kind;
+          if (!svc.subtaskMayComplete(photos, { kind: kindAfter }).ok) {
             return { refusal: { status: 409, error: subtaskDoor.MSG.doneNeedsPhoto, code: 'completion_photo_required' } };
           }
         }
       } else {
         // Not a link change, so newTicket is the ticket the task is on.
+        //
+        // Reply only on or off is a punch-list change (see kindChange): only
+        // someone who can edit the job, and not on a locked work order. Asked of
+        // the row as it is under the lock.
+        if (newTicket && photoRuleMoves(current)) {
+          const verdict = await subtaskDoor.structureVerdict(client, { user: req.user, orgId, ticket: newTicket });
+          if (!verdict.ok) return { refusal: verdict };
+        }
+        // A FINISHED reply-only line made to need a photo again would be a done
+        // building with no completion photo — the state the photo guard exists
+        // to prevent. Refused unless it already has one, or is being reopened
+        // in the same request.
+        const kindAfter = kindIn || current.kind;
+        if (newTicket && current.status === 'done' && finalStatus === 'done' &&
+            !svc.subtaskNeedsPhoto(current) && svc.subtaskNeedsPhoto({ kind: kindAfter })) {
+          const photos = (await workOrder.taskPhotosByTask(client, orgId, [before.id])).get(String(before.id)) || [];
+          if (!svc.subtaskMayComplete(photos).ok) {
+            return { refusal: { status: 409, error: subtaskDoor.MSG.replyOnlyDoneNeedsPhoto, code: 'completion_photo_required' } };
+          }
+        }
         if (touchesDone) {
           // The WORK ORDER's assignee may finish its buildings (1.35), so the
           // verdict is asked of the LOCKED ticket row, never of the task.

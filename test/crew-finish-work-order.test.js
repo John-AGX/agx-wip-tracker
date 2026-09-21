@@ -374,3 +374,65 @@ describe('links that cannot finish get no card', () => {
     expect($('#finishCard')).not.toBeNull();
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════
+// REPLY ONLY (1.50): a line the office marked reply only (a call, an email, a
+// confirmation) is finished without a completion photo. The read hands the
+// page reply_only; the server rule is in work-order-reply-only.test.js.
+describe('a reply-only line needs no photo on the crew link', () => {
+  const lines = () => [
+    { id: 'r1', title: 'Call the owner back', done: false, reply_only: true, photos: [], notes: [] },
+    { id: 't1', title: 'Bldg 4208 — Side A: leak', done: false, reply_only: false, photos: [], notes: [] },
+  ];
+  const isTick = (id) => (c) => c.method === 'POST' && c.url === API + '/subtasks/' + id + '/done';
+  const card = (id) => document.querySelector('.bld[data-task="' + id + '"]');
+  const chip = (id) => card(id).querySelector('.bld-head .chip').outerHTML;
+
+  test('its chip says Reply only; field work with no photo still says Needs photo', async () => {
+    await boot(makeNet(payload({ tasks: lines() })));
+    expect(chip('r1')).toBe('<span class="chip n">Reply only</span>');
+    expect(chip('t1')).toBe('<span class="chip need">Needs photo</span>');
+  });
+
+  test('its Mark complete is on with no photo, says why, and sends the tick', async () => {
+    const net = makeNet(payload({ tasks: lines() }));
+    net.on(isTick('r1'), () => res(200, { ok: true }));
+    await boot(net);
+    const wrap = card('r1').querySelector('.bdone-wrap');
+    expect(wrap.querySelector('.bdone').disabled).toBe(false);
+    expect(wrap.textContent).toContain('Reply only — no photo needed.');
+    expect(wrap.textContent).not.toContain('Add at least one completion photo first.');
+    wrap.querySelector('.bdone').click();
+    await flush();
+    expect(net.of(isTick('r1')).map((c) => JSON.parse(c.init.body))).toEqual([{ done: true }]);
+  });
+
+  test('CONTROL: field work with no photo keeps Mark complete off, with its hint', async () => {
+    await boot(makeNet(payload({ tasks: lines() })));
+    const wrap = card('t1').querySelector('.bdone-wrap');
+    expect(wrap.querySelector('.bdone').disabled).toBe(true);
+    expect(wrap.textContent).toContain('Add at least one completion photo first.');
+    expect(wrap.textContent).not.toContain('Reply only');
+  });
+
+  test('a reply-only line that has a photo anyway reads like any other: its photo count, no reply-only hint', async () => {
+    const withPhoto = lines();
+    withPhoto[0].photos = [{ id: 'ph', kind: 'completion', thumb_url: '/t', web_url: '/w' }];
+    await boot(makeNet(payload({ tasks: withPhoto })));
+    expect(chip('r1')).toBe('<span class="chip n">1 photo</span>');
+    expect(card('r1').querySelector('.bdone-wrap').textContent).not.toContain('Reply only');
+  });
+
+  test('MUTANT: Mark complete not asking reply_only -> the crew cannot finish a call they already made', async () => {
+    await boot(makeNet(payload({ tasks: lines() })),
+      mutate(SHARE_SCRIPT, 'var ok = s.completion || x.reply_only;', 'var ok = s.completion;'));
+    expect(card('r1').querySelector('.bdone').disabled).toBe(true);
+  });
+
+  test('MUTANT: the chip not asking reply_only -> the line says Needs photo', async () => {
+    await boot(makeNet(payload({ tasks: lines() })),
+      mutate(SHARE_SCRIPT, "(x.reply_only ? '<span class=\"chip n\">Reply only</span>' : '<span class=\"chip need\">Needs photo</span>')",
+        "'<span class=\"chip need\">Needs photo</span>'"));
+    expect(chip('r1')).toBe('<span class="chip need">Needs photo</span>');
+  });
+});

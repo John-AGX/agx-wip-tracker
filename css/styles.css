@@ -13262,6 +13262,13 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
 }
 .p86-wo-doneby { background: color-mix(in srgb, var(--green, #059669) 18%, transparent); color: var(--green, #059669); }
 .p86-wo-needs { background: color-mix(in srgb, #d97706 16%, transparent); color: #d97706; }
+/* Reply only: a line finished without a photo. Not a warning, so not amber. */
+.p86-wo-reply { font-size: 10.5px; padding: 2px 7px; border-radius: 999px; white-space: nowrap;
+  background: color-mix(in srgb, var(--accent, #4f8cff) 14%, transparent); color: var(--accent, #4f8cff); }
+.p86-wo-replyonly { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim, #888); cursor: pointer; }
+.p86-wo-replyonly input { width: auto; margin: 0; }
+.p86-st-task-reply { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-dim, #888); white-space: nowrap; cursor: pointer; }
+.p86-st-task-reply input { width: auto; margin: 0; }
 .p86-wo-sub-body { padding: 2px 10px 10px 40px; display: flex; flex-direction: column; gap: 8px; }
 .p86-wo-sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px 14px; }
 .p86-wo-side-lbl {
@@ -13585,6 +13592,8 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
   }
   #job-service-tickets .p86-wo-doneby::before { content: "\2713\00a0"; }
   #job-service-tickets .p86-wo-needs { border-color: color-mix(in srgb, #d97706 45%, transparent); }
+  #job-service-tickets .p86-wo-reply { order: -1; font-size: 11px; line-height: 1.5; padding: 2px 9px;
+    border: 1px solid color-mix(in srgb, var(--accent, #4f8cff) 45%, transparent); }
   /* Body: Side A / Side D lists, photo tiles three to a row ending in the
      dashed Take photo and Upload photo tiles, the before-photo buttons,
      notes. The [hidden] rule is

@@ -170,7 +170,7 @@ async function loadTicket(db, ticketId, orgId, lock) {
 
 async function loadWorkOrderTask(db, taskId, orgId) {
   const r = await db.query(
-    `SELECT id, title, status, archived_at, service_ticket_id FROM tasks
+    `SELECT id, title, status, archived_at, service_ticket_id, kind FROM tasks
       WHERE id = $1 AND organization_id = $2 AND scope = 'org' AND service_ticket_id IS NOT NULL`,
     [String(taskId), orgId]
   );
@@ -264,7 +264,10 @@ async function proofVerdict(db, wo, opts) {
     if (losing.length) return refusal('photo_locked', lockedMessage(status, op), losing[0], wo);
   }
 
-  if (task && losing.length && task.status === 'done' && !task.archived_at && status !== 'cancelled') {
+  // Rule (c) is a building's PROOF. A reply-only line (svc.subtaskNeedsPhoto)
+  // was finished without one, so a photo on it is extra, never its last proof.
+  if (task && losing.length && task.status === 'done' && !task.archived_at && status !== 'cancelled' &&
+      svc.subtaskNeedsPhoto(task)) {
     const orgId = wo.ticket.organization_id != null ? wo.ticket.organization_id : o.orgId;
     checkOrg(orgId);
     const r = await db.query(

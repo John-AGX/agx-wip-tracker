@@ -448,7 +448,22 @@ function photoKindOf(tags) {
 }
 
 // John: "require a completion photo, at least one". Before photos do not count.
-function subtaskMayComplete(photos) {
+// REPLY ONLY (John, 2026-09-21): "some of these are more informational that
+// would only really just need a reply". A building whose work is a call, an
+// email or a confirmation has nothing to photograph, and the photo rule made
+// it impossible to tick. Such a line is a FOLLOW-UP — tasks.kind 'follow_up',
+// the kind that already existed and meant nothing on a work order until now —
+// and it is completed without a completion photo. Every other building keeps
+// the rule exactly as it was.
+const REPLY_ONLY_KIND = 'follow_up';
+function subtaskNeedsPhoto(task) {
+  return !(task && String(task.kind || '') === REPLY_ONLY_KIND);
+}
+
+// `task` is optional: without it (or with an ordinary building) a completion
+// photo is required, as it always was.
+function subtaskMayComplete(photos, task) {
+  if (task && !subtaskNeedsPhoto(task)) return { ok: true };
   const n = (Array.isArray(photos) ? photos : []).filter(function (p) {
     return p && photoKindOf(p.tags != null ? p.tags : (p.kind === 'before' ? ['before'] : [])) === 'completion';
   }).length;
@@ -529,6 +544,8 @@ module.exports = {
   normalizeMaterials,
   photoKindOf,
   subtaskMayComplete,
+  subtaskNeedsPhoto,
+  REPLY_ONLY_KIND,
   crewSubtasksWritable,
   autoStatusForSubtasks,
   subtaskStructureWritable,

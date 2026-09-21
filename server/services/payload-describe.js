@@ -309,7 +309,7 @@ const BAGS = {
   // must not sit in lowIds advertising itself as a harmless owner link if it
   // ever does. Out of the bag it falls to the link rule and reads as a re-link,
   // which is what setting an owner on a building would be.
-  ticketTask: bagSpec({ low: ['title', 'notes', 'priority', 'due_date'] }),
+  ticketTask: bagSpec({ low: ['title', 'notes', 'priority', 'due_date', 'kind'] }),
   // An assembly's output UNIT is what every takeoff quantity is measured in —
   // SF to LF silently re-prices every estimate that uses the recipe.
   assemblyHeader: bagSpec({ low: ['name', 'code', 'trade', 'category', 'description', 'notes', 'source'],

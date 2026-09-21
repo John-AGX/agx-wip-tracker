@@ -1329,3 +1329,200 @@ describe('client → server — a building saved from the task detail screen (js
     expect(task('k1').assignee_user_id).toBe(CREW);
   });
 });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * REPLY ONLY (1.50) — a line whose work is a call, an email or a confirmation
+ * is kind 'follow_up' and is finished without a completion photo
+ * (services/service-tickets.js subtaskNeedsPhoto; the rule and the crew link
+ * are in work-order-reply-only.test.js). Every other building keeps the rule.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('PATCH /api/tasks/:id — a reply-only line', () => {
+  const REPLY_ONLY_REFUSAL = 'This line was finished as reply only, with no completion photo. Add a completion photo to it, or reopen it, before it needs one.';
+  const replyOnly = (id) => eng.db.exec("UPDATE tasks SET kind = 'follow_up' WHERE id = '" + id + "'");
+  const finished = (id) => eng.db.exec("UPDATE tasks SET status = 'done', completed_at = '2026-09-20 10:00:00' WHERE id = '" + id + "'");
+
+  test('done with no photo: 200, and as the last open building it finishes the work order and tells the office', async () => {
+    replyOnly('k1');
+    const res = await patchTask(WIDE, 'k1', { status: 'done' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.work_order).toEqual({ ticket_id: 'st_ip', ticket_status: 'work_complete', moved_to: 'work_complete' });
+    expect(task('k1').status).toBe('done');
+    await flush();
+    expect(notifyCalls.map((c) => c.reason)).toEqual(['all_subtasks_done']);
+  });
+
+  test('made reply only and finished in ONE request: 200 — the kind is written before the door reads the row', async () => {
+    const res = await patchTask(WIDE, 'k1', { kind: 'follow_up', status: 'done' });
+    expect(res.statusCode).toBe(200);
+    expect([task('k1').kind, task('k1').status]).toEqual(['follow_up', 'done']);
+  });
+
+  test('made field work and finished in one request, with no photo: 409, and neither the kind nor the status is kept', async () => {
+    replyOnly('k1');
+    const res = await patchTask(WIDE, 'k1', { kind: 'todo', status: 'done' });
+    expect([res.statusCode, res.body.code]).toEqual([409, 'completion_photo_required']);
+    expect([task('k1').kind, task('k1').status]).toEqual(['follow_up', 'open']);
+  });
+
+  test('switching an OPEN line either way asks nothing of its photos', async () => {
+    expect((await patchTask(WIDE, 'k1', { kind: 'follow_up' })).statusCode).toBe(200);
+    expect(task('k1').kind).toBe('follow_up');
+    expect((await patchTask(WIDE, 'k1', { kind: 'todo' })).statusCode).toBe(200);
+    expect(task('k1').kind).toBe('todo');
+    expect(allEvents()).toEqual([]);
+  });
+
+  test('a FINISHED reply-only line with no photo cannot be made to need one: 409 with the sentence, nothing changes', async () => {
+    replyOnly('k1'); finished('k1');
+    const res = await patchTask(WIDE, 'k1', { kind: 'todo' });
+    expect([res.statusCode, res.body]).toEqual([409, { error: REPLY_ONLY_REFUSAL, code: 'completion_photo_required' }]);
+    expect([task('k1').kind, task('k1').status]).toEqual(['follow_up', 'done']);
+  });
+
+  test('…it can once it has a completion photo', async () => {
+    replyOnly('k1'); finished('k1');
+    photo('att_k1', 'k1', ['completion']);
+    expect((await patchTask(WIDE, 'k1', { kind: 'todo' })).statusCode).toBe(200);
+    expect([task('k1').kind, task('k1').status]).toEqual(['todo', 'done']);
+  });
+
+  test('…or when it is reopened in the same request', async () => {
+    replyOnly('k1'); finished('k1');
+    const res = await patchTask(WIDE, 'k1', { kind: 'todo', status: 'open' });
+    expect(res.statusCode).toBe(200);
+    expect([task('k1').kind, task('k1').status]).toEqual(['todo', 'open']);
+  });
+
+  test('a before photo is not proof: still refused', async () => {
+    replyOnly('k1'); finished('k1');
+    photo('att_k1b', 'k1', ['before']);
+    expect((await patchTask(WIDE, 'k1', { kind: 'todo' })).statusCode).toBe(409);
+  });
+
+  test('CONTROL: a finished plain task changes kind freely — it is not on a work order', async () => {
+    replyOnly('plain'); finished('plain');
+    expect((await patchTask(WIDE, 'plain', { kind: 'todo' })).statusCode).toBe(200);
+    expect(task('plain').kind).toBe('todo');
+  });
+
+  test('a finished follow-up with no photo MAY be put on a work order: it joins as a done reply-only line', async () => {
+    replyOnly('plain'); finished('plain');
+    const res = await patchTask(WIDE, 'plain', { service_ticket_id: 'st_open' });
+    expect(res.statusCode).toBe(200);
+    expect(task('plain').service_ticket_id).toBe('st_open');
+    expect(events('st_open').map((e) => e.kind)).toEqual(['task_added']);
+  });
+
+  test('…but not while it is made field work in the same request: the kind it WILL have decides', async () => {
+    replyOnly('plain'); finished('plain');
+    const res = await patchTask(WIDE, 'plain', { service_ticket_id: 'st_open', kind: 'todo' });
+    expect([res.statusCode, res.body.code]).toEqual([409, 'completion_photo_required']);
+    expect([task('plain').service_ticket_id, task('plain').kind]).toEqual([null, 'follow_up']);
+  });
+
+  test('…and made reply only in the same request, a finished field task may join with no photo', async () => {
+    finished('plain');
+    const res = await patchTask(WIDE, 'plain', { service_ticket_id: 'st_open', kind: 'follow_up' });
+    expect(res.statusCode).toBe(200);
+    expect([task('plain').service_ticket_id, task('plain').kind]).toEqual(['st_open', 'follow_up']);
+  });
+
+  test('reply only is not a way around the other rules: the crew still cannot tick an approved work order', async () => {
+    replyOnly('a2');
+    const res = await patchTask(CREW, 'a2', { status: 'done' });
+    expect([res.statusCode, res.body.code]).toEqual([409, 'work_order_locked']);
+    expect(task('a2').status).toBe('open');
+  });
+
+  // WHO MAY SAY A LINE NEEDS NO PHOTO. Turning reply only on or off changes
+  // what the punch list asks proof of, so it is a punch-list change: someone
+  // who can edit the job, on a work order that is not locked. The crew lead
+  // the office put on the record may tick lines and write notes (1.35) — never
+  // excuse a line they are about to tick from its photo.
+  test('the work order\'s crew lead, who cannot edit the job, cannot make a line reply only: 403, and the photo rule stands', async () => {
+    const res = await patchTask(CREW, 'k1', { kind: 'follow_up' });
+    expect([res.statusCode, res.body]).toEqual([403, {
+      error: 'Only someone who can edit this job can change its work order\'s punch list.', code: 'no_access',
+    }]);
+    expect(task('k1').kind).not.toBe('follow_up');
+    expect((await patchTask(CREW, 'k1', { status: 'done' })).statusCode).toBe(409);
+    expect(task('k1').status).toBe('open');
+  });
+
+  test('…nor in the same request as the tick, nor turn it off again', async () => {
+    expect((await patchTask(CREW, 'k1', { kind: 'follow_up', status: 'done' })).statusCode).toBe(403);
+    expect(task('k1').kind).not.toBe('follow_up');
+    expect(task('k1').status).toBe('open');
+    replyOnly('k1');
+    expect((await patchTask(CREW, 'k1', { kind: 'todo' })).statusCode).toBe(403);
+    expect(task('k1').kind).toBe('follow_up');
+  });
+
+  test('…but may still tick a line the office made reply only, with no photo', async () => {
+    replyOnly('k1');
+    expect((await patchTask(CREW, 'k1', { status: 'done' })).statusCode).toBe(200);
+    expect(task('k1').status).toBe('done');
+  });
+
+  test('an approved work order\'s punch list is locked: the office cannot switch reply only there either', async () => {
+    const res = await patchTask(WIDE, 'a2', { kind: 'follow_up' });
+    expect([res.statusCode, res.body]).toEqual([409, {
+      error: 'This work order is approved. Reopen it before changing its punch list.', code: 'work_order_locked',
+    }]);
+    expect(task('a2').kind).not.toBe('follow_up');
+  });
+
+  test('CONTROL: a kind change that leaves the photo question alone (todo -> punch) is an ordinary edit, for the crew lead too', async () => {
+    const res = await patchTask(CREW, 'k1', { kind: 'punch' });
+    expect(res.statusCode).toBe(200);
+    expect(task('k1').kind).toBe('punch');
+    expect(allEvents()).toEqual([]);
+  });
+
+  test('MUTANT: without the kind-switch refusal, a done building is left with no completion photo', async () => {
+    replyOnly('k1'); finished('k1');
+    const router = mutant(TASK_ROUTES,
+      "        if (newTicket && current.status === 'done' && finalStatus === 'done' &&\n" +
+      '            !svc.subtaskNeedsPhoto(current) && svc.subtaskNeedsPhoto({ kind: kindAfter })) {',
+      '        if (false) {');
+    const res = await patchTask(WIDE, 'k1', { kind: 'todo' }, router);
+    expect(res.statusCode).toBe(200);
+    expect([task('k1').kind, task('k1').status]).toEqual(['todo', 'done']);
+  });
+
+  test('MUTANT: a reply-only switch kept out of the door -> the crew lead excuses a line from its photo and ticks it', async () => {
+    const router = mutant(TASK_ROUTES,
+      '(onWorkOrder && (statusChange || assignChange || kindChange))',
+      '(onWorkOrder && (statusChange || assignChange))');
+    expect((await patchTask(CREW, 'k1', { kind: 'follow_up' }, router)).statusCode).toBe(200);
+    expect((await patchTask(CREW, 'k1', { status: 'done' }, router)).statusCode).toBe(200);
+    expect([task('k1').kind, task('k1').status]).toEqual(['follow_up', 'done']);
+  });
+
+  test('MUTANT: …and a finished reply-only line is switched to field work with no photo', async () => {
+    replyOnly('k1'); finished('k1');
+    const router = mutant(TASK_ROUTES,
+      '(onWorkOrder && (statusChange || assignChange || kindChange))',
+      '(onWorkOrder && (statusChange || assignChange))');
+    expect((await patchTask(WIDE, 'k1', { kind: 'todo' }, router)).statusCode).toBe(200);
+    expect([task('k1').kind, task('k1').status]).toEqual(['todo', 'done']);
+  });
+
+  test('MUTANT: the punch-list verdict dropped -> the crew lead\'s switch goes through the door and lands', async () => {
+    const router = mutant(TASK_ROUTES,
+      '        if (newTicket && photoRuleMoves(current)) {',
+      '        if (false) {');
+    expect((await patchTask(CREW, 'k1', { kind: 'follow_up' }, router)).statusCode).toBe(200);
+    expect(task('k1').kind).toBe('follow_up');
+  });
+
+  test('MUTANT: the link door asking the kind the task HAD -> a done field task with no photo joins a work order', async () => {
+    replyOnly('plain'); finished('plain');
+    const router = mutant(TASK_ROUTES,
+      "          if (!svc.subtaskMayComplete(photos, { kind: kindAfter }).ok) {",
+      "          if (!svc.subtaskMayComplete(photos, { kind: current.kind }).ok) {");
+    const res = await patchTask(WIDE, 'plain', { service_ticket_id: 'st_open', kind: 'todo' }, router);
+    expect(res.statusCode).toBe(200);
+    expect([task('plain').service_ticket_id, task('plain').kind, task('plain').status]).toEqual(['st_open', 'todo', 'done']);
+  });
+});

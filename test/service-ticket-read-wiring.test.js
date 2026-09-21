@@ -526,3 +526,26 @@ describe('3. the office subtask door gates on the locked row', () => {
     expect(task('k_cl').status).toBe('done');
   });
 });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * REPLY ONLY (1.50) — the office card draws a line as reply only from its
+ * kind (js/service-tickets.js subtaskHTML), so the read has to carry it.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('the office read carries each line\'s kind', () => {
+  test('a reply-only line reads kind follow_up; the rest read what they are', async () => {
+    eng.db.exec("UPDATE tasks SET kind = 'follow_up' WHERE id = 'k2'; UPDATE tasks SET kind = 'todo' WHERE id = 'k1'");
+    const r = await readTicket(ticketRouter, 'st_a');
+    expect(r.statusCode).toBe(200);
+    expect(r.body.tasks.map((t) => [t.id, t.kind])).toEqual([['k1', 'todo'], ['k2', 'follow_up']]);
+  });
+
+  test('MUTANT: the task SELECT without kind -> every line reads as field work and asks for a photo', async () => {
+    eng.db.exec("UPDATE tasks SET kind = 'follow_up' WHERE id = 'k2'");
+    const mut = routesMutant([[
+      'SELECT id, title, status, due_date, assignee_user_id, completed_at, archived_at, kind\n',
+      'SELECT id, title, status, due_date, assignee_user_id, completed_at, archived_at\n']]);
+    const r = await readTicket(mut, 'st_a');
+    expect(r.statusCode).toBe(200);
+    expect(r.body.tasks.map((t) => t.kind)).toEqual([undefined, undefined]);
+  });
+});

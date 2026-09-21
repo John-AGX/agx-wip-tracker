@@ -1235,7 +1235,7 @@ router.get('/:id', requireAuth, async (req, res) => {
     // count a row the list did not show.
     const [tasks, events] = await Promise.all([
       pool.query(
-        `SELECT id, title, status, due_date, assignee_user_id, completed_at, archived_at
+        `SELECT id, title, status, due_date, assignee_user_id, completed_at, archived_at, kind
            FROM tasks
           WHERE service_ticket_id = $1 AND organization_id = $2 AND archived_at IS NULL
             AND (scope = 'org' OR (scope = 'personal' AND owner_user_id = $3))

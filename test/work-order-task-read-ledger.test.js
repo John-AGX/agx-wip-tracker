@@ -255,7 +255,7 @@ const FULL_LEDGER = {
     kind: 'ticket-scoped',
     why: "The crew link's punch list. Pinned to the shared ticket, and org rows only: a bearer token has no owner, so a PM's private to-do that happens to carry the ticket id is never sent down it.",
     check(src) {
-      const stmt = between(src, 'SELECT id, title, status, due_date, completed_at FROM tasks', 'ORDER BY created_at ASC');
+      const stmt = between(src, 'SELECT id, title, status, due_date, completed_at, kind FROM tasks', 'ORDER BY created_at ASC');
       if (!stmt) return ['the crew punch-list read was not found'];
       const problems = [];
       if (!/service_ticket_id = \$1/.test(stmt)) problems.push('the crew punch list is no longer pinned to one ticket');

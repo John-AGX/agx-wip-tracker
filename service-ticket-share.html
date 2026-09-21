@@ -2537,7 +2537,9 @@
         ? '<span class="chip back">Sent back</span>'
         : (s.completion
             ? '<span class="chip n">' + s.total + ' photo' + (s.total === 1 ? '' : 's') + '</span>'
-            : '<span class="chip need">Needs photo</span>');
+            // A reply-only line (the office marked it: a call or a confirmation)
+            // is finished without a photo, so it is never "Needs photo".
+            : (x.reply_only ? '<span class="chip n">Reply only</span>' : '<span class="chip need">Needs photo</span>'));
   }
 
   // Finished / undo. A completion photo still on its way counts only once it
@@ -2550,8 +2552,10 @@
       return '<div class="need-hint">Wait for the photos to finish uploading.</div>' +
         '<button type="button" class="btn go big bdone" data-done="1" disabled>Mark ' + esc(p.head) + ' complete</button>';
     }
-    return (s.completion ? '' : '<div class="need-hint">Add at least one completion photo first.</div>') +
-      '<button type="button" class="btn go big bdone" data-done="1"' + (s.completion && !doneBusy[x.id] ? '' : ' disabled') + '>Mark ' + esc(p.head) + ' complete</button>';
+    var ok = s.completion || x.reply_only;
+    return (ok ? '' : '<div class="need-hint">Add at least one completion photo first.</div>') +
+      (x.reply_only && !s.completion ? '<div class="need-hint">Reply only — no photo needed.</div>' : '') +
+      '<button type="button" class="btn go big bdone" data-done="1"' + (ok && !doneBusy[x.id] ? '' : ' disabled') + '>Mark ' + esc(p.head) + ' complete</button>';
   }
 
   function buildingHTML(x, canWork, t) {

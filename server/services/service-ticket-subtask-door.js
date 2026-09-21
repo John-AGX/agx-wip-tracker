@@ -62,6 +62,7 @@ const MSG = Object.freeze({
   closed: 'This work order is closed. Reopen it before changing its punch list.',
   startsOpen: 'A new subtask starts open. Add a completion photo to it, then mark it done.',
   doneNeedsPhoto: 'This task is marked done but has no completion photo. Reopen it or add a completion photo before putting it on a work order.',
+  replyOnlyDoneNeedsPhoto: 'This line was finished as reply only, with no completion photo. Add a completion photo to it, or reopen it, before it needs one.',
   taskChanged: 'This task just changed. Reload to see the latest.',
   // ONE sentence, said the same way by every door that could have written
   // tasks.assignee_user_id on a building: the two REST doors, the task link,

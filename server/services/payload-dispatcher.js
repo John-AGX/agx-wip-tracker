@@ -289,7 +289,12 @@ const SERVICE_TICKET_REFUSED_FIELDS = {
 // rather than falling into the unknown-key answer, for the reason
 // SERVICE_TICKET_REFUSED_FIELDS gives: "unknown field" reads like a typo, and
 // the Scribe's next move on a typo is a spelling variant or a workaround.
-const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date']);
+// kind (2026-09-21): 'follow_up' makes the line REPLY ONLY — a call, an email
+// or a confirmation, finished without a completion photo
+// (services/service-tickets.js subtaskNeedsPhoto). Nothing else: a line is
+// field work or it is a reply, and 'todo' is what leaving it out already means.
+const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date', 'kind']);
+const SERVICE_TICKET_TASK_KINDS = new Set(['follow_up']);
 // Keys on a task_adds entry that are REAL columns and deliberately not the
 // model's to write. Same shape and same reason as SERVICE_TICKET_REFUSED_FIELDS
 // above, checked before the unknown-key sweep so the answer names the rule.
@@ -1517,6 +1522,11 @@ function validateServiceTicketOps(ops) {
       // '' IS NO DUE DATE — the ticket-level reading, and the tasks REST door's,
       // which drops a falsy due_date. It is skipped here and never written.
       if (t.due_date != null && t.due_date !== '') validateServiceTicketFieldValue('due_date', t.due_date, `${where}.due_date`);
+      if (t.kind != null && t.kind !== '' && !SERVICE_TICKET_TASK_KINDS.has(t.kind)) {
+        throw new PayloadValidationError(
+          `${where}.kind invalid: ${JSON.stringify(t.kind)}. A work order line takes kind 'follow_up' (reply only: finished without a completion photo) or no kind at all (field work that needs photo proof).`,
+          { code: 'invalid_enum', field_path: `${where}.kind`, expected: [...SERVICE_TICKET_TASK_KINDS], received: t.kind });
+      }
     });
     taskCount = ops.task_adds.length;
   }
@@ -5798,6 +5808,8 @@ async function dispatchServiceTicket(dbClient, target, refTable, ctx) {
     // '' is no due date (see validateServiceTicketOps): not a column at all, so
     // the task is written exactly as the tasks REST door writes a blank one.
     if (t.due_date != null && t.due_date !== '') { cols.push('due_date'); vals.push(String(t.due_date).trim()); names.push('due_date'); }
+    // A reply-only line (validated above: 'follow_up' or nothing).
+    if (t.kind != null && t.kind !== '') { cols.push('kind'); vals.push(String(t.kind)); names.push('kind'); }
     // NO assignee_user_id COLUMN, EVER (1.35). A building is not assigned to
     // anybody — not to the approver, not to whoever the payload named. The
     // column is simply never in `cols`, so there is no value to get wrong.

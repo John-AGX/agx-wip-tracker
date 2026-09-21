@@ -961,7 +961,7 @@ describe('an instruction may not name a payload capability the grammar lacks', (
     expect(grammarFields(shipped, 'task_adds')).toContain('assignee_user_id');
     expect(grammarFields(shipped, 'task_adds').slice().sort()).not.toEqual(accepted);
     // And it parses a true grammar correctly, so a green run means it looked.
-    expect(grammarFields('task_adds: `[{title, due_date? (DATE), priority?, notes?}]`', 'task_adds')
+    expect(grammarFields('task_adds: `[{title, due_date? (DATE), priority?, notes?, kind?}]`', 'task_adds')
       .slice().sort()).toEqual(accepted);
     expect(grammarFields('no grammar here', 'task_adds')).toBeNull();
   });

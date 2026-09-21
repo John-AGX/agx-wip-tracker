@@ -543,7 +543,7 @@ describe('the office punch list never offers to assign a building', () => {
 
   test('MUTANT: an assignee on the Add payload makes the refusal reachable from the office', async () => {
     const anchor = [
-      '      window.p86Api.tasks.create({',
+      '      var payload = {',
       '        title: title,',
       '        service_ticket_id: t.id,',
     ].join('\n');

@@ -223,7 +223,8 @@ describe('every door that could write the field asks this module for the words',
   test('the dispatcher refuses the key BY NAME rather than as an unknown field', () => {
     const src = read(DISPATCHER);
     // The key left the read set, so nothing downstream can consume it...
-    expect(src).toMatch(/const SERVICE_TICKET_TASK_KEYS = new Set\(\['title', 'notes', 'priority', 'due_date'\]\);/);
+    // (kind is reply only, 1.50 — still no assignee.)
+    expect(src).toMatch(/const SERVICE_TICKET_TASK_KEYS = new Set\(\['title', 'notes', 'priority', 'due_date', 'kind'\]\);/);
     // ...and it is named in the refused map, checked before the stray sweep.
     expect(src).toContain('const SERVICE_TICKET_TASK_REFUSED_KEYS = {');
     expect(src.indexOf('SERVICE_TICKET_TASK_REFUSED_KEYS, key')).toBeLessThan(

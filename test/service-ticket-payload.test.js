@@ -278,9 +278,9 @@ describe('the mutation harness is not the thing being fooled', () => {
   });
   test('a multi-line anchor written with LF matches the CRLF file and the mutant behaves differently', async () => {
     const mut = mutate(
-      'const SERVICE_TICKET_TASK_KEYS = new Set([\'title\', \'notes\', \'priority\', \'due_date\']);\n' +
-      '// Keys on a task_adds entry',
-      'const SERVICE_TICKET_TASK_KEYS = new Set([\'title\']);\n// Keys on a task_adds entry');
+      'const SERVICE_TICKET_TASK_KEYS = new Set([\'title\', \'notes\', \'priority\', \'due_date\', \'kind\']);\n' +
+      'const SERVICE_TICKET_TASK_KINDS',
+      'const SERVICE_TICKET_TASK_KEYS = new Set([\'title\']);\nconst SERVICE_TICKET_TASK_KINDS');
     const t = [ticket({ title: 'T', job_id: 'j1' }, { ops: { fields: { title: 'T', job_id: 'j1' }, task_adds: [{ title: 'a', notes: 'n' }] } })];
     expect((await drive(REAL_MOD(), t, JOHN)).stage).toBe('applied');
     seedInto(eng);
@@ -1421,8 +1421,8 @@ describe('task_adds', () => {
 
   test('MUTANT: put the key back in the read set and 86 mints an assigned building', async () => {
     const mut = mutatePairs([
-      ["const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date']);",
-        "const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date', 'assignee_user_id']);"],
+      ["const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date', 'kind']);",
+        "const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date', 'kind', 'assignee_user_id']);"],
       ['const SERVICE_TICKET_TASK_REFUSED_KEYS = {\n  assignee_user_id: subtaskDoor.MSG.notAssignable,\n};',
         'const SERVICE_TICKET_TASK_REFUSED_KEYS = {};'],
       ["    if (t.due_date != null && t.due_date !== '') { cols.push('due_date'); vals.push(String(t.due_date).trim()); names.push('due_date'); }",
@@ -1946,5 +1946,60 @@ describe('1.29 — the assignment notice rides ctx.afterCommit', () => {
       '  if (assigneeAfter && ctx && Array.isArray(ctx.afterCommit)) {');
     await drive(mut, [update('st_open', { fields: { priority: 'high' } })], JOHN);
     expect(calls).toHaveLength(1);
+  });
+});
+
+// REPLY ONLY (1.50). 86 says a child task is a call, an email or a confirmation
+// and the Scribe writes kind 'follow_up' on it: the line is finished without a
+// completion photo (services/service-tickets.js subtaskNeedsPhoto). That is the
+// only kind a task_adds entry takes — leaving it out is field work.
+describe('task_adds kind — a reply-only line', () => {
+  const withTasks = (tasks) => [ticket({ title: 'x', job_id: 'j1' }, { ops: { fields: { title: 'x', job_id: 'j1' }, task_adds: tasks } })];
+
+  test('kind follow_up is written on that line and on no other', async () => {
+    const t0 = eng.log.length;
+    const r = await drive(REAL_MOD(), withTasks([{ title: 'Call the owner back', kind: 'follow_up' }]), JOHN);
+    expect(r.stage).toBe('applied');
+    expect(boundValue(t0, 'tasks', 'kind')).toEqual({ present: true, value: 'follow_up' });
+    expect(one("SELECT kind FROM tasks WHERE title = 'Call the owner back'").kind).toBe('follow_up');
+    seedInto(eng);
+    const t1 = eng.log.length;
+    expect((await drive(REAL_MOD(), withTasks([{ title: 'Bldg 4213 — slats' }]), JOHN)).stage).toBe('applied');
+    expect(boundValue(t1, 'tasks', 'kind').present).toBe(false);
+  });
+
+  test('a blank kind is no kind: written as field work', async () => {
+    const t0 = eng.log.length;
+    expect((await drive(REAL_MOD(), withTasks([{ title: 'a', kind: '' }]), JOHN)).stage).toBe('applied');
+    expect(boundValue(t0, 'tasks', 'kind').present).toBe(false);
+  });
+
+  test('any other kind is refused before anything is written, with a sentence the Scribe can act on', async () => {
+    for (const kind of ['todo', 'punch', 'reply_only', 'FOLLOW_UP']) {
+      const r = await drive(REAL_MOD(), withTasks([{ title: 'a', kind }]), JOHN);
+      expect([r.stage, r.detail.code, r.detail.field_path, r.detail.expected, r.detail.received])
+        .toEqual(['emit', 'invalid_enum', 'service_ticket.ops.task_adds[0].kind', ['follow_up'], kind]);
+      expect(r.message).toContain("takes kind 'follow_up' (reply only: finished without a completion photo)");
+    }
+    expect(eng.count('SELECT 1 FROM tasks')).toBe(0);
+    expect(newTickets()).toHaveLength(0);
+  });
+
+  test('MUTANT: the INSERT leaving kind out -> the line 86 called a reply is written as field work', async () => {
+    const mut = mutate(
+      "    if (t.kind != null && t.kind !== '') { cols.push('kind'); vals.push(String(t.kind)); names.push('kind'); }",
+      '');
+    const t0 = eng.log.length;
+    expect((await drive(mut, withTasks([{ title: 'Call the owner back', kind: 'follow_up' }]), JOHN)).stage).toBe('applied');
+    expect(boundValue(t0, 'tasks', 'kind').present).toBe(false);
+  });
+
+  test('MUTANT: no kind check -> a made-up kind is written onto a task row', async () => {
+    const mut = mutate(
+      "      if (t.kind != null && t.kind !== '' && !SERVICE_TICKET_TASK_KINDS.has(t.kind)) {",
+      '      if (false) {');
+    const t0 = eng.log.length;
+    expect((await drive(mut, withTasks([{ title: 'a', kind: 'reply_only' }]), JOHN)).stage).toBe('applied');
+    expect(boundValue(t0, 'tasks', 'kind')).toEqual({ present: true, value: 'reply_only' });
   });
 });

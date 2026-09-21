@@ -466,8 +466,8 @@ describe('the ledger is not decoration', () => {
   test('MUTANT: 86 gets assignee_user_id back as a punch-list key', () => {
     const file = 'server/services/payload-dispatcher.js';
     const src = mutate(sourceOf(file),
-      "const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date']);",
-      "const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date', 'assignee_user_id']);");
+      "const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date', 'kind']);",
+      "const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date', 'kind', 'assignee_user_id']);");
     expect(census(withFile(file, src))).toEqual([
       file + ': 86 can put a name on a building again',
     ]);

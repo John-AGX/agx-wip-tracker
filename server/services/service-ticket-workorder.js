@@ -319,7 +319,7 @@ async function subtaskActivity(db, orgId, ticketId, opts) {
 async function loadSubtask(db, ticket, taskId) {
   if (!ticket || taskId == null || String(taskId) === '') return null;
   const r = await db.query(
-    `SELECT id, title, status, completed_at FROM tasks
+    `SELECT id, title, status, completed_at, kind FROM tasks
       WHERE id = $1 AND service_ticket_id = $2 AND organization_id = $3
         AND archived_at IS NULL AND scope = 'org'`,
     [String(taskId), ticket.id, ticket.organization_id]
@@ -560,7 +560,9 @@ async function applySubtaskDone(db, ticket, opts) {
 
   if (done) {
     const photos = (await taskPhotosByTask(db, ticket.organization_id, [task.id])).get(String(task.id)) || [];
-    const verdict = svc.subtaskMayComplete(photos);
+    // A reply-only line (kind follow_up) is completed without a photo; every
+    // other building still needs one. The kind is read from the LOCKED row.
+    const verdict = svc.subtaskMayComplete(photos, task);
     if (!verdict.ok) return { ok: false, status: 409, error: verdict.reason, code: 'completion_photo_required' };
   }
 
