@@ -1165,8 +1165,24 @@ function validateOps(entityType, ops) {
     if (fields.status && !TASK_STATUSES.has(fields.status)) throw new Error(`${entityType}.fields.status invalid: '${fields.status}'. Valid: ${[...TASK_STATUSES].sort().join(', ')}.`);
     if (fields.priority && !TASK_PRIORITIES.has(fields.priority)) throw new Error(`${entityType}.fields.priority invalid: '${fields.priority}'. Valid: ${[...TASK_PRIORITIES].sort().join(', ')}.`);
     if (fields.due_date && isNaN(new Date(fields.due_date).getTime())) throw new Error(`${entityType}.fields.due_date is not a valid date: '${fields.due_date}'`);
-    if (entityType === 'task' && fields.assignee_user_id != null && !Number.isInteger(Number(fields.assignee_user_id))) {
-      throw new Error('task.fields.assignee_user_id must be a numeric user id (validated in-org at apply time).');
+    // A NUMBER, and a positive one. On 2026-09-21 a batch of five tasks arrived
+    // with a name and an email here and was refused with a sentence that said
+    // what was wrong but not what to do, and the Scribe - which cannot look
+    // anyone up - had no way to fix it. The refusal now names the way out,
+    // and carries the structured detail the agents read back. The check
+    // itself also tightened: Number.isInteger(Number(v)) passed '0' and '-3'.
+    if (entityType === 'task' && fields.assignee_user_id != null) {
+      const v = fields.assignee_user_id;
+      const n = typeof v === 'number' ? v : (typeof v === 'string' && /^\d+$/.test(v.trim()) ? Number(v) : NaN);
+      if (!Number.isInteger(n) || n <= 0) {
+        throw new PayloadValidationError(
+          'task.fields.assignee_user_id must be a numeric user id (validated in-org at apply time) - got ' + JSON.stringify(v).slice(0, 80) + '. ' +
+          'A name or an email cannot be assigned: the person has to arrive as their user id, which 86 finds with ' +
+          'search_entities entity_type "user" (each row shows "user #N"). Leave it out to assign the task to the approving user. Nothing was saved.',
+          { code: 'wrong_type', field_path: 'task.ops.fields.assignee_user_id', expected: 'positive integer user id', received: v,
+            suggestion: 'Resolve the person to their numeric user id (search_entities entity_type "user" prints "user #N"), or omit assignee_user_id to assign it to the approving user.' }
+        );
+      }
     }
     validateScheduleLink(entityType, fields);
   }
@@ -1452,9 +1468,14 @@ function validateServiceTicketOps(ops) {
       // own fields.assignee_user_id, which is what the office means.
       for (const key of Object.keys(t)) {
         if (!Object.prototype.hasOwnProperty.call(SERVICE_TICKET_TASK_REFUSED_KEYS, key)) continue;
+        // The way out is named, in the payload's own terms, so the refusal and
+        // the Scribe's baseline say the same thing: the person goes on the
+        // work order's fields.assignee_user_id, once.
         throw ticketRefusal(
-          `${where}.${key} cannot be set. ${SERVICE_TICKET_TASK_REFUSED_KEYS[key]} Nothing was saved.`,
-          { code: 'building_not_assignable', field_path: `${where}.${key}` });
+          `${where}.${key} cannot be set. ${SERVICE_TICKET_TASK_REFUSED_KEYS[key]} ` +
+          'In a payload that is service_ticket.ops.fields.assignee_user_id, set once. Nothing was saved.',
+          { code: 'building_not_assignable', field_path: `${where}.${key}`,
+            suggestion: 'Put the person on service_ticket.ops.fields.assignee_user_id once (as a number) and give the task_adds entries no assignee.' });
       }
       const stray = Object.keys(t).filter((key) => !SERVICE_TICKET_TASK_KEYS.has(key));
       if (stray.length) {

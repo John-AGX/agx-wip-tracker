@@ -256,7 +256,11 @@ function stable(s) {
     .replace(/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b[^,\n"]{0,24}/g, '<DAY>')
     .replace(/\b\d+\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*(ago|from now)/gi, '<REL>')
     // read_lead_pipeline: ' · age ' + days + 'd'. Anchored on the word.
-    .replace(/\bage \d+d\b/g, 'age <AGE>');
+    .replace(/\bage \d+d\b/g, 'age <AGE>')
+    // read_users (2026-09-21) prints each user's id so an agent can assign to
+    // them. An ADDITION to the line, anchored on its own literal, so every
+    // other byte of the directory is still held to the pre-repair answer.
+    .replace(/ · user #\d+(?= · role=)/g, '');
 }
 
 // Anything left that still looks like it was computed from the wall clock. This

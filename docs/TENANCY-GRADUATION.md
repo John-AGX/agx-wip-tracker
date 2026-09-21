@@ -192,7 +192,20 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**574** occurrences of `organization_id IS NULL` across `server/`.
+**575** occurrences of `organization_id IS NULL` across `server/`.
+
+574 → 575: `<recent_writes>` in `buildTurnContext` (`routes/ai-routes.js`),
+the block that tells 86 and the Assistant what became of each change drafted
+for the user in the last day — waiting, applied, refused, rejected. One read
+of `payloads`, keyed on the caller's own user id AND their organization, and
+it carries the arm for the reason its three siblings in the same function
+(`<recent_applied_payloads>`, `<recent_background_tasks>`,
+`<recent_failed_payloads>`) do: it reads the same rows they read, and a row
+one block may show must be one the next can answer for. When this item
+closes, the four retire together. The organization half is pinned by
+EXECUTING it in `test/agent-assignee-writes.test.js`: another organization's
+draft for the same user id is not in the block, and removing the predicate
+turns exactly that test red.
 
 573 → 574: `GET /api/weather/leads` (`routes/weather-routes.js`), the Leads
 map asking for today's site conditions at its open leads. One read, of

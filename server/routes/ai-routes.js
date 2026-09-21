@@ -3121,6 +3121,29 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
     } catch (e) {
       console.warn('[buildTurnContext] recent_failed_payloads inject failed:', e.message);
     }
+
+    // What became of EVERY write drafted for this user today: waiting,
+    // applied, refused, rejected. The two blocks above cannot answer "did my
+    // tasks go through?" — one is applied-only for ten minutes, the other needs
+    // structured detail a Scribe refusal never carries — and on 2026-09-21 86
+    // answered it by inferring from missing tasks, wrongly. See
+    // services/write-outcomes.js. Same tenant predicate as its siblings.
+    try {
+      const writes = await pool.query(
+        `SELECT title, summary, status, apply_error, apply_summary, targets, created_at
+           FROM payloads
+          WHERE user_id = $1
+            AND (organization_id = $2 OR organization_id IS NULL)
+            AND created_at > NOW() - INTERVAL '24 hours'
+          ORDER BY created_at DESC
+          LIMIT 8`,
+        [userId, organization && organization.id != null ? organization.id : null]
+      );
+      const block = require('../services/write-outcomes').recentWritesBlock(writes.rows, Date.now());
+      if (block) turnContextText = turnContextText ? turnContextText + '\n\n' + block : block;
+    } catch (e) {
+      console.warn('[buildTurnContext] recent_writes inject failed:', e.message);
+    }
   }
 
   // Wave 1.B Phase 2 — log the turn_context bundle as one event so
@@ -7469,12 +7492,37 @@ async function execClientDirectoryTool(name, input, ctx) {
       }
       rows = rows.slice(0, limit);
       if (!rows.length) return 'No users match the filters.';
-      return rows.map(u =>
+      // THE ID IS PRINTED (2026-09-21). This is the directory the agents are
+      // told to assign from, and it printed everything but the one thing an
+      // assignment needs: tasks.assignee_user_id and service_tickets'
+      // assignee are numeric users.id, and the Scribe cannot look anyone up.
+      // Handed a name and an email instead, it wrote them where the id goes
+      // and the dispatcher refused the whole batch. `user #N` is the same
+      // spelling <acting_user> uses for the person in the chat.
+      const lines = rows.map(u =>
         '• ' + (u.name || '(unnamed)') + ' (' + (u.email || 'no email') + ')' +
+        ' · user #' + u.id +
         ' · role=' + (u.role || 'unknown') +
         (u.active ? ' · active' : ' · INACTIVE') +
         (u.last_seen_at ? ' · last seen ' + u.last_seen_at.toISOString().slice(0, 10) : '')
-      ).join('\n');
+      );
+      // Two people can share a name (this organisation has two John
+      // Thilkings). Said here, where the agent is choosing, so it asks rather
+      // than taking the first row.
+      const byName = new Map();
+      for (const u of rows) {
+        const k = String(u.name || '').trim().toLowerCase();
+        if (!k) continue;
+        if (!byName.has(k)) byName.set(k, []);
+        byName.get(k).push(u);
+      }
+      for (const same of byName.values()) {
+        if (same.length < 2) continue;
+        lines.push('⚠ ' + same.length + ' users share the name "' + (same[0].name || '').trim() + '" (' +
+          same.map(u => 'user #' + u.id + ' ' + (u.email || 'no email')).join(', ') +
+          '). Ask which one before assigning anything to them; never pick one.');
+      }
+      return lines.join('\n');
     }
     default:
       throw new Error('Unknown tool: ' + name);

@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.48';
+const APP_VERSION = '1.49';
 
 const releases = [
+  {
+    version: '1.49',
+    date: '2026-09-21',
+    name: '86 assigns work to the right person, and tells you when a change failed',
+    summary: 'When 86 or the Assistant drafts a task or a work order for someone, it now uses that person’s actual user record — so the draft is not thrown out — and it asks when two people share a name. And when you ask whether a change went through, it answers from what really happened to it, including when it failed.',
+    changes: [
+      { type: 'fixed', text: 'Tasks assigned by 86 were refused and never saved. The people directory 86 looks people up in showed everything about a person except the one thing an assignment needs, so 86 handed over a name and an email, and the whole batch was thrown out. The directory now shows each person’s record number, 86 is told to use it, and when two people share a name (there are two John Thilkings) it says so and asks which one rather than picking.' },
+      { type: 'fixed', text: 'Work orders drafted by 86 were refused whole. Its own instructions told it to give every building on the punch list an assignee — the one thing a work order does not allow, because everyone on it shares every building. It now puts the person on the work order’s Assigned to, once, and gives the buildings none.' },
+      { type: 'fixed', text: '86 told you a failed change was still waiting for your approval. A refusal is posted in the chat, but 86 never saw its own chat notices, and nothing else told it — so when nothing had arrived it guessed. Every turn it now sees what became of each change drafted for you in the last day: waiting for approval, applied, refused (with the reason, and nothing saved) or rejected. It answers from that, never from something being missing.' },
+      { type: 'improved', text: 'When a change is refused, the refusal now says what to do about it — use the person’s record number, or put the person on the work order rather than on a building — so it can be sent again right.' },
+    ],
+  },
   {
     version: '1.48',
     date: '2026-09-21',
