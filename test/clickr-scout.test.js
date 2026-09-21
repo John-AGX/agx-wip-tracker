@@ -701,6 +701,27 @@ describe('CUSTOM FIELDS — labels are named, values keep the rule', () => {
     expect(JSON.stringify(o)).not.toMatch(/zzowner|zz\.example|ZZLONG|ZZLINE|8135550100/);
   });
 
+  test('a DROPDOWN value (an object) is opened one level, and each part keeps the rule', () => {
+    const recs = Array.from({ length: 12 }, (_, i) => ({ customFields: [
+      { label: 'Market', value: { id: 900100 + (i % 3), name: ['Tampa', 'Orlando', 'Denver'][i % 3] } },
+      // A one-object list is that object.
+      { label: 'Region', value: [{ name: i % 2 ? 'North' : 'South' }] },
+      // Several objects (a multi-select) stay whole.
+      { label: 'Trades', value: [{ name: 'Paint' }, { name: 'Roof' + (i % 2) }] },
+      // An empty object is an unfilled field, not a value.
+      { label: 'Blank Pick', value: {} },
+    ] }));
+    const o = scout.summarizeCustomFields(recs);
+    const by = (label) => o.fields.find((f) => f.label === label);
+    expect(by('Market › name').values).toEqual([{ value: 'Denver', count: 4 }, { value: 'Orlando', count: 4 }, { value: 'Tampa', count: 4 }]);
+    expect(by('Market › id').withheldRule).toBe('digits');
+    expect(by('Market')).toBeUndefined();
+    expect(by('Region › name').values.map((v) => v.value)).toEqual(['North', 'South']);
+    expect(by('Trades').withheldRule).toBe('shape');
+    expect([by('Blank Pick').carriedBy, by('Blank Pick').nonEmpty]).toEqual([12, 0]);
+    expect(JSON.stringify(o)).not.toMatch(/9001\d\d/);
+  });
+
   test('a name-keyed object is read the same way as a list', () => {
     const o = scout.summarizeCustomFields(Array.from({ length: 8 }, (_, i) => ({ customFields: { Market: i % 2 ? 'Tampa' : 'Orlando' } })));
     expect(o.shape).toBe('object');

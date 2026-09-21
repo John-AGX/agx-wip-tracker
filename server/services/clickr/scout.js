@@ -314,6 +314,21 @@ function cfLabelProblem(label) {
   return null;
 }
 
+// A dropdown's value is an OBJECT (Buildertrend's Market field holds one), and
+// rule 3 withholds an object whole — which says only that the field exists.
+// So one level is opened exactly the way the list was: 'Market › name' is a
+// label of its own, and its values face the same four rules. A list holding
+// exactly one object is that object. Deeper than one level is not opened, and
+// a list of several objects (a multi-select) stays whole and withheld.
+function cfPut(row, label, v) {
+  let inner = v;
+  if (Array.isArray(inner) && inner.length === 1 && isPlainObject(inner[0])) inner = inner[0];
+  if (!isPlainObject(inner)) { row[label] = v; return; }
+  const ks = Object.keys(inner);
+  if (!ks.length) { row[label] = null; return; }
+  for (const k of ks) row[label + ' › ' + k] = inner[k];
+}
+
 function summarizeCustomFields(records) {
   const recs = Array.isArray(records) ? records : [];
   let carriedBy = 0;
@@ -340,11 +355,11 @@ function summarizeCustomFields(records) {
         }
         const lk = CF_LABEL_KEYS.find((k) => typeof el[k] === 'string' && el[k].trim() !== '');
         if (!lk) { unlabelled++; continue; }
-        row[el[lk].trim()] = Object.prototype.hasOwnProperty.call(el, 'value') ? el.value : null;
+        cfPut(row, el[lk].trim(), Object.prototype.hasOwnProperty.call(el, 'value') ? el.value : null);
       }
     } else if (isPlainObject(cf)) {
       if (!shape) shape = 'object';
-      for (const k of Object.keys(cf)) if (k.trim() !== '') row[k.trim()] = cf[k];
+      for (const k of Object.keys(cf)) if (k.trim() !== '') cfPut(row, k.trim(), cf[k]);
     } else {
       notLists++;
       continue;
