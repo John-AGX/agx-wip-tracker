@@ -526,9 +526,23 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.46';
+const APP_VERSION = '1.47';
 
 const releases = [
+  {
+    version: '1.47',
+    date: '2026-09-21',
+    name: 'Time and materials from the field',
+    summary: 'A work order billed after the work now collects its time, what was done and what was used from the crew who did it — and the office accepts, corrects or turns down every line before anything is billed from it.',
+    changes: [
+      { type: 'new', text: 'The crew sends their time from the link they already use: the day, how many people, hours on site, which building, and what was done. And the materials they used: what, how many, the unit. It only appears on a work order billed after the work; a sold service ticket, and every ticket from before, shows nothing new.' },
+      { type: 'new', text: 'Everything the crew sends is a claim, not a fact. It lands in a Time and materials panel on the work order, waiting for you: Accept it, Change it, or Reject it. A change is written beside what the tech said, never over it — if they said 8 hours and it was 6, you see 8 struck through next to your 6.' },
+      { type: 'new', text: 'A tech who phones it in, or writes it on paper, is not a dead end: Add time and Add material put the line in from the office, accepted, marked as entered there. The printed work order now carries a blank time and materials sheet to fill in by hand on site.' },
+      { type: 'improved', text: 'The crew sees only the lines they sent, and a word for each: sent, accepted, changed by the office, or not accepted. Never your corrected number, never your note, never a total — hours times a rate is a labour budget, and a crew link has never shown one.' },
+      { type: 'improved', text: 'A work order billed from the time worked cannot reach Work complete with no time on it — not from the crew’s Finish, not by ticking the last building, and not from the office without saying so. The office can still move it anyway, as its own question: a yes about open buildings is never taken as a yes about missing time.' },
+      { type: 'improved', text: 'The totals count only what you accepted, in person-hours, with the lines still waiting on you counted separately — so a number nobody has looked at yet never reads as settled. Rates and pricing come next, in billing.' },
+    ],
+  },
   {
     version: '1.46',
     date: '2026-09-21',
