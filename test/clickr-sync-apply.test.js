@@ -1415,6 +1415,39 @@ describe('MARKET MAPPING', () => {
     expect(btMarket.evidence(rows, (await preview.readP86(engine.pool, AGX)).market.clients)[0].suggestion).toBeNull();
   });
 
+  test('a PROPERTY address is read for where the work is: the last real state code, the city before it', () => {
+    const at = (t) => btMarket.placeOf(t);
+    expect(at('12 Palm Way, Orlando, FL 32801')).toEqual({ state: 'FL', city: 'Orlando' });
+    // Ct is a street, not Connecticut; Co Rd is a road, not Colorado.
+    expect(at('5 Oak Ct, Tampa, FL 33602')).toEqual({ state: 'FL', city: 'Tampa' });
+    expect(at('123 Co Rd 5, Lakeland, FL 33801')).toEqual({ state: 'FL', city: 'Lakeland' });
+    expect(at('777 Peachtree St NE, Atlanta, GA 30308')).toEqual({ state: 'GA', city: 'Atlanta' });
+    expect(at('1 Bay Dr, Clearwater, FL 33755, USA')).toEqual({ state: 'FL', city: 'Clearwater' });
+    expect(at('100 Main St Orlando Fl 32801')).toEqual({ state: 'FL', city: '' });
+    expect(at('Unit B in back')).toBeNull();
+    expect(at('')).toBeNull();
+  });
+
+  test('a CLIENT is placed by its property, and where it is BILLED is shown apart', async () => {
+    // A management company billed from Denver running a property in Orlando.
+    const was = { state: btc(9001).state, city: btc(9001).city };
+    btc(9001).state = 'CO'; btc(9001).city = 'Denver';
+    btc(9001).customFields = [cf('Market', [5001]), cf('Property Address', '12 Palm Way, Orlando, FL 32801')];
+    try {
+      const rows = await clientRows();
+      const p86 = await preview.readP86(engine.pool, AGX);
+      const ev = btMarket.evidence(rows, p86.market.clients, 'clients')[0];
+      expect(ev.states).toEqual([{ value: 'FL', count: 1 }]);
+      expect(ev.cities).toEqual([{ value: 'Orlando', count: 1 }]);
+      expect(ev.billing.states.map((x) => x.value)).toContain('CO');
+      // The three with no property address are counted, not guessed.
+      expect(ev.unplaced).toBe(3);
+      // A job's address IS its site: no billing line for jobs.
+      const jobs = preview.matchRows('jobs', BT_JOBS.map((x) => readRecord('jobs', x)), p86);
+      expect(btMarket.evidence(jobs, p86.market.jobs, 'jobs')[0].billing).toBeNull();
+    } finally { btc(9001).state = was.state; btc(9001).city = was.city; }
+  });
+
   test('the preview carries the evidence and the market list', async () => {
     const r = await get(PREVIEW, ADMIN);
     expect(r.status).toBe(200);

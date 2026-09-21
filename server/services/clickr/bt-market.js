@@ -109,26 +109,70 @@ function top(map, n) {
   return [...map.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, n).map(([k, c]) => ({ value: k, count: c }));
 }
 
+// WHERE THE WORK IS, out of a free-text address: the state and the city in
+// front of it, or null. Buildertrend's Property Address is one line typed by a
+// person ("12 Palm Way, Orlando, FL 32801"), so the state is the LAST real
+// state code in it — "5 Oak Ct, Tampa, FL" is Florida, not Connecticut —
+// and a lower-case one counts only where an address puts it: before a zip, or
+// at the very end.
+const STATES = new Set(('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND '
+  + 'OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY').split(' '));
+function placeOf(text) {
+  const t = String(text == null ? '' : text).replace(/\s+/g, ' ').replace(/[,\s]*(USA|US|United States)\.?$/i, '').trim();
+  if (!t) return null;
+  const re = /\b([A-Za-z]{2})\b\.?(\s+\d{5}(-\d{4})?)?/g;
+  let hit = null;
+  let m;
+  while ((m = re.exec(t))) {
+    const code = m[1].toUpperCase();
+    if (!STATES.has(code)) continue;
+    const atEnd = m.index + m[0].length >= t.length;
+    if (m[1] !== code && !m[2] && !atEnd) continue;
+    hit = { code, index: m.index };
+  }
+  if (!hit) return null;
+  const before = t.slice(0, hit.index).replace(/[,\s]+$/, '');
+  const cut = before.lastIndexOf(',');
+  const city = cut >= 0 ? before.slice(cut + 1).trim() : '';
+  return { state: hit.code, city: /\d/.test(city) ? '' : city };
+}
+
 // The evidence for each option a dataset's records carry. A suggestion is made
 // only when the linked records that are filed in P86 AGREE: at least
 // SUGGEST_MIN of them, and at least SUGGEST_SHARE under one market.
+//
+// WHERE the records are is where the WORK is. A job's address is its site. A
+// client's own address is its BILLING address — a management company billed
+// from Denver can run properties in Orlando — so a client is placed by its
+// Property Address, and the billing address is kept beside it, separately, for
+// comparison.
 const SUGGEST_MIN = 3;
 const SUGGEST_SHARE = 0.9;
-function evidence(rows, ctx) {
+function evidence(rows, ctx, kind) {
+  const clients = kind === 'clients';
   const by = new Map();
   for (const r of rows || []) {
     const opt = r.bt && r.bt.marketOption;
     if (!opt) continue;
     let e = by.get(opt);
     if (!e) {
-      e = { optionId: opt, records: 0, linked: 0, filed: new Map(), unfiled: 0, states: new Map(), cities: new Map() };
+      e = { optionId: opt, records: 0, linked: 0, filed: new Map(), unfiled: 0, states: new Map(), cities: new Map(),
+        billStates: new Map(), billCities: new Map(), unplaced: 0 };
       by.set(opt, e);
     }
     e.records++;
-    const st = String(r.bt.state || '').trim().toUpperCase();
-    if (st) e.states.set(st, (e.states.get(st) || 0) + 1);
-    const city = String(r.bt.city || '').trim();
-    if (city) e.cities.set(city, (e.cities.get(city) || 0) + 1);
+    const bump = (map, k) => { if (k) map.set(k, (map.get(k) || 0) + 1); };
+    const ownState = String(r.bt.state || '').trim().toUpperCase();
+    const ownCity = String(r.bt.city || '').trim();
+    if (clients) {
+      bump(e.billStates, ownState);
+      bump(e.billCities, ownCity);
+      const place = placeOf(r.bt.propertyAddress);
+      if (place) { bump(e.states, place.state); bump(e.cities, place.city); } else e.unplaced++;
+    } else {
+      bump(e.states, ownState);
+      bump(e.cities, ownCity);
+    }
     if ((r.class === 'matched' || r.class === 'conflict') && r.p86) {
       e.linked++;
       const mid = r.p86.marketId ? String(r.p86.marketId) : '';
@@ -151,8 +195,13 @@ function evidence(rows, ctx) {
       linked: e.linked,
       p86,
       unfiled: e.unfiled,
+      // Where the work is: the site for a job, the property for a client.
       states: top(e.states, 3),
       cities: top(e.cities, 3),
+      // Clients only: where they are billed, and how many have no property
+      // address to place them by.
+      billing: clients ? { states: top(e.billStates, 3), cities: top(e.billCities, 3) } : null,
+      unplaced: clients ? e.unplaced : 0,
       suggestion: lead && filed >= SUGGEST_MIN && lead.count / filed >= SUGGEST_SHARE ? lead.marketId : null,
       mappedTo: mappedTo && nameOf(mappedTo) ? mappedTo : null,
       mappedName: mappedTo ? nameOf(mappedTo) : null,
@@ -227,4 +276,4 @@ async function handleMap(req, res, deps) {
   }
 }
 
-module.exports = { optionOf, mapFrom, contexts, btMarket, proposal, evidence, ownMarket, handleMap, KINDS, SUGGEST_MIN, SUGGEST_SHARE };
+module.exports = { optionOf, placeOf, mapFrom, contexts, btMarket, proposal, evidence, ownMarket, handleMap, KINDS, SUGGEST_MIN, SUGGEST_SHARE };

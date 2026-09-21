@@ -1823,9 +1823,16 @@
       (unmapped ? unmapped + ' of ' + opts.length + ' Buildertrend option' + (opts.length === 1 ? '' : 's') + ' not mapped yet' : 'all ' + opts.length + ' Buildertrend option' + (opts.length === 1 ? '' : 's') + ' mapped') + '</summary>';
     html += '<div style="margin:6px 0 0;">Buildertrend sends a market as an option number, never its name. Say which Project 86 market each one is. Until you do, nothing is filled from it; once you do, a ' + esc(NOUN[ds.key] || 'record') + ' with no market gets this one, and one filed under a different market waits for a tick.</div>';
     if (!markets.length) html += '<div class="btp-sentence is-warn">This organization has no markets yet. Add them in Admin first.</div>';
-    html += '<div class="btp-mkt-wrap"><table><thead><tr><th>Buildertrend option</th><th>Records</th><th>Linked ones are in P86 as</th><th>Buildertrend says they are in</th><th>Project 86 market</th></tr></thead><tbody>';
+    html += '<div class="btp-mkt-wrap"><table><thead><tr><th>Buildertrend option</th><th>Records</th><th>Linked ones are in P86 as</th><th>' + (ds.key === 'clients' ? 'Properties are in (Buildertrend)' : 'Job sites are in (Buildertrend)') + '</th><th>Project 86 market</th></tr></thead><tbody>';
     opts.forEach(function (o) {
-      var where = (o.states || []).map(function (x) { return esc(x.value) + ' ' + x.count; }).join(', ') + (o.cities && o.cities.length ? '<br><span style="color:var(--text-dim);">' + o.cities.map(function (x) { return esc(x.value); }).join(', ') + '</span>' : '');
+      var list = function (xs, withCount) { return (xs || []).map(function (x) { return esc(x.value) + (withCount ? ' ' + x.count : ''); }).join(', '); };
+      var where = list(o.states, true) + (o.cities && o.cities.length ? '<br><span style="color:var(--text-dim);">' + list(o.cities) + '</span>' : '');
+      // A client is placed by its PROPERTY; where it is billed is shown apart,
+      // because a management company billed from one state runs properties in another.
+      if (o.billing) {
+        if (o.unplaced) where += '<br><span style="color:var(--text-dim);">' + o.unplaced + ' with no property address</span>';
+        if (o.billing.states && o.billing.states.length) where += '<br><span style="color:var(--text-dim);">Billing: ' + list(o.billing.states, true) + '</span>';
+      }
       var sel = '<select data-btp-mkt-kind="' + esc(ds.key) + '" data-btp-mkt-opt="' + esc(o.optionId) + '"' + (_mktSaving || !markets.length ? ' disabled' : '') + ' aria-label="Project 86 market for Buildertrend option ' + esc(o.optionId) + '">' +
         '<option value="">\u2014 not mapped \u2014</option>' + markets.map(function (m) {
           var chosen = o.mappedTo != null && String(o.mappedTo) === String(m.id);

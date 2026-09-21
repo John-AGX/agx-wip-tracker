@@ -379,7 +379,7 @@ function buildDataset(kind, fr, p86, p86Error) {
   out.summary = match.summarise(rows);
   // What each Buildertrend Market option seems to mean, from the records
   // already linked, for a person to map (bt-market.js).
-  if ((kind === 'jobs' || kind === 'clients') && p86.market) out.marketOptions = btMarket.evidence(rows, p86.market[kind]);
+  if ((kind === 'jobs' || kind === 'clients') && p86.market) out.marketOptions = btMarket.evidence(rows, p86.market[kind], kind);
   if (kind === 'jobs') out.summaryOpen = match.summarise(rows, (r) => r.bt.scope === 'open');
   out.notInBuildertrend = {
     reliable, count: nib.rows.length, notListed: nib.notListed,

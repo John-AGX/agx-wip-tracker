@@ -2481,7 +2481,8 @@ describe('OVERVIEW — js/bt-sync-preview.js', () => {
     const data = page();
     data.markets = [{ id: '1', name: 'Tampa', active: true }, { id: '2', name: 'Orlando', active: true }];
     const cds = ds('clients', { marketOptions: [
-      { optionId: '5001', records: 40, linked: 30, p86: [{ marketId: '1', name: 'Tampa', count: 28 }], unfiled: 2, states: [{ value: 'FL', count: 40 }], cities: [{ value: 'Tampa', count: 30 }], suggestion: '1', mappedTo: null },
+      { optionId: '5001', records: 40, linked: 30, p86: [{ marketId: '1', name: 'Tampa', count: 28 }], unfiled: 2, states: [{ value: 'FL', count: 38 }], cities: [{ value: 'Tampa', count: 30 }], suggestion: '1', mappedTo: null,
+        billing: { states: [{ value: 'CO', count: 11 }, { value: 'FL', count: 9 }], cities: [] }, unplaced: 2 },
       { optionId: '5002', records: 9, linked: 0, p86: [], unfiled: 0, states: [{ value: 'CO', count: 9 }], cities: [], suggestion: null, mappedTo: '2' },
       { optionId: '<i>5003</i>', records: 1, linked: 0, p86: [], unfiled: 0, states: [], cities: [], suggestion: null, mappedTo: null, mappedGone: true },
     ] });
@@ -2490,6 +2491,10 @@ describe('OVERVIEW — js/bt-sync-preview.js', () => {
     const html = T.marketPanelHTML(cds);
     expect(html).toContain('2 of 3 Buildertrend options not mapped yet');
     expect(html).toContain('Tampa 28, no market 2');
+    // Clients are placed by their PROPERTY; billing is shown apart.
+    expect(html).toContain('Properties are in (Buildertrend)');
+    expect(html).toContain('Billing: CO 11, FL 9');
+    expect(html).toContain('2 with no property address');
     expect(html).toContain('>Tampa \u2014 suggested</option>');
     // The suggestion is shown, never chosen for you.
     expect(html).not.toMatch(/value="1" selected/);
