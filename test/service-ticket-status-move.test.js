@@ -180,7 +180,7 @@ describe('409 buildings_open', () => {
   });
 
   test('MUTANT: yes resending without override goes red', async () => {
-    const src = mutant('Object.assign({}, body, { override: true })', 'Object.assign({}, body)');
+    const src = mutant('            next[q.key] = true;\n', '');
     await mustFail(() => checkMoveAnyway(src));
   });
 
@@ -238,5 +238,63 @@ describe('409 status_changed and other failures', () => {
     // eslint-disable-next-line no-new-func
     new Function('window', SRC)(win);
     await expect(win.p86MoveTicketStatus(T, 'approved', {})).rejects.toThrow('Reload the page to change the status.');
+  });
+});
+
+// ── Phase 3: 409 time_missing — its own question and its own override ─────
+// A work order billed after the work, arriving at Work complete with no time
+// on it. The server asks it AFTER the buildings, and a yes about the
+// buildings is not a yes about the time: each question carries its own key.
+const TIME_MSG = 'No time has been entered on this work order, and it is billed from the time worked.';
+const TIME_ASK = TIME_MSG + ' Add the time first from the Time and materials panel, or move it to Work complete anyway — the timeline will show it was moved with no time on it.';
+
+describe('409 time_missing (Phase 3)', () => {
+  const moved = { ok: true, ticket: { id: 'st_1', status: 'work_complete' } };
+  const noTime = () => httpError(409, TIME_MSG, { error: TIME_MSG, code: 'time_missing' });
+  const open = () => httpError(409, OPEN_MSG, { error: OPEN_MSG, code: 'buildings_open', open: 2, total: 5 });
+
+  test('asks its own question, and a yes resends with override_time only', async () => {
+    const { move, calls, win } = boot(SRC, [noTime(), moved], { confirm: true });
+    const out = await move(T, 'work_complete', {});
+    expect(win.p86Confirm).toHaveBeenCalledTimes(1);
+    expect(win.p86Confirm.mock.calls[0][0]).toMatchObject({ title: 'No time on this work order', message: TIME_ASK });
+    expect(calls.map((c) => c.body)).toEqual([
+      { expected_status: 'in_progress' },
+      { expected_status: 'in_progress', override_time: true },
+    ]);
+    expect(out.outcome).toBe('moved');
+  });
+
+  test('a no leaves the work order where it is', async () => {
+    const { move, calls } = boot(SRC, [noTime()], { confirm: false });
+    await expect(move(T, 'work_complete', {})).resolves.toEqual({ outcome: 'cancelled' });
+    expect(calls).toHaveLength(1);
+  });
+
+  test('buildings then time: two questions, each answered once, each adding only its own key', async () => {
+    const { move, calls, win } = boot(SRC, [open(), noTime(), moved], { confirm: true });
+    const out = await move(T, 'work_complete', {});
+    expect(win.p86Confirm).toHaveBeenCalledTimes(2);
+    expect(win.p86Confirm.mock.calls.map((c) => c[0].title)).toEqual(['Subtasks still open', 'No time on this work order']);
+    expect(calls.map((c) => c.body)).toEqual([
+      { expected_status: 'in_progress' },
+      { expected_status: 'in_progress', override: true },
+      { expected_status: 'in_progress', override: true, override_time: true },
+    ]);
+    expect(out.outcome).toBe('moved');
+  });
+
+  test('the same question is never asked twice — a second refusal after a yes is the error it is', async () => {
+    const again = noTime();
+    const { move, win } = boot(SRC, [noTime(), again], { confirm: true });
+    await expect(move(T, 'work_complete', {})).rejects.toBe(again);
+    expect(win.p86Confirm).toHaveBeenCalledTimes(1);
+  });
+
+  test('MUTANT: sharing one override for both questions sends no override_time', async () => {
+    const src = mutant("      time_missing: { key: 'override_time',", "      time_missing: { key: 'override',");
+    const { move, calls } = boot(src, [noTime(), moved], { confirm: true });
+    await move(T, 'work_complete', {});
+    expect(calls[1].body.override_time).toBeUndefined();
   });
 });

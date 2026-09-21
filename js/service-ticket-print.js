@@ -293,6 +293,22 @@
         }).join('') + '</tbody></table>';
     }
 
+    // A work order billed after the work (Phase 3): blank rows for the crew's
+    // time and what they used, filled in by hand on site. Nothing printed in
+    // them — no rate, no total — and the office types them in afterwards.
+    if (d.time_sheet === true) {
+      var blank = function (cells, n) {
+        var row = '<tr>' + new Array(cells + 1).join('<td>&nbsp;</td>') + '</tr>';
+        return new Array(n + 1).join(row);
+      };
+      html += '<h2>Time</h2><table class="wo-grid wo-timesheet"><thead><tr>' +
+          '<th>Date</th><th>People</th><th>Hours on site</th><th>Work performed</th><th>Initials</th>' +
+        '</tr></thead><tbody>' + blank(5, 4) + '</tbody></table>' +
+        '<h2>Materials used</h2><table class="wo-grid wo-used"><thead><tr>' +
+          '<th>Qty</th><th>Unit</th><th>Material</th>' +
+        '</tr></thead><tbody>' + blank(3, 5) + '</tbody></table>';
+    }
+
     html += '<h2>Notes</h2><div class="wo-lines"><div></div><div></div><div></div><div></div><div></div></div>' +
       '<div class="wo-sign">' +
         '<div><span>Work completed by</span></div><div><span>Date</span></div>' +

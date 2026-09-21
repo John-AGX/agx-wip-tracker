@@ -436,6 +436,30 @@
   }
   .flag-pick { display: flex; gap: 6px; }
   .flag-pick .btn { flex: 1 1 0; min-width: 0; }
+  /* Time and materials (Phase 3): only on a work order billed after the work. */
+  .tm-why { margin: 0 0 10px; }
+  .tm-form { border-top: 1px solid var(--border); padding-top: 11px; margin-top: 11px; display: grid; gap: 8px; }
+  .tm-form:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
+  .tm-h { font-size: 14px; font-weight: 700; }
+  .tm-grid { display: grid; grid-template-columns: 1.4fr 0.8fr 1fr; gap: 8px; }
+  .tm-grid.two { grid-template-columns: 1fr 1fr; }
+  .tm-grid label, .tm-form > label { display: grid; gap: 4px; font-size: 12px; color: var(--dim); min-width: 0; }
+  .tm-form input, .tm-form select, .tm-form textarea {
+    width: 100%; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 12px; font: inherit; font-size: 16px;
+  }
+  .tm-form textarea { resize: vertical; }
+  .tm-form .btn { justify-self: start; }
+  .tm-sent { display: grid; gap: 7px; margin-top: 12px; }
+  .tm-sent > .lbl { margin: 0; }
+  .tm-line { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+  .tm-line-h { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-size: 13px; color: var(--text-2); }
+  .tm-line-n { font-size: 13.5px; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 3px; }
+  .tm-line-what { font-size: 14px; color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+  .tm-st { font-size: 11.5px; font-weight: 600; white-space: nowrap; color: var(--amber-text); }
+  .tm-st.ok { color: var(--green-text); }
+  .tm-st.no { color: var(--red); }
+  @media (max-width: 420px) { .tm-grid:not(.two) { grid-template-columns: 1fr 1fr; } .tm-grid:not(.two) label:first-child { grid-column: 1 / -1; } }
   .flag-photo-rm {
     position: absolute; top: 3px; right: 3px; width: 30px; height: 30px; border-radius: 50%;
     border: 0; background: rgba(0,0,0,0.7); color: #fff; font-size: 17px; font-weight: 700; line-height: 1; cursor: pointer;
@@ -1457,7 +1481,7 @@
   var draftTimer = null;
 
   function blankDrafts() {
-    return { v: 1, at: 0, note: '', noteRef: '', scope: '', bnotes: {}, bnoteRefs: {}, flags: {} };
+    return { v: 1, at: 0, note: '', noteRef: '', scope: '', bnotes: {}, bnoteRefs: {}, flags: {}, tm: { labor: {}, material: {} } };
   }
 
   // A problem being written: 'flag:ticket' or 'flag:t:<building id>' ->
@@ -1509,8 +1533,35 @@
           };
         }
       }
+      // A time or material line being written: named keys only, each a
+      // string, cut to its box's length. Anything else in storage is dropped.
+      if (d.tm && typeof d.tm === 'object') {
+        ['labor', 'material'].forEach(function (kind) {
+          var src = d.tm[kind];
+          if (!src || typeof src !== 'object') return;
+          TM_FIELDS[kind].forEach(function (k) {
+            if (typeof src[k] === 'string' && src[k]) out.tm[kind][k] = src[k].slice(0, TM_MAX[k] || 200);
+          });
+          if (typeof src.client_ref === 'string' && CLIENT_REF_RE.test(src.client_ref)) out.tm[kind].client_ref = src.client_ref;
+        });
+      }
     } catch (e) { /* no storage, or a broken entry: start empty */ }
     return out;
+  }
+
+  // The keys a time or material draft keeps, and how long each may be.
+  var TM_FIELDS = {
+    labor: ['work_date', 'crew_size', 'hours', 'work_performed', 'task_id'],
+    material: ['description', 'quantity', 'unit', 'task_id']
+  };
+  var TM_MAX = { work_date: 10, crew_size: 3, hours: 6, work_performed: 2000, task_id: 200, description: 200, quantity: 9, unit: 30 };
+
+  // Has the crew typed anything worth keeping into a time or material form?
+  // A default (today's date, one person) is not typing.
+  function tmTyped(kind) {
+    var t = (drafts.tm && drafts.tm[kind]) || {};
+    if (kind === 'labor') return !!(t.hours || t.work_performed);
+    return !!(t.description || t.quantity);
   }
 
   function hasDraft() {
@@ -1521,6 +1572,7 @@
     for (var f in drafts.flags) {
       if (Object.prototype.hasOwnProperty.call(drafts.flags, f)) return true;
     }
+    if (tmTyped('labor') || tmTyped('material')) return true;
     return false;
   }
 
@@ -1784,13 +1836,14 @@
 
   // ── Focus and scroll survive a redraw ─────────────────────────────────
   function captureView() {
-    var v = { id: null, task: null, flag: null, start: null, end: null, y: 0 };
+    var v = { id: null, task: null, flag: null, tm: null, start: null, end: null, y: 0 };
     try { v.y = window.pageYOffset || (document.documentElement && document.documentElement.scrollTop) || 0; } catch (e) { v.y = 0; }
     var a = document.activeElement;
     if (a && a !== document.body && root.contains(a)) {
       if (a.id === 'note' || a.id === 'scope' || a.id === 'crewname') v.id = a.id;
       else if (a.classList && a.classList.contains('bnote-in')) v.task = a.getAttribute('data-task');
       else if (a.classList && a.classList.contains('flag-note')) v.flag = a.getAttribute('data-flag-key');
+      else if (a.classList && a.classList.contains('tm-in')) v.tm = a.getAttribute('data-tm');
       try { v.start = a.selectionStart; v.end = a.selectionEnd; } catch (e2) { v.start = null; }
     }
     return v;
@@ -1815,7 +1868,8 @@
   function restoreView(v) {
     var el = v.id ? document.getElementById(v.id)
       : v.task != null ? bnoteInput(v.task)
-        : v.flag != null ? byFlagKey('.flag-note', v.flag) : null;
+        : v.flag != null ? byFlagKey('.flag-note', v.flag)
+          : v.tm != null ? tmInput(v.tm) : null;
     if (el && typeof el.focus === 'function') {
       try { el.focus({ preventScroll: true }); } catch (e) { try { el.focus(); } catch (e2) { /* nothing */ } }
       if (v.start != null) {
@@ -2026,6 +2080,14 @@
         : '');
     }
 
+    // Time and materials (Phase 3) — the server sends field_capture only on a
+    // work order billed after the work, and only the lines THIS link sent.
+    // Above Finish, because on such a work order Finish needs it.
+    var fcap = d.field_capture && d.field_capture.on ? d.field_capture : null;
+    if (fcap && (canWork || (fcap.labor || []).length || (fcap.materials || []).length)) {
+      html += timeCardHTML(fcap, tasks, canWork);
+    }
+
     // Finishing the whole work order, under the punch list it depends on.
     if (canWork) html += finishCardHTML(d, t, tasks, done);
     else finishOpen = false;
@@ -2109,8 +2171,202 @@
     wireFlagPhotoInputs(root);
     if (canRespond && live) wireReport(d);
     if (canWork) wireFinish(d);
+    if (fcap && canWork) wireTimeCard();
     if (canPropose) wirePropose(d, t);
     restoreView(view);
+  }
+
+  // ── Time and materials (Phase 3) ──────────────────────────────────────
+  //
+  // Only on a work order billed after the work: the office bills it from the
+  // time worked, what was done and what was used, so it is asked of the
+  // people who were there. Everything sent is a CLAIM — it goes to the office,
+  // which accepts it, corrects it or turns it down, and the work order itself
+  // does not change. This page shows the lines THIS link sent and a word for
+  // where each one stands. It never shows the office's numbers, its notes, or
+  // a total of anything.
+  var TM_STATUS = {
+    sent: { text: 'Sent to the office', cls: '' },
+    accepted: { text: 'Accepted', cls: 'ok' },
+    changed: { text: 'Changed by the office', cls: '' },
+    not_accepted: { text: 'Not accepted', cls: 'no' }
+  };
+  var tmBusy = { labor: false, material: false };
+  var tmNote = { labor: null, material: null };
+
+  function localToday() {
+    var n = new Date();
+    return n.getFullYear() + '-' + ('0' + (n.getMonth() + 1)).slice(-2) + '-' + ('0' + n.getDate()).slice(-2);
+  }
+
+  function tmValue(kind, key) {
+    var t = (drafts.tm && drafts.tm[kind]) || {};
+    if (t[key] != null && t[key] !== '') return t[key];
+    if (kind === 'labor' && key === 'work_date') return localToday();
+    if (kind === 'labor' && key === 'crew_size') return '1';
+    return '';
+  }
+
+  function tmInput(key) {
+    var list = root.querySelectorAll('.tm-in');
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].getAttribute('data-tm') === String(key)) return list[i];
+    }
+    return null;
+  }
+
+  // ONE key per unsent line, kept beside the draft, so a retry after a lost
+  // answer stores the line once. A new key only after a confirmed send.
+  function tmRef(kind) {
+    if (!drafts.tm[kind].client_ref) { drafts.tm[kind].client_ref = newClientRef(); saveDraftSoon(); }
+    return drafts.tm[kind].client_ref;
+  }
+
+  function tmBuildingSelect(kind, tasks) {
+    if (!tasks.length) return '';
+    var cur = tmValue(kind, 'task_id');
+    return '<label>Building' +
+      '<select class="tm-in" data-tm="' + kind + '.task_id">' +
+        '<option value=""' + (cur ? '' : ' selected') + '>The whole work order</option>' +
+        tasks.map(function (x) {
+          var id = String(x.id);
+          return '<option value="' + esc(id) + '"' + (cur === id ? ' selected' : '') + '>' + esc(parseTitle(x.title).head) + '</option>';
+        }).join('') +
+      '</select></label>';
+  }
+
+  function tmLineHTML(kind, l, byTask) {
+    var st = TM_STATUS[l.status] || TM_STATUS.sent;
+    var where = l.task_id != null && byTask[String(l.task_id)] ? byTask[String(l.task_id)] : 'Whole work order';
+    var head, body;
+    if (kind === 'labor') {
+      var people = Number(l.crew_size) === 1 ? '1 person' : (l.crew_size + ' people');
+      head = esc(fmtDate(l.work_date)) + ' · ' + esc(people) + ' · ' + esc(String(l.hours)) + ' h on site';
+      body = l.work_performed || '';
+    } else {
+      // A material leads with WHAT it was; how much and where sit under it.
+      return '<div class="tm-line">' +
+        '<div class="tm-line-h"><span class="tm-line-what">' + esc(l.description || '') + '</span>' +
+          '<span class="tm-st' + (st.cls ? ' ' + st.cls : '') + '">' + esc(st.text) + '</span></div>' +
+        '<div class="tm-line-n">' + esc(String(l.quantity)) + (l.unit ? ' ' + esc(l.unit) : '') + ' · ' + esc(where) + '</div>' +
+      '</div>';
+    }
+    return '<div class="tm-line">' +
+      '<div class="tm-line-h"><span>' + head + ' · ' + esc(where) + '</span>' +
+        '<span class="tm-st' + (st.cls ? ' ' + st.cls : '') + '">' + esc(st.text) + '</span></div>' +
+      (body ? '<div class="tm-line-n">' + esc(body) + '</div>' : '') +
+    '</div>';
+  }
+
+  function timeCardHTML(fcap, tasks, canWork) {
+    var byTask = {};
+    tasks.forEach(function (x) { byTask[String(x.id)] = parseTitle(x.title).head; });
+    var labor = Array.isArray(fcap.labor) ? fcap.labor : [];
+    var mats = Array.isArray(fcap.materials) ? fcap.materials : [];
+    var off = function (kind) { return tmBusy[kind] ? ' disabled' : ''; };
+    var html = '<div class="card" id="tmCard"><div class="lbl">Time and materials</div>';
+    if (canWork) {
+      html += '<div class="hint tm-why">This work order is billed from the time worked and what was used. ' +
+        'Send yours before you finish — the office checks every line.</div>' +
+        '<div class="tm-form" data-kind="labor">' +
+          '<div class="tm-h">Time</div>' +
+          '<div class="tm-grid">' +
+            '<label>Day<input type="date" class="tm-in" data-tm="labor.work_date" value="' + esc(tmValue('labor', 'work_date')) + '"' + off('labor') + ' /></label>' +
+            '<label>People<input type="number" inputmode="numeric" min="1" max="50" step="1" class="tm-in" data-tm="labor.crew_size" value="' + esc(tmValue('labor', 'crew_size')) + '"' + off('labor') + ' /></label>' +
+            '<label>Hours on site<input type="text" inputmode="decimal" placeholder="6.5" class="tm-in" data-tm="labor.hours" value="' + esc(tmValue('labor', 'hours')) + '"' + off('labor') + ' /></label>' +
+          '</div>' +
+          tmBuildingSelect('labor', tasks) +
+          '<label>What was done<textarea rows="3" maxlength="2000" class="tm-in" data-tm="labor.work_performed" ' +
+            'placeholder="What did you do? The office bills from this."' + off('labor') + '>' + esc(tmValue('labor', 'work_performed')) + '</textarea></label>' +
+          '<button type="button" class="btn primary tm-send" data-kind="labor"' + off('labor') + '>Send time</button>' +
+          '<div class="msg" id="tmMsg-labor">' + (tmNote.labor ? esc(tmNote.labor.text) : '') + '</div>' +
+        '</div>' +
+        '<div class="tm-form" data-kind="material">' +
+          '<div class="tm-h">Material used</div>' +
+          '<label>What was it<input type="text" maxlength="200" class="tm-in" data-tm="material.description" placeholder="For example: 2&quot; PVC check valve" value="' + esc(tmValue('material', 'description')) + '"' + off('material') + ' /></label>' +
+          '<div class="tm-grid two">' +
+            '<label>How many<input type="text" inputmode="decimal" placeholder="1" class="tm-in" data-tm="material.quantity" value="' + esc(tmValue('material', 'quantity')) + '"' + off('material') + ' /></label>' +
+            '<label>Unit<input type="text" maxlength="30" placeholder="ea, ft, gal" class="tm-in" data-tm="material.unit" value="' + esc(tmValue('material', 'unit')) + '"' + off('material') + ' /></label>' +
+          '</div>' +
+          tmBuildingSelect('material', tasks) +
+          '<button type="button" class="btn primary tm-send" data-kind="material"' + off('material') + '>Send material</button>' +
+          '<div class="msg" id="tmMsg-material">' + (tmNote.material ? esc(tmNote.material.text) : '') + '</div>' +
+        '</div>';
+    }
+    if (labor.length || mats.length) {
+      html += '<div class="tm-sent"><div class="lbl">You sent</div>' +
+        labor.map(function (l) { return tmLineHTML('labor', l, byTask); }).join('') +
+        mats.map(function (m) { return tmLineHTML('material', m, byTask); }).join('') +
+      '</div>';
+    }
+    return html + '</div>';
+  }
+
+  function tmSay(kind, text, bad) {
+    tmNote[kind] = text ? { text: text, bad: !!bad } : null;
+    var m = document.getElementById('tmMsg-' + kind);
+    if (m) { m.textContent = text || ''; m.className = 'msg' + (bad ? ' bad' : ''); }
+  }
+
+  function tmBody(kind) {
+    var body = { client_ref: tmRef(kind) };
+    TM_FIELDS[kind].forEach(function (k) { body[k] = tmValue(kind, k); });
+    if (!body.task_id) body.task_id = null;
+    if (kind === 'labor') body.crew_size = Number(body.crew_size);
+    if (crewName.trim()) body.name = crewName.trim();
+    return body;
+  }
+
+  function sendTimeLine(kind) {
+    if (tmBusy[kind]) return;
+    tmBusy[kind] = true;
+    tmSay(kind, 'Sending…');
+    Array.prototype.forEach.call(root.querySelectorAll('.tm-form[data-kind="' + kind + '"] .tm-in, .tm-send[data-kind="' + kind + '"]'),
+      function (el) { el.disabled = true; });
+    var path = kind === 'labor' ? 'labor' : 'materials-used';
+    fetch('/api/service-ticket-share/' + encodeURIComponent(token) + '/' + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      cache: 'no-store',
+      body: JSON.stringify(tmBody(kind))
+    }).then(function (r) {
+      return readJSON(r, 'That could not be sent.');
+    }).then(function () {
+      if (!alive()) return;
+      // Confirmed: the form starts over (the day and the crew stay — the
+      // next line is usually the same day and the same people).
+      var keep = kind === 'labor'
+        ? { work_date: drafts.tm.labor.work_date || '', crew_size: drafts.tm.labor.crew_size || '' }
+        : {};
+      drafts.tm[kind] = {};
+      Object.keys(keep).forEach(function (k) { if (keep[k]) drafts.tm[kind][k] = keep[k]; });
+      persistDrafts();
+      tmBusy[kind] = false;
+      tmSay(kind, 'Sent to the office.');
+      load({ after: 'saved' });
+    }).catch(function (e) {
+      if (!alive()) return;
+      tmBusy[kind] = false;
+      Array.prototype.forEach.call(root.querySelectorAll('.tm-form[data-kind="' + kind + '"] .tm-in, .tm-send[data-kind="' + kind + '"]'),
+        function (el) { el.disabled = false; });
+      tmSay(kind, saveError(e), true);
+    });
+  }
+
+  function wireTimeCard() {
+    Array.prototype.forEach.call(root.querySelectorAll('.tm-in'), function (el) {
+      var ev = el.tagName === 'SELECT' ? 'change' : 'input';
+      el.addEventListener(ev, function () {
+        var parts = String(el.getAttribute('data-tm') || '').split('.');
+        if (parts.length !== 2 || !drafts.tm[parts[0]]) return;
+        drafts.tm[parts[0]][parts[1]] = String(el.value == null ? '' : el.value).slice(0, TM_MAX[parts[1]] || 200);
+        if (tmNote[parts[0]] && !tmNote[parts[0]].bad) tmSay(parts[0], '');
+        saveDraftSoon();
+      });
+    });
+    Array.prototype.forEach.call(root.querySelectorAll('.tm-send'), function (b) {
+      b.addEventListener('click', function () { if (!b.disabled) sendTimeLine(b.getAttribute('data-kind')); });
+    });
   }
 
   // ── The punch list: one card per building ─────────────────────────────

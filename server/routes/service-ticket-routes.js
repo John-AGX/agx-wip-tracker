@@ -57,6 +57,8 @@ const ticketCo = require('../services/service-ticket-change-order');
 // scope read off an estimate, what carries over from the lead) with no
 // database in them. POST /convert below owns the transaction.
 const convert = require('../services/service-ticket-convert');
+// Phase 3: the time and materials on a work order billed after the work.
+const fieldCapture = require('../services/service-ticket-field-capture');
 
 const router = express.Router();
 
@@ -1310,7 +1312,11 @@ router.get('/:id', requireAuth, async (req, res) => {
     //   office_seen — true when this read stamped office_seen_at, which only a
     //                 caller who can EDIT the ticket does (a view grant opening
     //                 it must not clear "New from crew"). Never throws.
-    const [sitePhotos, reviewRead, flags, changeOrders, officeSeen] = await Promise.all([
+    //   field_log   — Phase 3: the time and materials lines, waiting ones
+    //                 first, with the office totals. Only on a work order billed
+    //                 after the work (null otherwise), and never on a crew link:
+    //                 this is the authed office read.
+    const [sitePhotos, reviewRead, flags, changeOrders, officeSeen, fieldLog] = await Promise.all([
       (async () => workOrder.ticketSitePhotos(pool, orgId, ticket.id, { withNames: true }))().catch((e) => {
         console.warn('[service-tickets] site photos read failed', e && e.message);
         return [];
@@ -1339,6 +1345,10 @@ router.get('/:id', requireAuth, async (req, res) => {
         return [];
       }),
       (async () => flagSvc.markOfficeSeen(pool, req.user, ticket, orgId))().catch(() => false),
+      (async () => (fieldCapture.fieldCaptureOn(ticket) ? fieldCapture.listOfficeLines(pool, ticket) : null))().catch((e) => {
+        console.warn('[service-tickets] field log read failed', e && e.message);
+        return fieldCapture.fieldCaptureOn(ticket) ? { labor: [], materials: [], summary: fieldCapture.officeSummary([], []), failed: true } : null;
+      }),
     ]);
 
     res.json({
@@ -1364,6 +1374,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       flags: Array.isArray(flags) ? flags : [],
       change_orders: Array.isArray(changeOrders) ? changeOrders : [],
       office_seen: officeSeen === true,
+      field_log: fieldLog || null,
     });
   } catch (e) {
     console.error('[service-tickets] read failed', e);

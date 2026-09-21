@@ -346,6 +346,15 @@ describe('what a line is allowed to say', () => {
     expect(s).toEqual({ waiting: 2, accepted_person_hours: 13, accepted_labor: 1, accepted_materials: 0 });
   });
 
+  test('a work day reads as the calendar day, however the driver hands it over', () => {
+    // node-pg parses a DATE into a Date at LOCAL midnight. String(d).slice(0, 10)
+    // would say "Mon Sep 21"; toISOString would say the day before west of UTC.
+    const asDate = new Date(2026, 8, 21);
+    expect(fc.publicLine('labor', { work_date: asDate, status: 'submitted' }, []).work_date).toBe('2026-09-21');
+    expect(fc.officeLine('labor', { work_date: asDate, status: 'accepted' }).work_date).toBe('2026-09-21');
+    expect(fc.publicLine('labor', { work_date: '2026-09-21', status: 'submitted' }, []).work_date).toBe('2026-09-21');
+  });
+
   test('the switch is bill_as alone, never the word on the screen', () => {
     expect(fc.fieldCaptureOn({ bill_as: 'time_materials', ticket_kind: 'work_order' })).toBe(true);
     expect(fc.fieldCaptureOn({ bill_as: 'none', ticket_kind: 'work_order' })).toBe(false);

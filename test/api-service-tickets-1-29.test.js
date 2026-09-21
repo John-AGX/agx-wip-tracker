@@ -144,7 +144,7 @@ describe('serviceTickets.setStatus', () => {
 
   test('MUTANT: passing every key of the object through goes red', async () => {
     const src = mutant(
-      "['reason', 'note', 'expected_status', 'override', 'copy_scope', 'reopen_tasks'].forEach(function(k) {",
+      "['reason', 'note', 'expected_status', 'override', 'override_time', 'copy_scope', 'reopen_tasks'].forEach(function(k) {",
       'Object.keys(opts).forEach(function(k) {');
     await mustFail(() => checkObjectOpts(src));
   });

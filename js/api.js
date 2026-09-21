@@ -585,6 +585,25 @@
     convert: function(payload) {
       return post('/api/service-tickets/convert', payload || {});
     },
+    // Phase 3: the time and materials on a work order billed after the work.
+    // fieldLog -> { enabled, labor, materials, summary }. addLabor /
+    // addMaterial are the office's own entry (born accepted). decideFieldLine
+    // body: { decision: 'accept'|'reject', hours?, crew_size?, quantity?, note? }
+    // — a correction is written beside the crew's number, never over it.
+    fieldLog: function(id) {
+      return get('/api/service-tickets/' + encodeURIComponent(id) + '/field-log');
+    },
+    addLabor: function(id, payload) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/labor', payload || {});
+    },
+    addMaterial: function(id, payload) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/materials-used', payload || {});
+    },
+    decideFieldLine: function(id, kind, lineId, payload) {
+      var path = kind === 'material' ? 'materials-used' : 'labor';
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/' + path + '/' +
+        encodeURIComponent(lineId) + '/decide', payload || {});
+    },
     update: function(id, payload) {
       return patch('/api/service-tickets/' + encodeURIComponent(id), payload || {});
     },
@@ -597,7 +616,7 @@
     setStatus: function(id, status, opts) {
       var body = { status: status };
       if (opts && typeof opts === 'object') {
-        ['reason', 'note', 'expected_status', 'override', 'copy_scope', 'reopen_tasks'].forEach(function(k) {
+        ['reason', 'note', 'expected_status', 'override', 'override_time', 'copy_scope', 'reopen_tasks'].forEach(function(k) {
           if (opts[k] !== undefined) body[k] = opts[k];
         });
       } else {

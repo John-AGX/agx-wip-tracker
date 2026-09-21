@@ -107,6 +107,9 @@ const LOAD_COLS = [
   'lat', 'lng', 'access_notes', 'scheduled_for', 'due_date', 'assignee_user_id',
   'completed_at', 'closed_at', 'archived_at', 'created_by', 'created_at', 'updated_at',
   'approved_at', 'approved_by',
+  // Phase 3: whether the paper work order carries a blank time sheet. How it
+  // bills, never an amount.
+  'bill_as',
 ].join(', ');
 
 async function loadTicket(id, orgId) {

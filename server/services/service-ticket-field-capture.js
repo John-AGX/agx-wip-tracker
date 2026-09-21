@@ -36,6 +36,10 @@
 // to the line's own organization.
 
 const svc = require('./service-tickets');
+// A DATE column as a calendar day. node-pg parses a DATE into a Date at local
+// midnight, so String(value).slice(0, 10) would print 'Mon Sep 21'; this is
+// the codebase's one reading of it (the ticket's own date fields use it too).
+const { ticketFieldDateOnly: dayOf } = require('./service-ticket-fields');
 
 const KINDS = Object.freeze(['labor', 'material']);
 const STATUSES = Object.freeze(['submitted', 'accepted', 'rejected']);
@@ -305,7 +309,7 @@ function publicLine(kind, row, liveTaskIds) {
     created_at: r.created_at,
   };
   if (kind === 'labor') {
-    base.work_date = r.work_date == null ? null : String(r.work_date).slice(0, 10);
+    base.work_date = dayOf(r.work_date);
     base.crew_size = numberOr(r.crew_size, null);
     base.hours = numberOr(r.hours, null);
     base.work_performed = r.work_performed == null ? '' : String(r.work_performed);
@@ -348,7 +352,7 @@ function officeLine(kind, row) {
     created_at: r.created_at,
   };
   if (kind === 'labor') {
-    out.work_date = r.work_date == null ? null : String(r.work_date).slice(0, 10);
+    out.work_date = dayOf(r.work_date);
     out.crew_size = numberOr(r.crew_size, null);
     out.hours = numberOr(r.hours, null);
     out.work_performed = r.work_performed == null ? '' : String(r.work_performed);

@@ -106,6 +106,7 @@ const LEDGER = {
   'js/materials-drawer.js:fmtDate': { cal: true, pg: true, inst: false, why: 'materials.last_seen is DATE (server/db.js:2119)' },
   'js/qb-costs-view.js:fmtDate': { cal: true, pg: true, inst: false, why: 'qb_cost_lines.txn_date is DATE (server/db.js:2070)' },
   'js/subs.js:fmtDate': { cal: true, pg: true, inst: false, why: 'subs.w9_expires / insurance_expires are DATE (server/db.js:1762)' },
+  'js/service-ticket-field-log.js:fmtDay': { cal: true, pg: true, inst: false, why: 'service_ticket_labor.work_date is DATE (Phase 3 field capture); the server already sends it as YYYY-MM-DD, and the leading-day read also takes the pg ISO form' },
   'js/help-center.js:fmtDate': { cal: true, pg: false, inst: false, why: 'only formats releases[].date, a bare YYYY-MM-DD hand-written in server/feature-catalog.js. Mitigates by appending T12:00:00 — noon local, which no offset can push across a day. pg:false because that concatenation yields an invalid date, which is unreachable here' },
 
   // INSTANTS ONLY. Converting to the viewer's local time is the correct

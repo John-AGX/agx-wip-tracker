@@ -48,7 +48,7 @@ const PRIORITY_LABELS = Object.freeze({ low: 'Low', normal: 'Normal', high: 'Hig
 const WORK_ORDER_KEYS = Object.freeze([
   'v', 'kind', 'org_name', 'ticket_number', 'title', 'status_label', 'priority_label',
   'scheduled_label', 'due_label', 'site', 'site_contact', 'office_contact', 'scope',
-  'checklist', 'materials', 'buildings', 'money_mentions', 'printed_label',
+  'checklist', 'materials', 'buildings', 'time_sheet', 'money_mentions', 'printed_label',
 ]);
 
 const APPROVED_STATUSES = Object.freeze(['approved', 'closed']);
@@ -184,6 +184,11 @@ function buildWorkOrderPrint(input) {
     checklist: checklist,
     materials: materials,
     buildings: buildings,
+    // Phase 3: a work order billed after the work carries a BLANK time and
+    // materials sheet for the crew to fill in on site — a yes or no, and
+    // nothing else. No rate, no total, no line the office has entered: the
+    // paper goes wherever the crew takes it.
+    time_sheet: String(t.bill_as || '') === 'time_materials',
     money_mentions: moneyMentions([
       { label: 'Title', text: t.title },
       { label: 'Scope of work', text: scope },

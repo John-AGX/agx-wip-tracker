@@ -106,7 +106,7 @@ describe('buildWorkOrderPrint: the paper work order has no money on it', () => {
     expect(Object.keys(doc)).toEqual([
       'v', 'kind', 'org_name', 'ticket_number', 'title', 'status_label', 'priority_label',
       'scheduled_label', 'due_label', 'site', 'site_contact', 'office_contact', 'scope',
-      'checklist', 'materials', 'buildings', 'money_mentions', 'printed_label',
+      'checklist', 'materials', 'buildings', 'time_sheet', 'money_mentions', 'printed_label',
     ]);
     expect(Object.keys(doc.site)).toEqual(['job_number', 'name', 'address', 'gate_code']);
     expect(doc.office_contact).toEqual({ name: 'Paula PM', phone: '555-0199' });
@@ -160,6 +160,15 @@ describe('buildWorkOrderPrint: the paper work order has no money on it', () => {
     expect(workOrderDoc().money_mentions).toEqual([]);
     expect(workOrderDoc({ scope_proposed: 'Replace 3 treads, about $300 of wood' }).money_mentions).toEqual(['Scope of work']);
     expect(print.moneyMentions([{ label: 'A', text: '40 dollars' }, { label: 'B', text: 'Bldg 784' }, { label: 'C', text: ['x', '$ 5'] }])).toEqual(['A', 'C']);
+  });
+
+  test('Phase 3: a blank time sheet only on a work order billed after the work, and never a number on it', () => {
+    expect(workOrderDoc({ bill_as: 'time_materials' }).time_sheet).toBe(true);
+    expect(workOrderDoc({ bill_as: 'none' }).time_sheet).toBe(false);
+    expect(workOrderDoc({ bill_as: 'contract', contract_amount: '8250.00' }).time_sheet).toBe(false);
+    expect(workOrderDoc({}).time_sheet).toBe(false);
+    // How it bills is a yes or no on the paper, never the price.
+    expect(JSON.stringify(workOrderDoc({ bill_as: 'contract', contract_amount: '8250.00' }))).not.toMatch(/8250|contract/);
   });
 
   test('MUTANT: a builder that appends internal notes to the scope fails the poison assertion', () => {
