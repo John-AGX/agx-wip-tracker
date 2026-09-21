@@ -233,7 +233,13 @@ function alertOverlapsWindow(alert, startMs, endMs) {
 // whatever arrived: no grid means no numbers but the 7-day strip still paints,
 // no alerts means no banner. A failure of an extra must never cost the caller
 // the forecast it already had.
-async function getSiteConditions(lat, lng) {
+// opts.alerts === false skips the per-point alerts call. The org Jobs map asks
+// about dozens of sites at once: the GRID is cached per ~2.5 km NWS cell, so
+// jobs in the same area share one fetch, but alerts are per point and would
+// add a round trip for every pin. Alerts stay on the job's own Site Conditions
+// panel, which asks about one job at a time.
+async function getSiteConditions(lat, lng, opts) {
+  opts = opts || {};
   const sources = {
     periods: { ok: false, error: null },
     grid: { ok: false, error: null },
@@ -251,7 +257,7 @@ async function getSiteConditions(lat, lng) {
 
   const settled = await Promise.allSettled([
     pts.gridUrl ? getGrid(pts.gridUrl) : Promise.reject(new Error('no grid url')),
-    fetchAlerts(lat, lng)
+    opts.alerts === false ? Promise.resolve(null) : fetchAlerts(lat, lng)
   ]);
 
   // GRID — the numbers. Bucketed into the SITE's local days.

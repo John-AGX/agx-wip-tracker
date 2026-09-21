@@ -27,6 +27,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth } = require('../auth');
+const jobTypes = require('../services/job-types');
 
 const router = express.Router();
 
@@ -51,9 +52,11 @@ router.get('/entities', requireAuth, async (req, res) => {
 
     // Leads: title is a first-class column; coords from geocode_*.
     // Org filter matches GET /api/leads (NULL-org legacy rows included).
+    // project_type + next_followup_at feed the Leads map's filters; neither is
+    // financial, which matters because this endpoint is requireAuth-only.
     const leadsQ = pool.query(
       `SELECT l.id, l.title, l.status, l.street_address, l.city, l.state, l.zip,
-              l.geocode_lat, l.geocode_lng
+              l.geocode_lat, l.geocode_lng, l.project_type, l.next_followup_at
          FROM leads l
         WHERE (l.organization_id = $1 OR l.organization_id IS NULL)
           AND l.bt_archived_at IS NULL
@@ -71,7 +74,15 @@ router.get('/entities', requireAuth, async (req, res) => {
       [orgId]
     );
 
-    const [leadsR, jobsR] = await Promise.all([leadsQ, jobsQ]);
+    // The org's job-type registry, so TYPE comes from the job number's prefix
+    // the same way POST /api/jobs/convert derives it. A job's type must agree
+    // with its number (the converted-job-type invariant); reading data.jobType
+    // instead would let the map filter disagree with the job itself.
+    const brandQ = pool.query('SELECT branding FROM organizations WHERE id = $1', [orgId])
+      .catch(function () { return { rows: [] }; });
+
+    const [leadsR, jobsR, brandR] = await Promise.all([leadsQ, jobsQ, brandQ]);
+    const orgJobTypes = (brandR.rows[0] && brandR.rows[0].branding && brandR.rows[0].branding.job_types) || null;
 
     const leads = [];
     for (const r of leadsR.rows) {
@@ -84,6 +95,8 @@ router.get('/entities', requireAuth, async (req, res) => {
         lng: c.lng,
         kind: 'lead',
         status: r.status || '',
+        projectType: r.project_type || '',
+        followupAt: r.next_followup_at || null,
         // Assembled one-line address for the "Open in Google Maps" link
         // (coords are preferred client-side; this is the fallback label).
         address: [r.street_address, [r.city, r.state, r.zip].filter(Boolean).join(', ')]
@@ -108,6 +121,18 @@ router.get('/entities', requireAuth, async (req, res) => {
         kind: 'job',
         jobNumber: num,
         status: (typeof data.status === 'string' ? data.status : ''),
+        // From the number's prefix via the org registry — the canonical
+        // derivation. Falls back to the stored label only for a job whose
+        // number carries no recognised prefix (hand-typed legacy numbers).
+        jobType: (num && jobTypes.labelForNumber(num, orgJobTypes)) ||
+          (typeof data.jobType === 'string' ? data.jobType : ''),
+        // CREW ON SITE — the hook for time clocks, deliberately null today.
+        // There is no clock-in data anywhere in the system yet, and a map that
+        // guessed "running" from job status would teach people to trust a
+        // signal that isn't there. When time clocks land, this becomes one
+        // join (open clock-ins for this job) and the map's Crew-on-site filter
+        // and pin marker light up with no client change.
+        crewOnSite: null,
         // Address label for the "Open in Google Maps" link (coords win
         // client-side). Prefer the exact geocoded string, then the canonical
         // data.address, then the first building's address.

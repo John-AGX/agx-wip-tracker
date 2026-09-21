@@ -1386,10 +1386,13 @@
   // entry per job keyed by id. Pass ids as an array; an empty list
   // resolves to {}.
   var weather = {
-    jobs: function(jobIds) {
+    // opts.site: per-site grid numbers (gusts, thunder, dew point) for the
+    // Jobs map's trade conditions. Off by default — the schedule board asks
+    // for thirty jobs and only needs the cheap forecast.
+    jobs: function(jobIds, opts) {
       var ids = (jobIds || []).filter(Boolean);
       if (!ids.length) return Promise.resolve({ weather: {} });
-      var qs = 'ids=' + encodeURIComponent(ids.join(','));
+      var qs = 'ids=' + encodeURIComponent(ids.join(',')) + ((opts && opts.site) ? '&site=1' : '');
       return get('/api/weather/jobs?' + qs);
     },
     projects: function(projectIds) {

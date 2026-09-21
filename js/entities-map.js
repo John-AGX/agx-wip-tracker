@@ -48,6 +48,66 @@
   // Used ONLY by the org Job Map (opts.jobsSidebar); the Summary card stays raster.
   var P86_MAP_ID = '285034f23d385f2e9f756209';
 
+  // ── Pure filter logic (module scope, testable without a Google map) ──
+  // matchesSideFilter inside mount() delegates here with its live state, so
+  // the rule the tests pin is the rule the map runs.
+  function condFor(site) {
+    if (!site) return null;
+    var trades = null;
+    try {
+      if (window.p86SiteConditions && window.p86SiteConditions.advise) {
+        trades = window.p86SiteConditions.advise(site);
+      }
+    } catch (e) { trades = null; }
+    var g = site.windGustMph, t = site.thunderPct, p = site.precipPct, hi = site.heatIndexF;
+    var level = 'good', why = 'Clear to work';
+    if (g != null && g >= 30) { level = 'poor'; why = 'High winds ' + g + ' mph'; }
+    else if (t != null && t >= 60) { level = 'poor'; why = 'Storms ' + t + '%'; }
+    else if (p != null && p >= 70) { level = 'poor'; why = 'Rain ' + p + '%'; }
+    else if (g != null && g >= 20) { level = 'watch'; why = 'Gusty ' + g + ' mph'; }
+    else if (t != null && t >= 30) { level = 'watch'; why = 'Storms ' + t + '%'; }
+    else if (p != null && p >= 40) { level = 'watch'; why = 'Rain ' + p + '%'; }
+    else if (hi != null && hi >= 105) { level = 'watch'; why = 'Heat index ' + hi + '°'; }
+    var bad = [];
+    if (trades) {
+      Object.keys(trades).forEach(function (k) {
+        if (trades[k] && trades[k].level === 'poor') bad.push(k);
+      });
+    }
+    return { level: level, why: why, trades: trades, bad: bad };
+  }
+
+  // Plain words, not keys: 'height' is an internal key nobody on a crew says.
+  // The pin card and the list rows both read this, so they say the same thing.
+  var TRADE_SHORT = { roofing: 'roofing', paint: 'paint', height: 'gutters / siding', concrete: 'concrete' };
+  function tradeWords(keys) {
+    return keys.map(function (k) { return TRADE_SHORT[k] || k; }).join(', ');
+  }
+
+  // ONE derivation of status and type, used by the matcher AND by the chip
+  // counts. If these ever disagreed, a chip would advertise a count that
+  // clicking it does not produce.
+  function statusOf(it) { return String(it.status || '').trim() || '(none)'; }
+  function typeOf(it) {
+    return String((it.kind === 'lead' ? it.projectType : it.jobType) || '').trim() || '(none)';
+  }
+
+  function sideMatch(it, f, condLevel, exceptKey, isOverdue) {
+    if (!f) return true;
+    var status = statusOf(it);
+    var type = typeOf(it);
+    if (exceptKey !== 'status' && f.status && f.status.length && f.status.indexOf(status) < 0) return false;
+    if (exceptKey !== 'type' && f.type && f.type.length && f.type.indexOf(type) < 0) return false;
+    if (exceptKey !== 'cond' && f.cond && f.cond.length) {
+      // Unknown conditions are EXCLUDED from a conditions filter, never
+      // counted as good — absence must not read as safe.
+      if (!condLevel || f.cond.indexOf(condLevel) < 0) return false;
+    }
+    if (exceptKey !== 'crew' && f.crew && !it.crewOnSite) return false;
+    if (exceptKey !== 'overdue' && f.overdue && !isOverdue) return false;
+    return true;
+  }
+
   function escapeHTML(s) {
     if (typeof window.escapeHTML === 'function') return window.escapeHTML(s);
     return String(s == null ? '' : s)
@@ -182,7 +242,41 @@
       '.emap-grp-name{flex:1;font-size:12px;color:#dbe2ec;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
       '.emap-kind{font-size:9px;font-weight:600;color:#bcd4f5;background:#16335c;border-radius:4px;padding:2px 6px;flex-shrink:0;}' +
       '.emap-kind-job{color:#cbd5e1;background:#3a4150;}' +
-      '.emap-chev{color:#7c8699;font-size:15px;line-height:1;}';
+      '.emap-chev{color:#7c8699;font-size:15px;line-height:1;}' +
+      // ── filters, views, conditions ──
+      // Kept in this one injected block so the map carries its own chrome and
+      // cannot be broken by a stale styles.css in someone's cache.
+      '.emap-views{display:flex;gap:6px;padding:0 12px;margin-top:10px;}' +
+      '.emap-view-pick{flex:1;min-width:0;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e2e8f0;font-size:12px;padding:5px 6px;}' +
+      '.emap-view-save{flex:0 0 auto;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:6px;color:#cbd5e1;font-size:11px;font-weight:600;padding:4px 9px;cursor:pointer;}' +
+      '.emap-view-save:hover{border-color:#4f8cff;color:#fff;}' +
+      '.emap-filters{padding:0 12px 6px;border-bottom:1px solid rgba(255,255,255,0.08);max-height:46%;overflow-y:auto;}' +
+      '.emap-frow{margin-top:8px;}' +
+      '.emap-flabel{font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#7c8699;margin-bottom:4px;}' +
+      '.emap-chips{display:flex;flex-wrap:wrap;gap:4px;}' +
+      '.emap-chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:500;color:#cbd5e1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.10);border-radius:12px;padding:3px 8px;cursor:pointer;line-height:1.3;}' +
+      '.emap-chip:hover{border-color:rgba(79,140,255,0.6);}' +
+      '.emap-chip.on{background:rgba(79,140,255,0.22);border-color:#4f8cff;color:#fff;}' +
+      '.emap-chip.zero{opacity:.45;}' +
+      '.emap-chip[disabled]{opacity:.5;cursor:default;}' +
+      '.emap-chip[disabled]:hover{border-color:rgba(255,255,255,0.10);}' +
+      '.emap-n{font-size:10px;font-weight:700;color:#8aa6ff;font-variant-numeric:tabular-nums;}' +
+      '.emap-chip.on .emap-n{color:#fff;}' +
+      '.emap-soon{font-size:8.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#7c8699;border:1px solid rgba(255,255,255,0.15);border-radius:3px;padding:0 3px;}' +
+      '.emap-dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex-shrink:0;}' +
+      '.emap-trade{width:100%;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e2e8f0;font-size:11.5px;padding:4px 6px;}' +
+      '.emap-reset{margin-top:8px;width:100%;background:transparent;border:1px dashed rgba(255,255,255,0.18);border-radius:6px;color:#94a3b8;font-size:11px;padding:4px;cursor:pointer;}' +
+      '.emap-reset:hover{color:#fff;border-color:#4f8cff;}' +
+      '.emap-job-sub{display:flex;align-items:baseline;gap:6px;margin-top:2px;min-width:0;}' +
+      '.emap-job-type{flex-shrink:0;font-size:9.5px;font-weight:600;color:#bcd4f5;background:#16335c;border-radius:3px;padding:0 5px;}' +
+      '.emap-job-sub .emap-job-addr{margin-top:0;min-width:0;}' +
+      '.emap-job-cond{display:flex;align-items:center;gap:5px;font-size:10.5px;color:#cbd5e1;margin-top:4px;}' +
+      // The conditions dot on a pin: top-right of the pin head, ringed so it
+      // reads on satellite imagery as well as on the dark basemap.
+      '.emap-cond-dot{position:absolute;top:1px;right:-3px;width:11px;height:11px;border-radius:50%;border:2px solid #0b0f17;box-shadow:0 0 0 1px rgba(255,255,255,.55);}' +
+      '.emap-cond-good{background:#34d399;}' +
+      '.emap-cond-watch{background:#fbbf24;}' +
+      '.emap-cond-poor{background:#f87171;}';
     document.head.appendChild(st);
   }
 
@@ -606,6 +700,105 @@
       ];
     }
 
+
+    // ── Org map sidebar filters (Jobs map + Leads map) ─────────────────
+    //
+    // ONE predicate, three consumers: the pins, the sidebar list, and the
+    // header count. Before this, the pins honoured the (Summary-only) filter
+    // drawer while the sidebar listed every row narrowed only by its own
+    // search box — filter the map and you got twelve pins beside "Jobs 84".
+    // Neither org map had a filter at all: the drawer button only rendered
+    // when `!opts.only`, and both maps pass `only`.
+    var sideFilter = null;            // null until buildJobsSidebar installs it
+    var condByJob = {};               // jobId -> computed conditions (see condFor)
+    var condState = 'idle';           // idle | loading | ready | failed
+
+    // Statuses a job is still WORKING in. The default view shows these —
+    // 51 completed jobs scattered across the map hide the 24 that need a crew.
+    var ACTIVE_JOB_STATUSES = ['New', 'Backlog', 'In Progress', 'On Hold'];
+    var OPEN_LEAD_STATUSES = ['new', 'in_progress', 'sent'];
+
+    function sideStatusOf(it) { return statusOf(it); }
+    function sideTypeOf(it) { return typeOf(it); }
+
+    // Conditions for one job, computed from the per-site grid numbers by the
+    // SAME rules the Site Conditions panel uses (window.p86SiteConditions) —
+    // one rule set, so the map and the job page can never disagree about a
+    // trade. `overall` is a separate, deliberately softer rule: taking the
+    // worst of the four trades would paint almost every Florida job red all
+    // summer, because 40% afternoon thunder sinks roofing every day. Overall
+    // asks the general question — is this a bad weather day — and the trade
+    // selector asks the specific one.
+    // The level the CURRENT view colours by: overall, or one trade.
+    function sideCondOf(it) {
+      var c = condByJob[it.id];
+      if (!c) return null;
+      var t = (sideFilter && sideFilter.trade) || 'overall';
+      if (t === 'overall') return c.level;
+      return (c.trades && c.trades[t]) ? c.trades[t].level : null;
+    }
+    function sideCondWhy(it) {
+      var c = condByJob[it.id];
+      if (!c) return '';
+      var t = (sideFilter && sideFilter.trade) || 'overall';
+      if (t === 'overall') return c.why;
+      return (c.trades && c.trades[t]) ? c.trades[t].why : '';
+    }
+
+    function isOverdueItem(it) {
+      if (it.kind !== 'lead' || !it.followupAt) return false;
+      if (['sold', 'lost', 'no_opportunity'].indexOf(it.status) >= 0) return false;
+      return String(it.followupAt).slice(0, 10) < _todayStr();
+    }
+
+    // The single predicate. `exceptKey` skips one dimension, which is what
+    // lets each chip show how many rows it WOULD match given every OTHER
+    // active filter — a count that ignores the other filters is a number
+    // nobody can act on.
+    function matchesSideFilter(it, exceptKey) {
+      // Delegates to the module-scope sideMatch so the rule the tests pin
+      // IS the rule the map runs — not a copy that can drift from it.
+      return sideMatch(it, sideFilter, sideCondOf(it), exceptKey, isOverdueItem(it));
+    }
+
+    // Load per-site grid numbers for the jobs the current view can show, then
+    // repaint. Only ACTIVE jobs are asked about: weather for a completed job is
+    // never the question, and it keeps the upstream calls proportional to the
+    // work actually in the field. Best-effort — a failure costs the conditions
+    // layer, never the map.
+    function loadConditions(onDone) {
+      if (opts.only !== 'job' || condState === 'loading') return;
+      if (!(window.p86Api && window.p86Api.weather && window.p86Api.weather.jobs)) return;
+      var ids = data.jobs.filter(function (j) {
+        return ACTIVE_JOB_STATUSES.indexOf(sideStatusOf(j)) >= 0;
+      }).map(function (j) { return j.id; });
+      if (!ids.length) { condState = 'ready'; if (onDone) onDone(); return; }
+      condState = 'loading';
+      if (onDone) onDone();
+      var CHUNK = 30, chunks = [];
+      for (var i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
+      var pending = chunks.length;
+      chunks.forEach(function (batch) {
+        window.p86Api.weather.jobs(batch, { site: true }).then(function (res) {
+          var w = (res && res.weather) || {};
+          Object.keys(w).forEach(function (id) {
+            var rec = w[id];
+            var today = rec && Array.isArray(rec.days) ? rec.days[0] : null;
+            var c = today ? condFor(today.site) : null;
+            if (c) condByJob[id] = c;
+          });
+        }, function () { /* a failed batch leaves those jobs unknown */ })
+        .then(function () {
+          pending--;
+          if (pending === 0) {
+            condState = Object.keys(condByJob).length ? 'ready' : 'failed';
+            if (onDone) onDone();
+          }
+        });
+      });
+    }
+
+    var COND_COLOR = { good: '#34d399', watch: '#fbbf24', poor: '#f87171' };
     // ── Marker abstraction: AdvancedMarkerElement on the vector Job Map, classic
     // maps.Marker everywhere else. One creation/teardown/anchor path for both. ──
     function pinImg(spec) {
@@ -639,6 +832,21 @@
       return mk;
     }
     function removeMarker(m) { if (!m) return; if (m.__adv) { m.map = null; } else { m.setMap(null); } }
+
+    // Wrap a pin image with a conditions dot. A crew-on-site ring is drawn the
+    // same way once time clocks exist (it.crewOnSite), so the two signals read
+    // as one visual language rather than two bolted-on ones.
+    function withCondDot(img, level, why) {
+      var wrap = document.createElement('div');
+      wrap.style.position = 'relative';
+      wrap.style.display = 'inline-block';
+      wrap.appendChild(img);
+      var dot = document.createElement('span');
+      dot.className = 'emap-cond-dot emap-cond-' + level;
+      dot.title = why || '';
+      wrap.appendChild(dot);
+      return wrap;
+    }
     function bounceMarker(m) {
       if (!m) return;
       if (m.__adv) {
@@ -672,7 +880,11 @@
       markers = [];
       for (var jk in jobIndex) { if (Object.prototype.hasOwnProperty.call(jobIndex, jk)) delete jobIndex[jk]; }
 
-      var visible = allItems.filter(function (it) { return shown[it.kind] && matchesMapFilter(it); });
+      // matchesSideFilter is the SAME predicate the sidebar list and its header
+      // count use, so the pins on screen and the rows beside them always agree.
+      var visible = allItems.filter(function (it) {
+        return shown[it.kind] && matchesMapFilter(it) && matchesSideFilter(it);
+      });
       var groups = groupByLocation(visible);
       var bounds = new maps.LatLngBounds();
 
@@ -682,10 +894,17 @@
         if (g.members.length === 1) {
           var item = g.members[0];
           var sIcon = iconForItem(maps, item, itemUrgency(item));
+          // Conditions ride the pin as a coloured dot beside its head, so the
+          // TYPED pin (reno / service / work order) stays readable. Advanced
+          // markers only — classic markers take a flat icon URL and have
+          // nowhere to hang a badge.
+          var pinContent = (advOK && sIcon) ? pinImg({ url: sIcon.url, w: sIcon.scaledSize.width, h: sIcon.scaledSize.height }) : null;
+          var condLv = sideCondOf(item);
+          if (pinContent && condLv) pinContent = withCondDot(pinContent, condLv, sideCondWhy(item));
           marker = makeMarker(pos, {
-            title: item.title || '',
+            title: (item.title || '') + (condLv ? ' — ' + sideCondWhy(item) : ''),
             icon: sIcon,
-            content: (advOK && sIcon) ? pinImg({ url: sIcon.url, w: sIcon.scaledSize.width, h: sIcon.scaledSize.height }) : null,
+            content: pinContent,
             onClick: (function (it) { return function () {
               // First click = open the card ONLY (no zoom). The old behavior
               // flew the camera way in before showing detail; zooming is now a
@@ -876,6 +1095,26 @@
         if (rows[i].getAttribute('data-job-id') === id) { rows[i].classList.add('sel'); rows[i].scrollIntoView({ block: 'nearest' }); break; }
       }
     }
+    // Today's conditions for the pin card: the overall call, then the trades
+    // it rules out by name — "Bad for roofing, gutters / siding" is the sentence a
+    // foreman needs, and the grid numbers behind it are on the job page.
+    function condStatsFor(id) {
+      var c = condByJob[id];
+      if (!c) return [];
+      var out = [{
+        label: 'Today',
+        value: ({ good: 'Good', watch: 'Watch', poor: 'Poor' })[c.level] + ' · ' + c.why,
+        tone: c.level === 'poor' ? 'neg' : (c.level === 'good' ? 'pos' : null)
+      }];
+      if (c.bad && c.bad.length) {
+        out.push({
+          label: 'Bad for',
+          value: tradeWords(c.bad),
+          tone: 'neg'
+        });
+      }
+      return out;
+    }
     function showJobDetail(id) {
       var e = jobIndex[id], it = e ? e.item : null; if (!it) return;
       var w = (window.getJobWIP ? window.getJobWIP(id) : null) || {};
@@ -902,7 +1141,7 @@
         stats: [
           { label: 'Contract', value: money(contract) },
           { label: 'Profit', value: (profit < 0 ? '-' : '+') + money(Math.abs(profit)), tone: profit < 0 ? 'neg' : 'pos' }
-        ],
+        ].concat(condStatsFor(id)),
         icons: [ { act: 'info', title: 'Open job' }, { act: 'maps', title: 'Maps' } ],
         actions: [ { label: 'Open WIP', act: 'open', primary: true, icon: 'arrow-right' }, { label: '🔍', act: 'zoom' }, { label: 'Maps', act: 'maps' } ],
         data: { id: id, lat: it.lat, lng: it.lng }
@@ -977,16 +1216,54 @@
       var isLead = (opts.only === 'lead');
       var headLabel = isLead ? 'Leads' : 'Jobs';
       var openLabel = isLead ? 'Open lead →' : 'Open WIP →';
+      var PAGE = isLead ? 'leads_map' : 'jobs_map';
+      var LS_KEY = 'p86-map-filter-' + PAGE;
       var rows = (isLead ? data.leads : data.jobs).slice().sort(function (a, b) {
         return String(a.title || '').localeCompare(String(b.title || ''));
       });
       var byId = {}; rows.forEach(function (r) { byId[r.id] = r; });
+
+      // ── the default view ───────────────────────────────────────────
+      // Jobs: the work that is still in the field. Leads: the open pipeline.
+      // Everything else is one chip away, and the header says "24 of 84" so a
+      // narrowed map never passes itself off as the whole portfolio.
+      function defaultFilter() {
+        return {
+          status: (isLead ? OPEN_LEAD_STATUSES : ACTIVE_JOB_STATUSES).filter(function (s) {
+            return rows.some(function (r) { return sideStatusOf(r) === s; });
+          }),
+          type: [], cond: [], trade: 'overall', crew: false, overdue: false, q: ''
+        };
+      }
+      function clean(f) {
+        var d = defaultFilter();
+        if (!f || typeof f !== 'object') return d;
+        return {
+          status: Array.isArray(f.status) ? f.status.slice(0, 40) : d.status,
+          type: Array.isArray(f.type) ? f.type.slice(0, 40) : [],
+          cond: Array.isArray(f.cond) ? f.cond.filter(function (c) { return COND_COLOR[c]; }) : [],
+          trade: ['overall', 'roofing', 'paint', 'height', 'concrete'].indexOf(f.trade) >= 0 ? f.trade : 'overall',
+          crew: !!f.crew, overdue: !!f.overdue,
+          q: typeof f.q === 'string' ? f.q.slice(0, 80) : ''
+        };
+      }
+
+      // Restore instantly from this browser; the server copy (below) wins on a
+      // device that has never seen this map.
+      var stored = null;
+      try { stored = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); } catch (e) { stored = null; }
+      sideFilter = clean(stored);
+
       var panel = document.createElement('div');
       panel.className = 'emap-jobs-panel';
       panel.innerHTML =
-        '<div class="emap-jobs-head"><span class="emap-jobs-title">' + headLabel + ' <b>' + rows.length + '</b></span>' +
-          '<button type="button" class="emap-jobs-collapse" title="Collapse">››</button></div>' +
+        '<div class="emap-jobs-head">' +
+          '<span class="emap-jobs-title">' + headLabel + ' <b data-emap-count></b></span>' +
+          '<button type="button" class="emap-jobs-collapse" title="Collapse">››</button>' +
+        '</div>' +
+        '<div class="emap-views"></div>' +
         '<input type="text" class="emap-jobs-search" placeholder="Search ' + headLabel.toLowerCase() + '…">' +
+        '<div class="emap-filters"></div>' +
         '<div class="emap-jobs-list"></div>';
       host.appendChild(panel);
       var expandTab = document.createElement('button');
@@ -997,23 +1274,265 @@
       host.appendChild(expandTab);
 
       var listEl = panel.querySelector('.emap-jobs-list');
+      var filtersEl = panel.querySelector('.emap-filters');
+      var viewsEl = panel.querySelector('.emap-views');
+      var countEl = panel.querySelector('[data-emap-count]');
+      var searchEl = panel.querySelector('.emap-jobs-search');
+      searchEl.value = sideFilter.q || '';
+
+      function searchMatch(r) {
+        var q = String(sideFilter.q || '').toLowerCase().trim();
+        return !q || ((r.title || '') + ' ' + (r.address || '')).toLowerCase().indexOf(q) >= 0;
+      }
+      function visibleRows() { return rows.filter(function (r) { return matchesSideFilter(r) && searchMatch(r); }); }
+
+      function condBadge(r) {
+        if (isLead) return '';
+        var lv = sideCondOf(r);
+        if (!lv) return '';
+        var c = condByJob[r.id];
+        var bad = (c && c.bad && c.bad.length && sideFilter.trade === 'overall')
+          ? ' · bad for ' + tradeWords(c.bad) : '';
+        return '<div class="emap-job-cond"><span class="emap-dot" style="background:' + COND_COLOR[lv] + ';"></span>' +
+          escapeHTML(sideCondWhy(r) + bad) + '</div>';
+      }
       function rowHTML(j) {
+        var type = sideTypeOf(j);
         return '<div class="emap-job-row" data-job-id="' + escapeAttr(j.id) + '">' +
           '<div class="emap-job-main"><span class="emap-job-name">' + escapeHTML(j.title || '(untitled)') + '</span>' +
             (j.status ? '<span class="emap-job-status">' + escapeHTML(String(j.status).replace(/_/g, ' ')) + '</span>' : '') + '</div>' +
-          (j.address ? '<div class="emap-job-addr">' + escapeHTML(j.address) + '</div>' : '') +
+          '<div class="emap-job-sub">' +
+            (type !== '(none)' ? '<span class="emap-job-type">' + escapeHTML(type) + '</span>' : '') +
+            (j.address ? '<span class="emap-job-addr">' + escapeHTML(j.address) + '</span>' : '') +
+          '</div>' +
+          condBadge(j) +
           '<button type="button" class="emap-job-wip">' + openLabel + '</button>' +
         '</div>';
       }
-      function paint(filter) {
-        var f = String(filter || '').toLowerCase().trim();
-        var shown = !f ? rows : rows.filter(function (j) {
-          return ((j.title || '') + ' ' + (j.address || '')).toLowerCase().indexOf(f) >= 0;
-        });
-        listEl.innerHTML = shown.length ? shown.map(rowHTML).join('') : '<div class="emap-jobs-empty">No matching ' + headLabel.toLowerCase() + '</div>';
+
+      // ── chips ──────────────────────────────────────────────────────
+      // Each chip's count is what it WOULD show given every OTHER active
+      // filter (matchesSideFilter's exceptKey) — the number a person can act on.
+      function chipRow(label, key, values, labelFor, colorFor) {
+        if (!values.length) return '';
+        var active = sideFilter[key] || [];
+        return '<div class="emap-frow"><div class="emap-flabel">' + label + '</div><div class="emap-chips">' +
+          values.map(function (v) {
+            var n = rows.filter(function (r) {
+              if (!matchesSideFilter(r, key) || !searchMatch(r)) return false;
+              if (key === 'status') return sideStatusOf(r) === v;
+              if (key === 'type') return sideTypeOf(r) === v;
+              if (key === 'cond') return sideCondOf(r) === v;
+              return false;
+            }).length;
+            var on = active.indexOf(v) >= 0;
+            var dot = colorFor ? '<span class="emap-dot" style="background:' + colorFor(v) + ';"></span>' : '';
+            return '<button type="button" class="emap-chip' + (on ? ' on' : '') + (n ? '' : ' zero') + '" ' +
+              'data-fkey="' + key + '" data-fval="' + escapeAttr(v) + '">' +
+              dot + escapeHTML(labelFor ? labelFor(v) : v) + ' <span class="emap-n">' + n + '</span></button>';
+          }).join('') +
+        '</div></div>';
       }
-      paint('');
-      panel.querySelector('.emap-jobs-search').addEventListener('input', function () { paint(this.value); });
+
+      // Values offered = the canonical set plus anything actually in use, the
+      // same rule the Jobs list's bulk "Set status" menu follows — a status the
+      // app does not know about still gets a chip rather than vanishing.
+      function valuesFor(fn, canonical) {
+        var seen = {}, out = [];
+        (canonical || []).forEach(function (v) {
+          if (rows.some(function (r) { return fn(r) === v; })) { seen[v] = 1; out.push(v); }
+        });
+        rows.forEach(function (r) { var v = fn(r); if (!seen[v]) { seen[v] = 1; out.push(v); } });
+        return out;
+      }
+      var JOB_STATUS_ORDER = ['New', 'Backlog', 'In Progress', 'On Hold', 'Completed', 'Archived'];
+      var LEAD_STATUS_ORDER = ['new', 'in_progress', 'sent', 'sold', 'lost', 'no_opportunity'];
+      function niceStatus(s) {
+        return s === '(none)' ? 'No status' : String(s).replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+      }
+
+      function paintFilters() {
+        var html = '';
+        html += chipRow('Status', 'status',
+          valuesFor(sideStatusOf, isLead ? LEAD_STATUS_ORDER : JOB_STATUS_ORDER), niceStatus);
+        html += chipRow(isLead ? 'Project type' : 'Job type', 'type',
+          valuesFor(sideTypeOf, []), function (v) { return v === '(none)' ? 'Untyped' : v; });
+
+        if (!isLead) {
+          // Conditions: pick WHAT to judge by, then filter on the verdict.
+          var trade = sideFilter.trade || 'overall';
+          var TRADES = [['overall', 'Overall'], ['roofing', 'Roofing'], ['paint', 'Paint'],
+                        ['height', 'Gutters / siding'], ['concrete', 'Concrete']];
+          var condLabel = condState === 'loading' ? 'Conditions today · loading…'
+            : condState === 'failed' ? 'Conditions today · unavailable'
+            : 'Conditions today';
+          html += '<div class="emap-frow"><div class="emap-flabel">' + condLabel + '</div>' +
+            '<select class="emap-trade" title="Judge conditions for">' +
+              TRADES.map(function (t) {
+                return '<option value="' + t[0] + '"' + (t[0] === trade ? ' selected' : '') + '>' +
+                  (t[0] === 'overall' ? 'Overall' : 'For ' + t[1].toLowerCase()) + '</option>';
+              }).join('') +
+            '</select></div>';
+          if (condState === 'ready') {
+            html += chipRow('', 'cond', ['good', 'watch', 'poor'],
+              function (v) { return ({ good: 'Good', watch: 'Watch', poor: 'Poor' })[v]; },
+              function (v) { return COND_COLOR[v]; });
+          }
+
+          // CREW ON SITE — a real filter slot waiting on real data. Disabled
+          // until any job carries crewOnSite, and it says so, rather than
+          // guessing "running" from a status field.
+          var anyCrew = rows.some(function (r) { return r.crewOnSite != null; });
+          html += '<div class="emap-frow"><button type="button" class="emap-chip emap-toggle' +
+            (sideFilter.crew ? ' on' : '') + '" data-ftoggle="crew"' +
+            (anyCrew ? '' : ' disabled title="Lights up once time clocks are live"') + '>' +
+            '<span class="emap-dot" style="background:#60a5fa;"></span>Crew on site' +
+            (anyCrew ? '' : ' <span class="emap-soon">soon</span>') + '</button></div>';
+        } else {
+          var nOver = rows.filter(function (r) { return matchesSideFilter(r, 'overdue') && searchMatch(r) && isOverdueItem(r); }).length;
+          html += '<div class="emap-frow"><button type="button" class="emap-chip emap-toggle' +
+            (sideFilter.overdue ? ' on' : '') + '" data-ftoggle="overdue">' +
+            '<span class="emap-dot" style="background:#f87171;"></span>Overdue follow-up <span class="emap-n">' + nOver + '</span></button></div>';
+        }
+
+        var dirty = JSON.stringify(sideFilter) !== JSON.stringify(defaultFilter());
+        if (dirty) html += '<button type="button" class="emap-reset">Reset to default view</button>';
+        filtersEl.innerHTML = html;
+      }
+
+      function paintList() {
+        var vis = visibleRows();
+        countEl.textContent = vis.length === rows.length ? String(rows.length) : (vis.length + ' of ' + rows.length);
+        listEl.innerHTML = vis.length ? vis.map(rowHTML).join('')
+          : '<div class="emap-jobs-empty">No ' + headLabel.toLowerCase() + ' match this view.</div>';
+      }
+
+      // Everything that changes the view goes through here: pins, list, chips
+      // and the saved copy all move together.
+      function apply(opts2) {
+        paintFilters();
+        paintList();
+        closePopup();
+        rebuild();
+        if (!(opts2 && opts2.noSave)) persist();
+      }
+
+      // ── persistence: the view you set is the view you get back ──────
+      // localStorage for the instant restore on this browser, and a per-user
+      // default view on the server so it survives a new browser or a second
+      // device. Debounced — a burst of chip clicks is one write.
+      var serverView = null;       // the default saved view, once known
+      var saveTimer = null;
+      function persist() {
+        try { localStorage.setItem(LS_KEY, JSON.stringify(sideFilter)); } catch (e) {}
+        var LV = window.p86Api && window.p86Api.listViews;
+        if (!LV) return;
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(function () {
+          var cfg = { filters: sideFilter };
+          if (serverView && serverView.id) {
+            LV.update(serverView.id, { config: cfg }).catch(function () {});
+          } else {
+            LV.create({ page: PAGE, name: 'My view', config: cfg, is_default: true })
+              .then(function (r) { if (r && r.view) serverView = r.view; }).catch(function () {});
+          }
+        }, 900);
+      }
+
+      // Named views: switch between saved set-ups ("Roofing crew", "Orlando
+      // active"). The one marked default is what the map opens to.
+      var namedViews = [];
+      function paintViews() {
+        var opts3 = namedViews.map(function (v) {
+          return '<option value="' + escapeAttr(v.id) + '"' + (serverView && v.id === serverView.id ? ' selected' : '') + '>' +
+            escapeHTML(v.name) + (v.is_default ? ' ★' : '') + '</option>';
+        }).join('');
+        viewsEl.innerHTML =
+          '<select class="emap-view-pick" title="Saved views">' +
+            (opts3 || '<option value="">My view</option>') +
+          '</select>' +
+          '<button type="button" class="emap-view-save" title="Save this view under a name">Save as…</button>';
+      }
+      function loadServerViews() {
+        var LV = window.p86Api && window.p86Api.listViews;
+        if (!LV) { paintViews(); return; }
+        LV.list(PAGE).then(function (r) {
+          namedViews = (r && r.views) || [];
+          var def = namedViews.filter(function (v) { return v.is_default; })[0] || namedViews[0] || null;
+          serverView = def;
+          // A device with nothing stored adopts the server's default. A device
+          // that already has a view keeps it — it is the more recent intent.
+          if (def && !stored && def.config && def.config.filters) {
+            sideFilter = clean(def.config.filters);
+            searchEl.value = sideFilter.q || '';
+            apply({ noSave: true });
+          }
+          paintViews();
+        }).catch(function () { paintViews(); });
+      }
+
+      viewsEl.addEventListener('change', function (ev) {
+        if (!ev.target.classList.contains('emap-view-pick')) return;
+        var v = namedViews.filter(function (x) { return x.id === ev.target.value; })[0];
+        if (!v) return;
+        serverView = v;
+        sideFilter = clean(v.config && v.config.filters);
+        searchEl.value = sideFilter.q || '';
+        apply({ noSave: true });
+        try { localStorage.setItem(LS_KEY, JSON.stringify(sideFilter)); } catch (e) {}
+      });
+      viewsEl.addEventListener('click', function (ev) {
+        if (!ev.target.classList.contains('emap-view-save')) return;
+        var LV = window.p86Api && window.p86Api.listViews;
+        if (!LV || !window.p86Prompt) return;
+        window.p86Prompt({ title: 'Save this view', message: 'Name it — e.g. "Roofing crew" or "Orlando active".', placeholder: 'View name', defaultValue: '' })
+          .then(function (name) {
+            name = String(name || '').trim();
+            if (!name) return;
+            return LV.create({ page: PAGE, name: name.slice(0, 60), config: { filters: sideFilter }, is_default: true })
+              .then(function (r) {
+                if (r && r.view) {
+                  namedViews.forEach(function (v) { v.is_default = false; });
+                  namedViews.push(r.view);
+                  serverView = r.view;
+                  paintViews();
+                  if (window.p86Toast) window.p86Toast('Saved "' + name + '" — the map will open to it.', 'success');
+                }
+              });
+          }).catch(function () {});
+      });
+
+      filtersEl.addEventListener('click', function (ev) {
+        var b = ev.target.closest ? ev.target.closest('button') : null;
+        if (!b || b.disabled) return;
+        if (b.classList.contains('emap-reset')) {
+          sideFilter = defaultFilter();
+          searchEl.value = '';
+          apply();
+          return;
+        }
+        var tog = b.getAttribute('data-ftoggle');
+        if (tog) { sideFilter[tog] = !sideFilter[tog]; apply(); return; }
+        var key = b.getAttribute('data-fkey'), val = b.getAttribute('data-fval');
+        if (!key) return;
+        var arr = sideFilter[key] = (sideFilter[key] || []).slice();
+        var i = arr.indexOf(val);
+        if (i >= 0) arr.splice(i, 1); else arr.push(val);
+        apply();
+      });
+      filtersEl.addEventListener('change', function (ev) {
+        if (!ev.target.classList.contains('emap-trade')) return;
+        sideFilter.trade = ev.target.value;
+        // A verdict filter chosen for one trade means nothing for another.
+        sideFilter.cond = [];
+        apply();
+      });
+      searchEl.addEventListener('input', function () {
+        sideFilter.q = this.value;
+        paintFilters(); paintList(); rebuild();
+        try { localStorage.setItem(LS_KEY, JSON.stringify(sideFilter)); } catch (e) {}
+      });
+
       panel.querySelector('.emap-jobs-collapse').addEventListener('click', function () {
         panel.classList.add('emap-collapsed'); expandTab.style.display = '';
       });
@@ -1039,6 +1558,12 @@
 
       // Clicking empty map closes the on-map popup.
       if (map && map.addListener) map.addListener('click', closePopup);
+
+      apply({ noSave: true });
+      paintViews();
+      loadServerViews();
+      // Conditions arrive after the map paints, then re-colour pins and rows.
+      loadConditions(function () { paintFilters(); paintList(); rebuild(); });
     }
 
     // Phase 0 warm-up: geocode jobs that have no coordinates yet — the weather
@@ -1171,5 +1696,11 @@
     }
   }
 
-  window.p86EntitiesMap = { render: render, flyToJob: flyToJob };
+  window.p86EntitiesMap = {
+    render: render,
+    flyToJob: flyToJob,
+    // Pure pieces of the org-map filter, exposed for tests. The map calls
+    // these exact functions — they are not copies.
+    _pure: { condFor: condFor, sideMatch: sideMatch, statusOf: statusOf, typeOf: typeOf, tradeWords: tradeWords }
+  };
 })();

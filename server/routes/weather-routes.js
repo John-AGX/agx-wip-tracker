@@ -126,6 +126,10 @@ router.get('/jobs', async function(req, res) {
   if (!idsRaw) return res.json({ weather: {} });
   const ids = idsRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
   if (!ids.length) return res.json({ weather: {} });
+  // Opt-in per-site grid numbers for the Jobs map. Capped: this multiplies
+  // upstream calls, and a caller asking for site data on hundreds of jobs is
+  // asking the wrong question — the map only requests its ACTIVE jobs.
+  const wantSite = String(req.query.site || '') === '1' && ids.length <= 120;
 
   let rows;
   try {
@@ -174,8 +178,14 @@ router.get('/jobs', async function(req, res) {
         // (grid numbers, site timezone, active alerts); a board asking for
         // thirty keeps the single cheap call, because three upstreams per site
         // would multiply the page load by the slowest of them, thirty times.
-        if (rows.length === 1) {
-          const sc = await getSiteConditions(geo.lat, geo.lng);
+        //
+        // `?site=1` is the Jobs MAP asking for its active jobs. It needs the
+        // grid numbers — the per-trade advice runs on gusts, thunder and dew
+        // point, none of which the cheap forecast carries — but not the alerts,
+        // which are per point and would add a round trip per pin. The grid is
+        // cached per ~2.5 km NWS cell, so jobs in the same area share it.
+        if (rows.length === 1 || wantSite) {
+          const sc = await getSiteConditions(geo.lat, geo.lng, { alerts: rows.length === 1 });
           out[row.id] = Object.assign({
             status: 'ok',
             lat: geo.lat,
