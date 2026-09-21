@@ -377,15 +377,26 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), requireOrgId, a
     // Guard: don't double-convert a lead that's already linked to a job.
     // Also grab the lead's market_id — the conversion is where a market
     // is inherited down the chain lead -> job -> estimate.
+    //
+    // A lead that already became a TICKET is refused on the same terms. The
+    // three-way convert (POST /api/service-tickets/convert) is the other door,
+    // and it refuses a lead that already became a JOB — a one-way guard would
+    // let the same won pursuit be sold twice, once down each road.
     let leadMarketId = null;
     if (leadId) {
       const lr = await pool.query(
-        'SELECT job_id, market_id FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        'SELECT job_id, service_ticket_id, market_id FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
         [leadId, orgId]
       );
       if (!lr.rows.length) return res.status(404).json({ error: 'Lead not found' });
       if (lr.rows[0].job_id) {
         return res.status(409).json({ error: 'Lead already linked to a job', job_id: lr.rows[0].job_id });
+      }
+      if (lr.rows[0].service_ticket_id) {
+        return res.status(409).json({
+          error: 'This lead already became a ticket.',
+          ticket_id: lr.rows[0].service_ticket_id,
+        });
       }
       leadMarketId = lr.rows[0].market_id || null;
     }
@@ -405,7 +416,8 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), requireOrgId, a
     // block alone is the client-only guard this codebase keeps re-learning.
     if (estimateId) {
       const er = await pool.query(
-        "SELECT data->>'job_id' AS job_id FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)",
+        "SELECT data->>'job_id' AS job_id, data->>'service_ticket_id' AS service_ticket_id" +
+        ' FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
         [estimateId, orgId]
       );
       if (!er.rows.length) return res.status(404).json({ error: 'Estimate not found' });
@@ -414,6 +426,16 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), requireOrgId, a
         return res.status(409).json({
           error: 'That estimate has already been sold to another job. Duplicate it and attach the copy instead.',
           job_id: soldTo
+        });
+      }
+      // …or to a TICKET. Same rule, other road: the three-way convert stamps
+      // data.service_ticket_id when a lead is sold as a work order or a
+      // service ticket, and that estimate is spent.
+      const soldToTicket = er.rows[0].service_ticket_id;
+      if (soldToTicket) {
+        return res.status(409).json({
+          error: 'That estimate has already been sold to a ticket. Duplicate it and attach the copy instead.',
+          ticket_id: soldToTicket
         });
       }
     }
@@ -582,6 +604,14 @@ router.post('/:id/link-estimate', requireAuth, async (req, res) => {
       return res.status(409).json({
         error: 'That estimate has already been sold to another job. Duplicate it and link the copy instead.',
         job_id: _soldTo
+      });
+    }
+    // And one sold to a TICKET is spent too — see the /convert twin above.
+    if (_ed.service_ticket_id) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        error: 'That estimate has already been sold to a ticket. Duplicate it and link the copy instead.',
+        ticket_id: _ed.service_ticket_id
       });
     }
 

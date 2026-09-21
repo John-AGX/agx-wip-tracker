@@ -408,7 +408,7 @@ describe('a stamped row is scoped; an un-stamped row is the leak', () => {
  * ══════════════════════════════════════════════════════════════════════════*/
 describe('convert still works', () => {
   function convertHandlers() {
-    handlers['SELECT job_id, market_id FROM leads'] = () => ({
+    handlers['SELECT job_id, service_ticket_id, market_id FROM leads'] = () => ({
       rows: [{ job_id: null, market_id: null }]
     });
     handlers['SELECT id FROM users WHERE id = $1 AND active'] = () => ({ rows: [{ id: 10 }] });
@@ -438,7 +438,7 @@ describe('convert still works', () => {
       { lead_id: 'lead_1', job: { name: 'no number' } });
     expect(bad.status).toBe(400);
 
-    handlers['SELECT job_id, market_id FROM leads'] = () => ({
+    handlers['SELECT job_id, service_ticket_id, market_id FROM leads'] = () => ({
       rows: [{ job_id: 'job_existing', market_id: null }]
     });
     const dup = await call('POST', '/api/jobs/convert',
@@ -802,7 +802,7 @@ describe('a create cannot point a job at another tenant', () => {
   });
 
   test('/convert: an owner outside the caller org is refused before BEGIN', async () => {
-    handlers['SELECT job_id, market_id FROM leads'] =
+    handlers['SELECT job_id, service_ticket_id, market_id FROM leads'] =
       () => ({ rows: [{ job_id: null, market_id: null }] });
     handlers['SELECT id FROM users WHERE id = $1 AND active = true AND organization_id'] =
       () => ({ rows: [] });

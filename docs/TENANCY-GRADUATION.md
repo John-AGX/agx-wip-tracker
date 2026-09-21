@@ -192,7 +192,26 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**569** occurrences of `organization_id IS NULL` across `server/`.
+**573** occurrences of `organization_id IS NULL` across `server/`.
+
+569 → 573: the THREE-WAY CONVERT (`POST /api/service-tickets/convert`), the
+door that turns a won lead into a work order or a service ticket rather than
+into a job. Four statements, all inside its one transaction, and every one of
+them a read or a write of a record this organisation owns: the LEAD read
+`FOR UPDATE` that the whole convert is decided from, the ESTIMATE read
+`FOR UPDATE` that proves it is not already sold, and the two UPDATEs that mark
+the lead sold and the estimate spent. All four carry the arm on the target
+row’s own column, and all four are copied predicate-for-predicate from
+`routes/job-routes.js` `/convert`, which is the same act down the other road
+and has carried the arm on `leads` and `estimates` since it was written. A
+lead or an estimate that predates tenancy is exactly what a first service
+ticket gets converted from, so dropping an arm here would answer "Lead not
+found" for the leads this company actually has.
+
+The two reads in `job-routes.js` that this commit rewrote are NOT new arms:
+each already carried one and gained a column (`leads.service_ticket_id`,
+`estimates.data->>'service_ticket_id'`) so that door can refuse what this one
+sold. The count moves by four, not by six.
 
 566 → 569: the service-ticket CONTRACT settle, and the client merge that
 follows from it. Two reads in

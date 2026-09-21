@@ -53,6 +53,10 @@ const subtaskDoor = require('../services/service-ticket-subtask-door');
 // orders started from a work order (B8). Office reads only.
 const flagSvc = require('../services/service-ticket-flags');
 const ticketCo = require('../services/service-ticket-change-order');
+// Phase 2: what a lead becomes  the three-way convert's derivations (the
+// scope read off an estimate, what carries over from the lead) with no
+// database in them. POST /convert below owns the transaction.
+const convert = require('../services/service-ticket-convert');
 
 const router = express.Router();
 
@@ -280,14 +284,18 @@ async function loadOwnedTicket(id, orgId) {
 // Answers { ok, values } — columns to write — or a refusal naming its field.
 // A parent that is absent and one that belongs to another tenant answer the
 // same, so this cannot be used to probe ids.
-async function settleContract(kindCheck, { orgId, current }) {
+// `db` is the handle to read through: the pool on a plain create or edit, and
+// the caller's transaction client on a convert, where the estimate is read
+// under the same lock that is about to mark it sold.
+async function settleContract(kindCheck, { orgId, current, db }) {
+  const q = db || pool;
   const values = Object.assign({}, kindCheck.values);
   const prove = kindCheck.prove || {};
 
   if (Object.prototype.hasOwnProperty.call(prove, 'client_id')) {
     const clientId = prove.client_id;
     if (clientId) {
-      const { rows } = await pool.query(
+      const { rows } = await q.query(
         'SELECT 1 FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL) LIMIT 1',
         [clientId, orgId]
       );
@@ -301,7 +309,7 @@ async function settleContract(kindCheck, { orgId, current }) {
     if (!estimateId) {
       values.estimate_id = null;
     } else {
-      const { rows } = await pool.query(
+      const { rows } = await q.query(
         'SELECT data FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL) LIMIT 1',
         [estimateId, orgId]
       );
@@ -975,6 +983,230 @@ router.post('/', requireAuth, requireOrgId, async (req, res) => {
   } catch (e) {
     console.error('[service-tickets] create failed', e);
     res.status(500).json({ error: 'Failed to create service ticket' });
+  }
+});
+
+// ── A2b: convert a lead into a work order or a service ticket ───────────
+//
+// The third door of the three-way convert. POST /api/jobs/convert has always
+// been the only one, so a won pursuit that was really a two-day service call
+// had to be born as a JOB with a job number, a schedule and a workbook, or as
+// a ticket raised by hand that nothing tied back to the lead.
+//
+// ATOMIC, like the jobs one and for the same reason: a half-finished convert
+// leaves a ticket nobody can find beside a lead that still looks open. Inside
+// one transaction, with the lead LOCKED:
+//
+//   * the lead is proved unconverted (neither a job nor a ticket already),
+//   * the estimate is proved unsold — to a job OR to a ticket,
+//   * the ticket is born a DRAFT, because every ticket is,
+//   * and then moved to 'open' through review.changeStatus, THE status
+//     executor, which is what mints its WO-#### or ST-####.
+//
+// The lead comes out sold, stamped with what it became, and the estimate comes
+// out naming the ticket it was sold on.
+router.post('/convert', requireAuth, requireOrgId, async (req, res) => {
+  const client = await pool.connect();
+  let began = false;
+  // One exit for every refusal taken after BEGIN: undo the transaction, then
+  // answer. Written once so a new refusal cannot forget the ROLLBACK and leave
+  // this connection inside an open transaction when it returns to the pool.
+  const undo = async (status, payload) => {
+    if (began) {
+      began = false;
+      await client.query('ROLLBACK');
+    }
+    return res.status(status).json(payload);
+  };
+  try {
+    const orgId = req.orgId;
+    const body = req.body || {};
+
+    // A convert must SAY what it is making. This is the one place where
+    // silence is not allowed to mean "the old shape": the whole point of the
+    // screen is that somebody chose between three records.
+    const kind = convert.convertKind(body.kind);
+    if (!kind) return res.status(400).json({ error: convert.KIND_REQUIRED, field: 'kind' });
+
+    const leadId = body.lead_id ? String(body.lead_id) : '';
+    if (!leadId) {
+      return res.status(400).json({ error: 'A convert needs the lead it is converting.', field: 'lead_id' });
+    }
+
+    // Proof then access, in that order and for the reason A2 spells out: a
+    // foreign lead and an absent one must answer identically, so neither the
+    // existence of another tenant's lead nor the shape of this org's
+    // permissions can be read off the answer.
+    if (!(await assertEntityInOrg('lead', leadId, orgId))) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+    const parent = { job_id: null, lead_id: leadId };
+    if (!(await ticketAccessOk(req, res, parent, 'write', orgId, 'Lead not found'))) return;
+
+    await client.query('BEGIN');
+    began = true;
+
+    // LOCKED, not merely read: two people pressing Convert on the same lead a
+    // second apart must make one record, not two. Everything decided below is
+    // decided from THIS row, inside the lock.
+    const leadRead = await client.query(
+      'SELECT * FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL) FOR UPDATE',
+      [leadId, orgId]
+    );
+    const lead = leadRead.rows[0];
+    if (!lead) return undo(404, { error: 'Lead not found' });
+    if (lead.job_id) return undo(409, { error: convert.ALREADY_A_JOB, job_id: lead.job_id });
+    if (lead.service_ticket_id) {
+      return undo(409, { error: convert.ALREADY_A_TICKET, ticket_id: lead.service_ticket_id });
+    }
+
+    // What the lead hands over, then whatever the screen corrected on top of
+    // it. A key the caller did not send cannot blank one the lead filled in.
+    const carried = convert.ticketFromLead(lead, { title: body.title });
+    const ticketBody = Object.assign({}, carried);
+    for (const k of Object.keys(body)) {
+      if (body[k] !== undefined) ticketBody[k] = body[k];
+    }
+    ticketBody.title = carried.title;
+
+    const checked = fields.validateTicketFields(ticketBody, { mode: 'create' });
+    if (!checked.ok) return undo(400, { error: checked.error, field: checked.field });
+
+    // The scope a service ticket starts from is the estimate's — John's
+    // "estimate to work from as far as setting up a scope" — unless the screen
+    // sent one. estimateScope() reads only the groups that are INCLUDED in the
+    // total, so the scope and the price describe the same work.
+    const estimateId = body.estimate_id ? String(body.estimate_id) : null;
+    let estimateRow = null;
+    if (estimateId) {
+      const er = await client.query(
+        'SELECT id, data FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL) FOR UPDATE',
+        [estimateId, orgId]
+      );
+      if (!er.rows.length) return undo(404, { error: 'Estimate not found', field: 'estimate_id' });
+      estimateRow = er.rows[0];
+      const blob = convert.estimateBlob(estimateRow.data);
+      // An estimate is sold ONCE, and the two convert doors have to agree
+      // about that or the guard is one-way: POST /api/jobs/convert refuses an
+      // estimate already sold to a ticket, and this refuses one already sold
+      // to a job.
+      if (blob.job_id) return undo(409, { error: convert.ESTIMATE_SOLD_TO_JOB, job_id: blob.job_id });
+      if (blob.service_ticket_id) {
+        return undo(409, { error: convert.ESTIMATE_SOLD_TO_TICKET, ticket_id: blob.service_ticket_id });
+      }
+    }
+
+    const id = newId('st');
+    const cols = ['id', 'organization_id', 'job_id', 'lead_id', 'title', 'created_by', 'status'];
+    const vals = [id, orgId, null, leadId, checked.values.title, (req.user && req.user.id) || null, 'draft'];
+    for (const k of Object.keys(checked.values)) {
+      if (!EDITABLE_FIELDS.has(k) || k === 'title' || k === ASSIGNEE_FIELD) continue;
+      cols.push(k);
+      vals.push(checked.values[k]);
+    }
+    if (estimateRow && cols.indexOf('scope_proposed') < 0) {
+      const scope = convert.estimateScope(estimateRow.data);
+      if (scope) { cols.push('scope_proposed'); vals.push(scope); }
+    }
+
+    if (hasOwn(checked.values, ASSIGNEE_FIELD)) {
+      const newAssignee = await assignees.proveAssigneeForParent(client, {
+        raw: checked.values[ASSIGNEE_FIELD], orgId, parent,
+      });
+      if (!newAssignee.ok) return undo(400, { error: newAssignee.error, field: ASSIGNEE_FIELD });
+      cols.push(ASSIGNEE_FIELD);
+      vals.push(newAssignee.value);
+    }
+
+    // The kind, the client and the price, through the SAME door a plain create
+    // uses — `db` is this transaction, so the estimate's total is read under
+    // the lock that is about to mark it sold.
+    const kindBody = { kind: kind };
+    const namedClient = hasOwn(body, 'client_id') ? body.client_id : carried.client_id;
+    if (namedClient) kindBody.client_id = namedClient;
+    if (estimateId) kindBody.estimate_id = estimateId;
+    if (hasOwn(body, 'contract_amount')) kindBody.contract_amount = body.contract_amount;
+    const kindCheck = fields.validateTicketKind(kindBody, { mode: 'create' });
+    if (!kindCheck.ok) return undo(400, { error: kindCheck.error, field: kindCheck.field });
+    const contract = await settleContract(kindCheck, { orgId, current: null, db: client });
+    if (!contract.ok) return undo(contract.status || 400, { error: contract.error, field: contract.field });
+    for (const k of Object.keys(contract.values)) {
+      cols.push(k);
+      vals.push(contract.values[k]);
+    }
+
+    const ph = cols.map((_, i) => '$' + (i + 1)).join(', ');
+    const born = await client.query(
+      'INSERT INTO service_tickets (' + cols.join(', ') + ') VALUES (' + ph + ') RETURNING ' + TICKET_COLS,
+      vals
+    );
+    const draft = born.rows[0];
+
+    // ISSUED through the one status executor, which is what mints the number.
+    // Writing status 'open' straight into the INSERT would mint nothing and
+    // log nothing — the ticket would exist, unnumbered, in a state no
+    // transition ever produced.
+    const actor = actorOf(req);
+    const issued = await review.changeStatus(client, {
+      ticket: draft,
+      next: 'open',
+      actor,
+      returning: TICKET_COLS,
+      // Inside THIS transaction: the ticket and its issue are one act.
+      joinedTransaction: true,
+    });
+    if (!issued.ok) return undo(issued.status || 400, { error: issued.error });
+    const ticket = issued.ticket || draft;
+
+    // The lead is SOLD and says what it became. Both stamps, or neither.
+    await client.query(
+      'UPDATE leads SET service_ticket_id = $1, status = \'sold\',' +
+      ' converted_at = COALESCE(converted_at, NOW()), status_changed_at = NOW(),' +
+      ' lost_at = NULL, updated_at = NOW()' +
+      ' WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)',
+      [ticket.id, leadId, orgId]
+    );
+
+    // And the estimate names the ticket it was sold on, which is what the next
+    // convert's refusal reads. Read-modify-write rather than a surgical
+    // jsonb_set: the row is held FOR UPDATE above, so nothing can slip between
+    // the read and this write.
+    if (estimateRow) {
+      const blob = convert.estimateBlob(estimateRow.data);
+      blob.service_ticket_id = ticket.id;
+      blob.status = 'sold';
+      await client.query(
+        'UPDATE estimates SET data = $1, is_locked = TRUE, accepted_at = COALESCE(accepted_at, NOW()), updated_at = NOW()' +
+        ' WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)',
+        [JSON.stringify(blob), estimateRow.id, orgId]
+      );
+    }
+
+    await logEvent(client, ticket, 'created', {
+      actorUserId: (req.user && req.user.id) || null,
+      detail: { parent: 'lead', converted_from_lead: leadId, kind: kind, estimate_id: estimateId || null },
+    });
+
+    await client.query('COMMIT');
+    began = false;
+
+    if (ticket.assignee_user_id != null && String(ticket.assignee_user_id) !== String(actor.userId)) {
+      trackNotice('ticket_assignment', () => notices.notifyAssigned(pool, {
+        ticket,
+        assigneeUserId: ticket.assignee_user_id,
+        previousAssigneeUserId: null,
+        actor,
+      }));
+    }
+    res.json({ ok: true, ticket, lead_id: leadId });
+  } catch (e) {
+    if (began) {
+      try { await client.query('ROLLBACK'); } catch (e2) { /* the error below is the one that matters */ }
+    }
+    console.error('[service-tickets] convert failed', e);
+    res.status(500).json({ error: 'Failed to convert this lead' });
+  } finally {
+    client.release();
   }
 });
 

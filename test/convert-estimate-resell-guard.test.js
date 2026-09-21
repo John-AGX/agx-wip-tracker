@@ -31,8 +31,8 @@ function makeDb({ leadJobId = null, estimateExists = true, soldTo = null }) {
     state.statements.push(text.replace(/\s+/g, ' ').trim().slice(0, 90));
 
     if (/^BEGIN|^COMMIT|^ROLLBACK/i.test(text)) return { rows: [], rowCount: 0 };
-    if (/SELECT job_id, market_id FROM leads/i.test(text)) {
-      return { rows: [{ job_id: leadJobId, market_id: null }], rowCount: 1 };
+    if (/SELECT job_id, service_ticket_id, market_id FROM leads/i.test(text)) {
+      return { rows: [{ job_id: leadJobId, service_ticket_id: null, market_id: null }], rowCount: 1 };
     }
     // The guard under test.
     if (/FROM estimates WHERE id = \$1/i.test(text) && /job_id/i.test(text)) {

@@ -5066,6 +5066,18 @@ async function initSchema() {
     -- so the old number is never handed to a DIFFERENT ticket later: somebody
     -- has that number written on a purchase order or said it down the phone.
     ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS previous_ticket_number TEXT;
+
+    -- WHAT A LEAD BECAME, when it became a ticket rather than a job. Exactly
+    -- parallel to leads.job_id, and for the same two reasons: the convert has
+    -- to be able to refuse a second one, and the lead screen has to be able to
+    -- link to the record it turned into. Without it a converted lead is
+    -- indistinguishable from a lead that merely had a work order raised on it
+    -- during the pursuit, which is a different and perfectly ordinary thing.
+    --
+    -- ON DELETE SET NULL, not CASCADE: deleting the ticket must never take the
+    -- lead with it. (Deleting a LEAD that still has an open ticket is already
+    -- refused in routes/lead-routes.js, so this creates no new orphan path.)
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS service_ticket_id TEXT REFERENCES service_tickets(id) ON DELETE SET NULL;
     DO $service_tickets_bill_as_chk$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_tickets_bill_as_chk') THEN
         ALTER TABLE service_tickets ADD CONSTRAINT service_tickets_bill_as_chk

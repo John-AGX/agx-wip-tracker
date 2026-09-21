@@ -302,6 +302,18 @@ function positiveUserId(v) {
  * `ticket` is the row the route loaded, already proved in the caller's org and
  * write-checked. `returning` is the route's column list, so there is still one.
  *
+ * JOINING A CALLER'S TRANSACTION. `joinedTransaction: true` says `db` is not a
+ * pool but a client already inside somebody else's BEGIN — the lead convert,
+ * which has to create a ticket and ISSUE it as one indivisible act. In that
+ * mode this opens no transaction and ends none: it neither BEGINs, COMMITs,
+ * ROLLBACKs nor releases, and a refusal is returned for the CALLER to roll
+ * back. Everything else — the lock, the re-read, the guarded UPDATE, the
+ * strict events — is identical, which is the point: there is still exactly
+ * one status executor, and a ticket issued by a convert took the same road as
+ * a ticket issued from the screen. (It is not detected from the handle: a
+ * node-pg pooled client has a `connect` method too, so a guess would open a
+ * nested transaction against real Postgres and quietly commit half of one.)
+ *
  * ORDER, and why:
  *   1. expected_status first. A screen that is out of date gets "reload", not a
  *      lattice refusal about a move it only offered because it was stale.
@@ -353,12 +365,19 @@ async function changeStatus(db, opts) {
   const returning = o.returning ? String(o.returning) : 'id, organization_id, status';
   const workOrder = workOrderService();
 
-  const client = await db.connect();
+  const owns = o.joinedTransaction !== true;
+  const client = owns ? await db.connect() : db;
   let began = false;
   try {
-    await client.query('BEGIN');
-    began = true;
+    if (owns) {
+      await client.query('BEGIN');
+      began = true;
+    }
+    // A refusal inside somebody else's transaction is THEIRS to undo: this
+    // hands back the answer and touches nothing, so the convert's own earlier
+    // writes are not silently thrown away by a nested ROLLBACK.
     const rollback = async function (answer) {
+      if (!owns) return answer;
       began = false;
       await client.query('ROLLBACK');
       return answer;
@@ -509,8 +528,10 @@ async function changeStatus(db, opts) {
     }
     await workOrder.insertEvent(client, ticket, 'status_changed', eventActor, detail, strict);
 
-    await client.query('COMMIT');
-    began = false;
+    if (owns) {
+      await client.query('COMMIT');
+      began = false;
+    }
 
     return {
       ok: true,
@@ -529,7 +550,7 @@ async function changeStatus(db, opts) {
     }
     throw e;
   } finally {
-    client.release();
+    if (owns) client.release();
   }
 }
 

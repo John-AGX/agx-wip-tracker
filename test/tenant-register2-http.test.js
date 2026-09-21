@@ -455,17 +455,29 @@ describe('REGISTER 2 — the route population', () => {
     //      one. Its two COUNT()s carry `k.organization_id = $1` and join the
     //      ticket on `s.organization_id = k.organization_id`, and the answer
     //      is two integers: nothing about the buildings themselves.
-    expect(R.routes).toBe(618);
+    //      618 -> 619: POST /api/service-tickets/convert
+    //      (service-ticket-routes.js) — the third door of the three-way
+    //      convert, which turns a won lead into a work order or a service
+    //      ticket the way POST /api/jobs/convert turns one into a job. A
+    //      WRITE, so it is waived here and driven instead by
+    //      test/work-order-convert.test.js, which names another
+    //      organization's LEAD and another organization's ESTIMATE in turn
+    //      and asserts each answers exactly as an absent id does (404), that
+    //      a caller from the other organization gets the same 404 for ours,
+    //      and that no ticket row is written and no lead is marked sold on
+    //      any refused path. No new router.
+    expect(R.routes).toBe(619);
     expect(R.routers).toBe(79);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (141 driven, 477 counted)', () => {
+  test('the DRIVEN / COUNTED-WAIVED split is committed (141 driven, 478 counted)', () => {
     // 466 -> 476: the ten Work Orders (1.30) routes above, every one waived.
     // 476 -> 477: POST /api/clients/merge, a write (see the note above).
     // 139 -> 141: the two Work Orders (1.33) reads above. Both are GETs with
     // no path parameter, so they are driven here — the waived side does not
     // move, and the param-less-GET predicate below still holds at zero.
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 141, waived: 477 });
+    // 477 -> 478: POST /api/service-tickets/convert, a write (see above).
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 141, waived: 478 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

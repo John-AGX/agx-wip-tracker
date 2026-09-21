@@ -94,7 +94,7 @@ function makeConvertDb(branding, opts) {
       return { rows: [{ branding: branding ? { job_types: branding } : {} }] };
     }
     if (/SELECT id, name FROM markets/i.test(text)) return { rows: [] };
-    if (/SELECT job_id, market_id FROM leads/i.test(text)) {
+    if (/SELECT job_id, service_ticket_id, market_id FROM leads/i.test(text)) {
       return { rows: [{ job_id: null, market_id: null }] };
     }
     if (/SELECT id FROM users/i.test(text)) return { rows: [{ id: params[0] }] };

@@ -293,8 +293,16 @@ const AMOUNT_REFUSAL = 'The contract price must be an amount, and never below ze
 const CONTRACT_NEEDS_PRICE = 'A service ticket needs its contract price, or the estimate to take it from.';
 const MONEY_RE = /^[-+]?(?:\d+(?:\.\d{1,2})?|\.\d{1,2})$/;
 
-// The money keys this door will touch. Anything else about billing belongs to
-// the billing phase and has no business arriving on a create or an edit.
+// The keys this door will touch. Anything else about billing belongs to the
+// billing phase and has no business arriving on a create or an edit.
+//
+// Two of them are CONTRACT-ONLY: a price and the estimate it was read from
+// mean nothing on a work order, which is billed from what was actually done.
+// client_id is NOT one of them. Who the work is for is true of both kinds 
+// an urgent call is still somebody's building, and the convert carries the
+// lead's client onto whichever record it makes  so it is accepted either
+// way, and changing kind never drops it.
+const CONTRACT_ONLY_KEYS = Object.freeze(['contract_amount', 'estimate_id']);
 const CONTRACT_KEYS = Object.freeze(['contract_amount', 'client_id', 'estimate_id']);
 
 function kindRefuse(field, error) {
@@ -332,7 +340,9 @@ function validateTicketKind(body, opts) {
     if (!has(src, key)) continue;
     const raw = src[key];
     const blank = raw == null || String(raw).trim() === '';
-    if (!wantsContract && !blank) return kindRefuse(key, CONTRACT_ONLY_REFUSAL);
+    if (!wantsContract && !blank && CONTRACT_ONLY_KEYS.indexOf(key) >= 0) {
+      return kindRefuse(key, CONTRACT_ONLY_REFUSAL);
+    }
     if (key === 'contract_amount') {
       if (blank) { values.contract_amount = null; continue; }
       const text = String(raw).trim().replace(/[$,]/g, '');
@@ -374,6 +384,7 @@ module.exports = {
   AMOUNT_REFUSAL,
   CONTRACT_NEEDS_PRICE,
   CONTRACT_KEYS,
+  CONTRACT_ONLY_KEYS,
   TICKET_FIELD_RULES,
   TICKET_FIELD_LABELS,
   ASSIGNEE_REFUSAL,
