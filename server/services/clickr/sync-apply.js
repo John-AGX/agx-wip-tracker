@@ -150,7 +150,10 @@ const TASK_FIELDS = { notes: 1, dueDate: 1, assignee: 1 };
 const DATASET_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills', 'estimates', 'tasks'];
 
 function isSafeCorrection(kind, c) {
-  return kind === 'jobs' && c.field === 'startDate' && c.kind === 'fill';
+  // A BLANK filled with no money attached. The map location joins the start
+  // date here: the matcher only offers it to a job with no geocode at all, so
+  // it can never replace one a person set on the Site Plan.
+  return kind === 'jobs' && c.kind === 'fill' && (c.field === 'startDate' || c.field === 'coordinates');
 }
 
 // Which corrections a row may write in this mode. In rows mode a `fields` list
@@ -158,7 +161,7 @@ function isSafeCorrection(kind, c) {
 // the row applies. Safe mode is the blank start date only — never money.
 function writable(kind, row, mode, fields) {
   const allowed = kind === 'jobs'
-    ? Object.assign({ contractPrice: 1 }, JOB_FIELD_KEYS)
+    ? Object.assign({ contractPrice: 1, coordinates: 1 }, JOB_FIELD_KEYS)
     : kind === 'changeOrders' ? CO_FIELDS
     : kind === 'purchaseOrders' ? PO_FIELDS
     : kind === 'bills' ? BILL_FIELDS
@@ -235,7 +238,12 @@ async function readDataset(org, kind, deps) {
 // ── jobs ─────────────────────────────────────────────────────────────────
 async function applyJob(db, orgId, row, mode, fields) {
   const btId = norm(row.bt.btId);
-  const cur = await db.query('SELECT id, data, bt_job_id FROM jobs WHERE id = $1 AND organization_id = $2 FOR UPDATE', [row.p86.id, orgId]);
+  // The geocode columns ride along: the map-location fill re-proves 'this job
+  // has no point yet' against THIS locked row. The matcher only offers the
+  // fill to a job it read with no point; a geocode that lands after that read
+  // is visible here and nowhere else, and a column not selected here reads as
+  // undefined — which would pass the test and overwrite it.
+  const cur = await db.query('SELECT id, data, bt_job_id, geocode_lat, geocode_lng, geocode_status FROM jobs WHERE id = $1 AND organization_id = $2 FOR UPDATE', [row.p86.id, orgId]);
   if (!cur.rows.length) return { skipped: 'The P86 job is no longer there.' };
   const job = cur.rows[0];
   const linkedTo = norm(job.bt_job_id);
@@ -246,7 +254,19 @@ async function applyJob(db, orgId, row, mode, fields) {
   const data = (job.data && typeof job.data === 'object') ? Object.assign({}, job.data) : {};
   const applied = [];
   const stale = [];
+  let point = null;
   for (const c of writable('jobs', row, mode, fields)) {
+    if (c.field === 'coordinates') {
+      // Re-proved against the LOCKED row: a geocode that arrived between the
+      // read and the write wins, and this becomes stale rather than an overwrite.
+      const hasOne = job.geocode_lat != null && job.geocode_lng != null
+        && !(Number(job.geocode_lat) === 0 && Number(job.geocode_lng) === 0) && job.geocode_status !== 'failed';
+      const v = c.value || {};
+      if (hasOne || !Number.isFinite(v.lat) || !Number.isFinite(v.lng)) { stale.push(c.label || c.field); continue; }
+      point = { lat: v.lat, lng: v.lng };
+      applied.push({ field: c.field, from: c.from, to: c.to });
+      continue;
+    }
     if (c.field === 'contractPrice') {
       if (!moneyEq(data.contractAmount, c.p86Value) || !Number.isFinite(c.value)) { stale.push(c.label || c.field); continue; }
       data.contractAmount = c.value;
@@ -283,8 +303,19 @@ async function applyJob(db, orgId, row, mode, fields) {
   if (nextBtStatus) data.btStatus = nextBtStatus.btStatus;
   const wasLinked = linkedTo === btId;
   if (!applied.length && wasLinked && !nextBtStatus) return { unchanged: true, stale };
+  if (point) data.geocodeSource = 'buildertrend';
   await db.query('UPDATE jobs SET data = $1::jsonb, bt_job_id = $2, updated_at = NOW() WHERE id = $3 AND organization_id = $4',
     [JSON.stringify(data), btId, job.id, orgId]);
+  if (point) {
+    // Written the way every other job geocode is (routes/job-routes.js), so the
+    // map TRUSTS it: status 'ok', and geocode_address stamped with the job's
+    // own address — the map re-geocodes the moment those two stop matching,
+    // which would throw Buildertrend's point away on the next render.
+    await db.query(
+      "UPDATE jobs SET geocode_lat = $1, geocode_lng = $2, geocode_status = 'ok', geocode_address = $3, geocode_at = NOW() "
+      + 'WHERE id = $4 AND organization_id = $5',
+      [point.lat, point.lng, data.address || [data.street_address, data.city, data.state, data.zip].filter((x) => norm(x)).join(', '), job.id, orgId]);
+  }
   return { applied, linked: !wasLinked, stale, btStatus: !!nextBtStatus };
 }
 
@@ -1610,8 +1641,18 @@ async function createJob(db, orgId, row, user) {
   data.address = [data.street_address, data.city, data.state, data.zip].filter(Boolean).join(', ');
   const id = genId('job');
   data.id = id;
+  const lat = bt.latitude; const lng = bt.longitude;
+  const onMap = lat != null && lng != null && !(lat === 0 && lng === 0);
+  if (onMap) data.geocodeSource = 'buildertrend';
   await db.query('INSERT INTO jobs (id, owner_id, data, organization_id, bt_job_id, client_id) VALUES ($1, $2, $3::jsonb, $4, $5, $6)',
     [id, user && user.id != null ? user.id : null, JSON.stringify(data), orgId, btId, client ? client.id : null]);
+  if (onMap) {
+    // Born on the map, with no geocoding call spent on it.
+    await db.query(
+      "UPDATE jobs SET geocode_lat = $1, geocode_lng = $2, geocode_status = 'ok', geocode_address = $3, geocode_at = NOW() "
+      + 'WHERE id = $4 AND organization_id = $5',
+      [lat, lng, data.address || '', id, orgId]);
+  }
   return { created: id, notes };
 }
 

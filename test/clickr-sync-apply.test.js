@@ -1018,3 +1018,110 @@ describe('UNDO', () => {
     expect((await put(UNDO, PM, { runId: runs()[0].id })).status).toBe(403);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// MAP LOCATION — Buildertrend already knows where every job is. A FILL only:
+// a job that has a geocode keeps it, because P86's may be one a person set.
+// ══════════════════════════════════════════════════════════════════════════
+describe('MAP LOCATION', () => {
+  const geo = (id) => engine.db.prepare('SELECT geocode_lat, geocode_lng, geocode_status, geocode_address FROM jobs WHERE id = ?').get(id);
+  const btOf = (jobId) => BT_JOBS.find((r) => r.jobId === jobId);
+  let saved;
+  beforeEach(() => {
+    saved = BT_JOBS.map((r) => ({ latitude: r.latitude, longitude: r.longitude }));
+    btOf(111).latitude = 27.95058; btOf(111).longitude = -82.45718;   // j-1
+    btOf(222).latitude = 27.94000; btOf(222).longitude = -82.46000;   // j-2
+    btOf(444).latitude = 28.53834; btOf(444).longitude = -81.37924;   // created
+  });
+  afterEach(() => {
+    BT_JOBS.forEach((r, i) => { r.latitude = saved[i].latitude; r.longitude = saved[i].longitude; });
+    preview.forgetFetch(AGX);
+  });
+
+  test('a job with NO geocode takes Buildertrend’s, written the way the map trusts', async () => {
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    expect(r.status).toBe(200);
+    const g = geo('j-1');
+    expect([Number(g.geocode_lat), Number(g.geocode_lng)]).toEqual([27.95058, -82.45718]);
+    // 'ok' or the map ignores it; the address stamped or the map re-geocodes
+    // and throws it away on the next render.
+    expect(g.geocode_status).toBe('ok');
+    expect(g.geocode_address).toMatch(/Harbor Dr/);
+    expect(jobData('j-1').geocodeSource).toBe('buildertrend');
+  });
+
+  test('a job that ALREADY HAS a geocode is not offered Buildertrend’s', async () => {
+    engine.db.prepare("UPDATE jobs SET geocode_lat = 26.1, geocode_lng = -80.1, geocode_status = 'ok' WHERE id = 'j-1'").run();
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    // Not offered at all — so not applied, and not refused as stale either.
+    const one = r.json.results.find((x) => x.p86Id === 'j-1');
+    expect((one.fields || []).map((f) => f.field)).not.toContain('coordinates');
+    expect(one.stale || []).not.toContain('Map location');
+    const g = geo('j-1');
+    expect([Number(g.geocode_lat), Number(g.geocode_lng)]).toEqual([26.1, -80.1]);
+    expect(jobData('j-1').geocodeSource).toBeUndefined();
+  });
+
+  test('a geocode that lands MID-PRESS wins, and the fill is reported stale', async () => {
+    // The matcher saw no point, so it offered the fill. The geocode arrives
+    // after that read and before the write: only the LOCKED re-read can see
+    // it, and it can only see it if its SELECT names the geocode columns.
+    const real = engine.pool.connect;
+    engine.pool.connect = async () => {
+      const c = await real();
+      const q = c.query;
+      c.query = async (sql, params) => {
+        if (sql.indexOf('FROM jobs WHERE id =') >= 0 && sql.indexOf('FOR UPDATE') >= 0 && params[0] === 'j-1') {
+          engine.db.prepare("UPDATE jobs SET geocode_lat = 26.1, geocode_lng = -80.1, geocode_status = 'ok' WHERE id = 'j-1'").run();
+        }
+        return q(sql, params);
+      };
+      return c;
+    };
+    let r;
+    try { r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' }); } finally { engine.pool.connect = real; }
+    const g = geo('j-1');
+    expect([Number(g.geocode_lat), Number(g.geocode_lng)]).toEqual([26.1, -80.1]);
+    const one = r.json.results.find((x) => x.p86Id === 'j-1');
+    expect(one.stale).toContain('Map location');
+  });
+  test('0,0 is an empty geocode, not a place: it is FILLED', async () => {
+    engine.db.prepare("UPDATE jobs SET geocode_lat = 0, geocode_lng = 0, geocode_status = 'ok' WHERE id = 'j-1'").run();
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    expect(Number(geo('j-1').geocode_lat)).toBe(27.95058);
+  });
+
+  test('a STICKY FAILURE is filled — the geocoder gave up and Buildertrend did not', async () => {
+    engine.db.prepare("UPDATE jobs SET geocode_lat = NULL, geocode_lng = NULL, geocode_status = 'failed' WHERE id = 'j-1'").run();
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    expect(geo('j-1').geocode_status).toBe('ok');
+  });
+
+  test('Buildertrend’s own 0,0 is never written', async () => {
+    btOf(111).latitude = 0; btOf(111).longitude = 0;
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    expect(geo('j-1').geocode_lat).toBeNull();
+  });
+
+  test('an out-of-range coordinate is refused at the reader', async () => {
+    btOf(111).latitude = 91; btOf(111).longitude = -82.4;
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    expect(geo('j-1').geocode_lat).toBeNull();
+  });
+
+  test('a job created from Buildertrend is born on the map', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create' });
+    const id = engine.db.prepare('SELECT id FROM jobs WHERE bt_job_id = ?').get('444').id;
+    const g = geo(id);
+    expect([Number(g.geocode_lat), Number(g.geocode_lng), g.geocode_status]).toEqual([28.53834, -81.37924, 'ok']);
+  });
+
+  test('UNDO takes the location back, because the journal photographs columns too', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    expect(geo('j-1').geocode_lat).not.toBeNull();
+    const run = engine.db.prepare('SELECT id FROM bt_sync_runs ORDER BY started_at DESC').get();
+    const u = await put('/api/admin/organizations/me?action=buildertrend-undo', ADMIN, { runId: run.id });
+    expect(u.status).toBe(200);
+    expect(geo('j-1').geocode_lat).toBeNull();
+  });
+});

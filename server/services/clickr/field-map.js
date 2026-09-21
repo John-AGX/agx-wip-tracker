@@ -383,6 +383,17 @@ function names(list) {
     .filter((x) => x != null && String(x).trim() !== '');
 }
 
+// A coordinate, or null. 0,0 is the sentinel an empty geocode leaves behind
+// (it is a point in the Atlantic off Africa, and no AGX job is there), so
+// the PAIR 0,0 is refused by the caller; a single out-of-range value is
+// refused here.
+function coord(v, limit) {
+  if (v == null || v === '') return null;
+  const n = typeof v === 'number' ? v : Number(String(v).trim());
+  if (!Number.isFinite(n) || Math.abs(n) > limit) return null;
+  return n;
+}
+
 function readJob(rec) {
   const r = isPlainObject(rec) ? rec : {};
   return {
@@ -403,6 +414,11 @@ function readJob(rec) {
     contacts: names(r.contacts),
     contactIds: Array.isArray(r.contacts) ? r.contacts.map((x) => (isPlainObject(x) ? scalarText(x.id) : null)).filter((x) => x != null && String(x).trim() !== '') : [],
     isDeleted: r.isDeleted === true,
+    // Declared from the start and never read (see readLead's notes for the
+    // same shape). Buildertrend already holds where every job is; P86 was
+    // geocoding each one from scratch.
+    latitude: coord(r.latitude, 90),
+    longitude: coord(r.longitude, 180),
   };
 }
 

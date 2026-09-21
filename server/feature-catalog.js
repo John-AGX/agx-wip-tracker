@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.44';
+const APP_VERSION = '1.45';
 
 const releases = [
+  {
+    version: '1.45',
+    date: '2026-09-21',
+    name: 'Jobs land on the map, and say when Buildertrend has them open',
+    summary: 'A job Buildertrend has already placed now arrives on the Project 86 map where Buildertrend put it, instead of waiting to be looked up from its address. And a job Buildertrend lists as Open carries a small BT Open tag after its name.',
+    changes: [
+      { type: 'new', text: 'Map location from Buildertrend. Buildertrend keeps a map point for its jobs, and it was being read and thrown away. A Project 86 job with no location — or one the address lookup gave up on — now takes Buildertrend’s, and a job created from Buildertrend is on the map the moment it exists. It is a fill and never an overwrite: a job that already has a location keeps it, including one that arrives while the sync is running. A 0,0 point, which is what an unset location looks like, is never written.' },
+      { type: 'new', text: 'BT Open. A job Buildertrend lists as Open shows a small tag after its name, on the jobs list and at the top of the job. It is Buildertrend’s word, shown beside the job and not written into Project 86’s own status — and it stays off the job name everywhere a client or sub reads it: purchase orders, change orders, pay applications and crew texts.' },
+      { type: 'improved', text: 'Taking a sync back takes the location back too. Undo restores the map point a job had before, the same as every other field the sync wrote.' },
+    ],
+  },
   {
     version: '1.44',
     date: '2026-09-20',

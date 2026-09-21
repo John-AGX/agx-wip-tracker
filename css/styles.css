@@ -2936,6 +2936,17 @@
         body.light-mode .badge.lead-new         { background: rgba(37,99,235,.10);   color: #1d4ed8; }
         body.light-mode .badge.lead-sent        { background: rgba(37,99,235,.09);   color: #2563eb; }
         body.light-mode .badge.warranty         { background: rgba(124,58,237,.11);  color: #6d28d9; }
+        /* OPEN IN BUILDERTREND — a separate chip after the job name, never
+           part of it (see btOpenBadge in js/jobs.js). Teal: Buildertrend's
+           own word, so it reads as a source tag, not as a P86 status. */
+        .bt-open-badge {
+            display: inline-block; margin-left: 8px; padding: 1px 7px;
+            border-radius: 9px; font-size: 10px; font-weight: 600;
+            letter-spacing: .4px; text-transform: uppercase; vertical-align: middle;
+            background: rgba(20,184,166,.14); color: #2dd4bf;
+        }
+        .bt-open-badge-slot { display: inline-flex; align-items: center; }
+        body.light-mode .bt-open-badge { background: rgba(13,148,136,.12); color: #0f766e; }
 
         /* Inline-colored chips (jobs-hub PO/RFI/Submittal, estimates list)
            now carry only a single --c color var; derive tint + text from it

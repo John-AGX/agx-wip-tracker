@@ -15,6 +15,25 @@ function p86Ask(message, opts) {
   return Promise.resolve(window.confirm(message));
 }
 
+// OPEN IN BUILDERTREND. P86 has no Open status — its words are New, In
+// Progress, Backlog, On Hold, Completed, Warranty — so a job Buildertrend
+// still calls Open had nothing on screen to say so. The sync already writes
+// what Buildertrend calls the job NOW onto data.btStatus on every apply and
+// link; this only shows it.
+//
+// A SEPARATE ELEMENT, NEVER PART OF THE NAME. js/job-label.js composes the
+// one job name, and that string is forward-facing: it lands on a purchase
+// order handed to a sub, a change order a client signs, an AIA pay
+// application, a crew text. Folding 'Open in Buildertrend' into it would
+// print an internal bookkeeping word on documents that leave the company.
+// So this renders only where it is called — the jobs list and the job page,
+// both internal — and job-label.js is untouched.
+function btOpenBadge(job) {
+    var s = job && job.btStatus ? String(job.btStatus).trim().toLowerCase() : '';
+    if (s !== 'open') return '';
+    return '<span class="bt-open-badge" title="Buildertrend lists this job as Open">BT Open</span>';
+}
+
 // A job status -> its .badge class. This used to be THREE byte-identical
 // ternaries ~1,500 lines apart (the jobs table, the job detail header and
 // the Job Information card). A status added to two of them fell through to
@@ -2214,7 +2233,7 @@ function renderJobsMain() {
                 if (readOnly) pmCell += ' <span style="font-size:9px;color:var(--text-dim,#888);margin-left:4px;">view only</span>';
                 row.innerHTML = `
                     <td class="job-check-cell" style="width:34px;text-align:center;" onclick="event.stopPropagation();"><input type="checkbox" class="job-check" data-id="${p86Enc(job.id)}" ${_jobsSelected.has(job.id) ? 'checked' : ''} onclick="event.stopPropagation();window.p86JobsSelect(p86Dec('${p86Enc(job.id)}'),this.checked);"></td>
-                    <td data-col="name"><strong>${escapeHTML(window.p86JobLabel.fromJob(job))}</strong>${typeLabel}</td>
+                    <td data-col="name"><strong>${escapeHTML(window.p86JobLabel.fromJob(job))}</strong>${btOpenBadge(job)}${typeLabel}</td>
                     <td data-col="client">${escapeHTML(job.client) || '—'}</td>
                     <td data-col="pm">${pmCell}</td>
                     <td data-col="status"><span class="badge ${statusClass}">${escapeHTML(job.status)}</span></td>
@@ -3660,6 +3679,18 @@ function renderJobsMain() {
             // never rendered and the job detail showed a blank body.
             try {
             document.getElementById('job-detail-title').textContent = window.p86JobLabel.fromJob(job);
+            (function () {
+                var titleEl = document.getElementById('job-detail-title');
+                if (!titleEl || !titleEl.parentNode) return;
+                var old = titleEl.parentNode.querySelector('.bt-open-badge-slot');
+                if (old) old.remove();
+                var html = btOpenBadge(job);
+                if (!html) return;
+                var slot = document.createElement('span');
+                slot.className = 'bt-open-badge-slot';
+                slot.innerHTML = html;
+                titleEl.insertAdjacentElement('afterend', slot);
+            })();
             // Source back-links: if this job was created from a lead/estimate
             // (Create Job conversion stamps job.lead_id / job.estimate_id), show
             // clickable "← From lead / estimate" chips under the title so the

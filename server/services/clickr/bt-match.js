@@ -619,6 +619,11 @@ function p86JobView(row) {
     startDate: str(d.startDate),
     contractAmount: d.contractAmount == null ? '' : str(d.contractAmount),
     state86: p86JobState(d.status),
+    // The geocode lives in COLUMNS, not in data. Read here so a job that
+    // already has one is never offered Buildertrend's over it.
+    geocodeLat: row.geocode_lat == null ? null : Number(row.geocode_lat),
+    geocodeLng: row.geocode_lng == null ? null : Number(row.geocode_lng),
+    geocodeStatus: str(row.geocode_status),
     // What Buildertrend last called it, as sync-apply.js recorded it (J2).
     btStatus: str(d.btStatus).trim(),
     // jobs.bt_job_id — set only by sync-apply.js when an admin applies a match.
@@ -712,6 +717,18 @@ function jobProposals(bt, p, ctx) {
       note: sharedBy
         ? sharedBy + ' Buildertrend jobs carry the number ' + bt.number + ', so it is not offered here — P86 numbers one job with it. Give each its own number in Buildertrend first.'
         : 'The job number is P86\'s identity and the QuickBooks cost-import key. Never applied automatically — tick it to renumber this job on purpose.' });
+  }
+  // COORDINATES. A FILL, never a replacement: a job that already has a
+  // geocode keeps it, because P86's may be the one a person corrected on the
+  // Site Plan. Only a job with none (never geocoded, a sticky failure, or the
+  // 0,0 an empty geocode leaves) takes Buildertrend's. No money, blank only,
+  // and undoable, so it is safe to apply without a tick.
+  const btHasPoint = bt.latitude != null && bt.longitude != null && !(bt.latitude === 0 && bt.longitude === 0);
+  const p86HasPoint = p.geocodeLat != null && p.geocodeLng != null && !(p.geocodeLat === 0 && p.geocodeLng === 0)
+    && p.geocodeStatus !== 'failed';
+  if (btHasPoint && !p86HasPoint) {
+    acc.corrections.push({ field: 'coordinates', label: 'Map location', kind: 'fill', from: '',
+      to: bt.latitude.toFixed(5) + ', ' + bt.longitude.toFixed(5), value: { lat: bt.latitude, lng: bt.longitude } });
   }
   return { acc, notes };
 }
@@ -924,6 +941,9 @@ function matchJobs(btValues, p86Rows, ctx) {
       projectedStart: str(v.projectedStart), contractPrice: v.contractPrice, approvedCOPrice: v.approvedCOPrice,
       coLabel: pj.coLabel,
       contactIds: Array.isArray(v.contactIds) ? v.contactIds.map(str) : [],
+      // Enumerated view: a key missing here is read and thrown away again.
+      latitude: v.latitude == null ? null : v.latitude,
+      longitude: v.longitude == null ? null : v.longitude,
     };
     const contractView = parseMoney(v.contractPrice);
     bt.contractText = contractView.kind === 'unparsed' ? 'unparsed' : moneyText(contractView);
