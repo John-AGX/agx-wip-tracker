@@ -463,6 +463,10 @@ describe('HTTP — what comes back', () => {
     body = r.json;
   });
 
+  test('custom fields are reported beside the keys, even when a dataset has none', () => {
+    expect(body.customFields).toEqual(expect.objectContaining({ carriedBy: 0, nonEmpty: 0, fields: [] }));
+  });
+
   test('the fetch reports itself complete, with the counts that settle it', () => {
     expect(body.fetch.complete).toBe(true);
     expect(body.fetch.fetched).toBe(200);
@@ -623,5 +627,95 @@ describe('NO WRITES', () => {
   test('the route hands it no pool', () => {
     const route = fs.readFileSync(path.join(__dirname, '..', 'server', 'routes', 'admin-organizations-routes.js'), 'utf8');
     expect(route).toContain("return require('../services/clickr/scout').handle(req, res, {});");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// CUSTOM FIELDS — the columns Buildertrend's own admins added. The list is
+// withheld whole by rule 3; this opens it into label -> value and puts every
+// value back through the same four rules. A label is a column name, shown
+// only when it reads like one.
+// ══════════════════════════════════════════════════════════════════════════
+describe('CUSTOM FIELDS — labels are named, values keep the rule', () => {
+  const cfRec = (i) => ({
+    _id: 'cf' + i,
+    customFields: [
+      { label: 'Market', value: i % 2 ? 'Tampa' : 'Orlando', type: 'dropdown' },
+      // Per-record: every value different. Named label, WITHHELD values.
+      { label: 'Gate Code', value: 'ZZGATE' + i, type: 'text' },
+      // Filled on none of them: a field defined and never used.
+      { label: 'Community Name', value: '', type: 'text' },
+      // A contact value under a column-name label: the value rule refuses it.
+      { label: 'CM Email', value: 'zzcm' + (i % 2) + '@example.test', type: 'text' },
+    ].concat(i < 2 ? [{ label: 'ZZSPARSE Person Name', value: 'x', type: 'text' }] : [])
+     .concat(i === 0 ? [{ label: 'zzlabel@example.test', value: 'y' }, 'not-an-object', { value: 'no label' }] : []),
+  });
+  const RECS = Array.from({ length: 20 }, (_, i) => cfRec(i)).concat([{ _id: 'none' }, { _id: 'empty', customFields: [] }]);
+  const out = scout.summarizeCustomFields(RECS);
+  const by = (label) => out.fields.find((f) => f.label === label);
+
+  test('counts who carries the list and who fills it', () => {
+    expect([out.carriedBy, out.nonEmpty, out.shape]).toEqual([21, 20, 'list']);
+  });
+
+  test('a low-cardinality value under a label is named, like any enum key', () => {
+    expect(by('Market').values).toEqual([{ value: 'Orlando', count: 10 }, { value: 'Tampa', count: 10 }]);
+  });
+
+  test('a per-record value is counted, never named — the label still is', () => {
+    expect(by('Gate Code').values).toBeNull();
+    expect(by('Gate Code').withheldRule).toBe('cardinality');
+    expect(JSON.stringify(out)).not.toMatch(/ZZGATE/);
+  });
+
+  test('a value the rule refuses stays refused inside the list', () => {
+    expect(by('CM Email').values).toBeNull();
+    expect(by('CM Email').withheldRule).toBe('contact');
+    expect(JSON.stringify(out)).not.toMatch(/zzcm/);
+  });
+
+  test('a defined-but-empty field is reported as carried and unfilled', () => {
+    expect([by('Community Name').carriedBy, by('Community Name').nonEmpty]).toEqual([20, 0]);
+  });
+
+  test('a label on too few records, or one that is contact data, is counted and never named', () => {
+    expect(by('ZZSPARSE Person Name')).toBeUndefined();
+    expect(JSON.stringify(out)).not.toMatch(/ZZSPARSE|zzlabel/);
+    expect(out.labelsWithheld).toBe(2);
+    expect(out.labelsWithheldNote).toMatch(/^2 labels were not shown/);
+  });
+
+  test('the SHAPE is reported, so a wrong guess about it shows up on the first read', () => {
+    expect(out.elementKeys.map((k) => k.key)).toEqual(['value', 'label', 'type']);
+    expect(out.unlabelled).toBe(2);   // the string, and the entry with no label
+  });
+
+  test('each label rule refuses on its OWN — a common label is still withheld when it is contact data, a link, free text or a number', () => {
+    // Carried by every record, so the sparse rule has nothing to say: only
+    // the label's own text can withhold it.
+    const bad = ['zzowner@example.test', 'see https://zz.example', 'ZZLONG ' + 'x'.repeat(70), 'ZZLINE\nbreak', 'Call 8135550100'];
+    const recs = Array.from({ length: 10 }, () => ({ customFields: bad.map((label) => ({ label, value: 'Yes' })).concat([{ label: 'Market', value: 'Tampa' }]) }));
+    const o = scout.summarizeCustomFields(recs);
+    expect(o.fields.map((f) => f.label)).toEqual(['Market']);
+    expect(o.labelsWithheld).toBe(bad.length);
+    expect(JSON.stringify(o)).not.toMatch(/zzowner|zz\.example|ZZLONG|ZZLINE|8135550100/);
+  });
+
+  test('a name-keyed object is read the same way as a list', () => {
+    const o = scout.summarizeCustomFields(Array.from({ length: 8 }, (_, i) => ({ customFields: { Market: i % 2 ? 'Tampa' : 'Orlando' } })));
+    expect(o.shape).toBe('object');
+    expect(o.fields[0].label).toBe('Market');
+    expect(o.fields[0].values.length).toBe(2);
+  });
+
+  test('a label spelled __proto__ is a label, not a way into the prototype', () => {
+    const o = scout.summarizeCustomFields(Array.from({ length: 8 }, () => ({ customFields: [{ label: '__proto__', value: 'Open' }] })));
+    expect(o.fields.map((f) => f.label)).toEqual(['__proto__']);
+    expect(({}).value).toBeUndefined();
+  });
+
+  test('the scout response carries it, and a dataset without the list says so with zeros', () => {
+    const none = scout.summarizeCustomFields(MAIN);
+    expect([none.carriedBy, none.fields]).toEqual([0, []]);
   });
 });

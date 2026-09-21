@@ -280,6 +280,106 @@ function summarize(records) {
   return { recordCount: recs.length, notObjects: notObjects, keysTotal: all.length, keysReported: fields.length, fields: fields };
 }
 
+// ── CUSTOM FIELDS — THE COLUMNS BUILDERTREND'S OWN ADMINS ADDED ────────────
+// customFields is a LIST, so rule 3 withholds it whole and the summary above
+// can only say that it exists. But its entries are not free text: each one is
+// a field somebody defined in Buildertrend (Market, Gate Code, Community
+// Name), carried on every record of that type, with that record's value. The
+// LABEL is a column name, the same kind of thing as a record key — and the
+// value under it is a value, judged by exactly the four rules above.
+//
+// So each record's list is turned into a flat record, label -> value, and that
+// goes through summarize() unchanged. Nothing here decides what may be named:
+// it only moves the question to where the existing rules can answer it.
+//
+// The LABEL itself is shown only when it reads like a column name: at most
+// CF_LABEL_CHARS characters, no line breaks, no '@' or link, at most
+// RULE.maxDigits digits, and carried by at least RULE.recordsPerDistinct
+// records — a label on one or two records is not a field anybody defined,
+// it is something typed into one. A label that fails is counted, never named.
+//
+// THE SHAPE IS REPORTED TOO, because nobody has seen it: the element key
+// names and how many entries carry each. The label is read from the first of
+// CF_LABEL_KEYS an entry carries as text, and the value from 'value'; if the
+// real shape differs, elementKeys says so and the next read can be corrected.
+const CF_LABEL_KEYS = ['label', 'name', 'title', 'fieldName', 'displayName'];
+const CF_LABEL_CHARS = 60;
+const CF_MAX_ELEMENT_KEYS = 30;
+
+function cfLabelProblem(label) {
+  if (label.length > CF_LABEL_CHARS) return 'length';
+  if (/[\u0000-\u001f\u007f]/.test(label)) return 'control';
+  if (label.indexOf('@') !== -1 || label.indexOf('://') !== -1) return 'contact';
+  if ((label.match(/[0-9]/g) || []).length > RULE.maxDigits) return 'digits';
+  return null;
+}
+
+function summarizeCustomFields(records) {
+  const recs = Array.isArray(records) ? records : [];
+  let carriedBy = 0;
+  let nonEmpty = 0;
+  let notLists = 0;
+  let unlabelled = 0;
+  let shape = null;
+  const elementKeys = new Map();
+  const flat = [];
+  for (const r of recs) {
+    if (!isPlainObject(r) || !Object.prototype.hasOwnProperty.call(r, 'customFields')) continue;
+    carriedBy++;
+    const cf = r.customFields;
+    if (isEmpty(cf)) continue;
+    nonEmpty++;
+    // No prototype: a label spelled __proto__ is a label, not a way in.
+    const row = Object.create(null);
+    if (Array.isArray(cf)) {
+      if (!shape) shape = 'list';
+      for (const el of cf) {
+        if (!isPlainObject(el)) { unlabelled++; continue; }
+        for (const k of Object.keys(el)) {
+          if (elementKeys.has(k) || elementKeys.size < CF_MAX_ELEMENT_KEYS) elementKeys.set(k, (elementKeys.get(k) || 0) + 1);
+        }
+        const lk = CF_LABEL_KEYS.find((k) => typeof el[k] === 'string' && el[k].trim() !== '');
+        if (!lk) { unlabelled++; continue; }
+        row[el[lk].trim()] = Object.prototype.hasOwnProperty.call(el, 'value') ? el.value : null;
+      }
+    } else if (isPlainObject(cf)) {
+      if (!shape) shape = 'object';
+      for (const k of Object.keys(cf)) if (k.trim() !== '') row[k.trim()] = cf[k];
+    } else {
+      notLists++;
+      continue;
+    }
+    flat.push(row);
+  }
+
+  const inner = summarize(flat);
+  const fields = [];
+  let labelsWithheld = 0;
+  for (const f of inner.fields) {
+    const why = cfLabelProblem(f.key) || (f.carriedBy < RULE.recordsPerDistinct ? 'sparse' : null);
+    if (why) { labelsWithheld++; continue; }
+    const { key, ...rest } = f;
+    fields.push(Object.assign({ label: key }, rest));
+  }
+  return {
+    carriedBy: carriedBy,
+    nonEmpty: nonEmpty,
+    shape: shape,
+    notLists: notLists,
+    unlabelled: unlabelled,
+    elementKeys: [...elementKeys.entries()].map(([key, count]) => ({ key: key, count: count }))
+      .sort((a, b) => b.count - a.count || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
+    labelsTotal: inner.keysTotal,
+    labelsWithheld: labelsWithheld,
+    labelsWithheldNote: labelsWithheld
+      ? labelsWithheld + ' label' + (labelsWithheld === 1 ? ' was' : 's were') + ' not shown: longer than ' + CF_LABEL_CHARS
+        + ' characters, carrying a line break, "@", a link or more than ' + RULE.maxDigits + ' digits, or carried by fewer than '
+        + RULE.recordsPerDistinct + ' records.'
+      : null,
+    fields: fields,
+  };
+}
+
 function declaredFor(datasetId) {
   for (const k of Object.keys(DATASETS)) {
     if (DATASETS[k].datasetId === datasetId) return DATASETS[k];
@@ -366,6 +466,7 @@ async function scoutDataset(datasetId, deps) {
         + 'Every other key is counted only.',
     },
     fields: summary.fields,
+    customFields: summarizeCustomFields(fr.records),
   };
   // The declared half of the diagnostic, when the dataset IS declared: the same
   // answer describeMapping() already gives on the preview, so both halves are
@@ -433,6 +534,7 @@ module.exports = {
   handle,
   scoutDataset,
   summarize,
+  summarizeCustomFields,
   shapeProblem,
   declaredFor,
   RULE,
