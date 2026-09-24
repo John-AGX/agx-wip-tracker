@@ -1348,12 +1348,14 @@
         extra.folder = state.activeFolder;
       }
       return window.p86Api.attachments.upload(entityType, entityId, file, extra)
-        .then(function() {
+        .then(function(r) {
           state.uploading--;
+          return r && r.attachment;
         })
         .catch(function(err) {
           state.uploading--;
           alert('Upload failed for "' + (file && file.name) + '": ' + (err.message || err));
+          return null;
         });
     }
 
@@ -1378,8 +1380,21 @@
       // Upload sequentially so progress feels coherent and we don't hammer
       // the resize step. Re-fetch the list once at the end.
       var chain = Promise.resolve();
-      files.forEach(function(f) { chain = chain.then(function() { return uploadOne(f); }); });
-      chain.finally(fetchList);
+      var created = [];
+      files.forEach(function(f) {
+        chain = chain.then(function() { return uploadOne(f).then(function(a) { if (a) created.push(a); }); });
+      });
+      chain.then(function() { return Promise.resolve(fetchList()); }).then(function() {
+        // One fresh photo → drop straight into the viewer so the user can add a
+        // caption / 🎤 dictate / tags right after the shot. Bursts skip this and
+        // caption from the grid.
+        if (created.length === 1 && isImageAttachment(created[0])) {
+          var freshPhotos = state.attachments.filter(function(a) { return isImageAttachment(a) && !a.markup_of; });
+          var idx = -1;
+          for (var i = 0; i < freshPhotos.length; i++) { if (freshPhotos[i].id === created[0].id) { idx = i; break; } }
+          if (idx >= 0) openLightbox(freshPhotos, idx);
+        }
+      }).catch(function() { /* fetchList / viewer-open is best-effort */ });
     }
 
     function deleteAttachment(id, kind) {

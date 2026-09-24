@@ -258,6 +258,47 @@
     return fetch(path, init).then(handleResponse);
   }
 
+  // Client-side downscale + re-encode for large photos BEFORE the wire
+  // transfer — a multi-MB phone shot becomes a few hundred KB, so the upload
+  // is fast and far less likely to fail on cell data. Images only; returns the
+  // ORIGINAL file on any problem (unsupported format, decode error) or when it
+  // wouldn't shrink. NOTE: canvas re-encode drops EXIF (incl. GPS), so the
+  // caller attaches lat/lng itself — see attachments.upload below.
+  function compressImageFile(file, options) {
+    options = options || {};
+    var MAX_DIM = options.maxDim || 2048;
+    var QUALITY = options.quality || 0.82;
+    var MIN_BYTES = options.minBytes || 600 * 1024; // already-small images: leave alone
+    try {
+      if (!file || !/^image\//i.test(file.type || '')) return Promise.resolve(file);
+      if (/image\/(svg|gif)/i.test(file.type)) return Promise.resolve(file); // vector/animated
+      if (file.size && file.size < MIN_BYTES) return Promise.resolve(file);
+      if (typeof createImageBitmap !== 'function' || typeof document === 'undefined') return Promise.resolve(file);
+    } catch (e) { return Promise.resolve(file); }
+    // imageOrientation:'from-image' bakes EXIF rotation into the bitmap so a
+    // portrait phone shot doesn't come out sideways after the canvas draw.
+    var bmpP;
+    try { bmpP = createImageBitmap(file, { imageOrientation: 'from-image' }); }
+    catch (e) { try { bmpP = createImageBitmap(file); } catch (e2) { return Promise.resolve(file); } }
+    return bmpP.then(function(bmp) {
+      var w = bmp.width, h = bmp.height;
+      var scale = Math.min(1, MAX_DIM / Math.max(w, h));
+      var tw = Math.max(1, Math.round(w * scale)), th = Math.max(1, Math.round(h * scale));
+      var canvas = document.createElement('canvas');
+      canvas.width = tw; canvas.height = th;
+      canvas.getContext('2d').drawImage(bmp, 0, 0, tw, th);
+      if (bmp.close) { try { bmp.close(); } catch (e) {} }
+      return new Promise(function(resolve) {
+        canvas.toBlob(function(blob) {
+          if (!blob || blob.size >= (file.size || Infinity)) { resolve(file); return; } // no win → keep original
+          var name = (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg';
+          try { resolve(new File([blob], name, { type: 'image/jpeg', lastModified: Date.now() })); }
+          catch (e) { try { blob.name = name; } catch (e2) {} resolve(blob); } // old Safari: no File ctor, Blob is fine for FormData
+        }, 'image/jpeg', QUALITY);
+      });
+    }).catch(function() { return file; });
+  }
+
   var ai = {
     extractLead: function(images) { return post('/api/ai/extract-lead', { images: images }); },
     extractPurchaseOrder: function(images) { return post('/api/ai/extract-purchase-order', { images: images }); }
@@ -287,23 +328,34 @@
       var path = '/api/attachments/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId);
       extra = extra || {};
       var skipGeo = extra.geo === false;
+      var noCompress = extra.compress === false; // OCR/receipt callers can opt out
+      delete extra.compress;
       var alreadyHasGeo = (extra.lat != null && extra.lng != null);
       var looksLikeImage = file && file.type && /^image\//i.test(file.type);
-      if (skipGeo || alreadyHasGeo || !looksLikeImage || !window.p86Geo) {
-        delete extra.geo;
-        return uploadFile(path, file, extra, opts);
-      }
-      // Best-effort geo capture. If it returns null (denied/timeout/
-      // unsupported), we proceed without — the server-side EXIF
-      // extractor still has a shot.
-      return window.p86Geo.get(60000).then(function(g) {
+
+      // Shrink the photo AND resolve geo CONCURRENTLY, so geo overlaps the
+      // compression instead of gating the send. Cap the geo wait so a cold GPS
+      // fix can't stall the upload — the canvas re-encode strips EXIF, so we
+      // attach client coords when we have them and otherwise send without
+      // (the pin then falls back to the entity address).
+      var prepP = (looksLikeImage && !noCompress) ? compressImageFile(file) : Promise.resolve(file);
+      var wantGeo = !skipGeo && !alreadyHasGeo && looksLikeImage && !!window.p86Geo;
+      var geoP = wantGeo
+        ? Promise.race([
+            window.p86Geo.get(60000).then(function(g) { return g; }, function() { return null; }),
+            new Promise(function(res) { setTimeout(function() { res(null); }, 4000); })
+          ])
+        : Promise.resolve(null);
+
+      return Promise.all([prepP, geoP]).then(function(arr) {
+        var prepared = arr[0] || file, g = arr[1];
         if (g) {
           extra.lat = g.lat;
           extra.lng = g.lng;
           if (g.accuracy != null) extra.geo_accuracy = g.accuracy;
         }
         delete extra.geo;
-        return uploadFile(path, file, extra, opts);
+        return uploadFile(path, prepared, extra, opts);
       });
     },
     update: function(id, payload) { return put('/api/attachments/' + encodeURIComponent(id), payload); },
