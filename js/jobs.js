@@ -296,6 +296,16 @@ function renderJobsMain() {
             else _subCostHash = {};
         };
 
+        // Case/punctuation-only normalization. Deliberately does NOT strip
+        // LLC/Inc: "Smith Roofing LLC" and "Smith Roofing Inc" are two
+        // companies, and a false match would silently erase one's accrual.
+        // A miss only leaves the old over-count. Mirrors server subKey().
+        function _subMatchKey(name) {
+            return String(name == null ? '' : name)
+                .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        }
+        window._p86SubMatchKey = _subMatchKey;
+
         function getJobAccruedCosts(jobId) {
             const job = appData.jobs.find(j => j.id === jobId);
             if (job && job.ngAccruedCosts != null) return job.ngAccruedCosts;
@@ -311,19 +321,31 @@ function renderJobsMain() {
             // getJobPOAccrued (ordered × pct − billed), which getJobWIP adds
             // alongside this. Counting the sub's own contract again here would
             // double-count that commitment (overstating accrued/projected cost
-            // and understating displayed profit). Skip any sub that has a live
-            // PO linked by po.sub_id; the sub accrual then covers only subs that
-            // are contracted but not yet PO'd.
-            const poSubIds = {};
+            // and understating displayed profit).
+            //
+            // MATCH ON WHAT THE TWO STORES SHARE. This used to compare
+            // `po.sub_id` (a `subs` table id, `sub_<ts>_<rand>`) against
+            // `sub.id` — but an appData.subs row is written by saveSub() as
+            // `id: 's' + Date.now()` and carries NO directory id at all, so the
+            // skip could never fire and every such contract was accrued ON TOP
+            // of its own PO. Fall back to the sub's NAME, which both stores do
+            // carry. Mirrors server subAccruedOf.
+            const poSubIds = {}, poSubNames = {};
             (appData.jobPurchaseOrders || []).forEach(function (po) {
-                if (po.job_id === jobId && po.sub_id
-                    && po.status !== 'draft' && po.status !== 'cancelled' && po.status !== 'void') {
-                    poSubIds[po.sub_id] = 1;
-                }
+                if ((po.job_id || po.jobId) !== jobId) return;
+                if (po.status === 'draft' || po.status === 'cancelled' || po.status === 'void') return;
+                if (po.sub_id) poSubIds[po.sub_id] = 1;
+                var nm = po.sub_name || (typeof _jbSubName === 'function' ? _jbSubName(po.sub_id) : '');
+                var k = _subMatchKey(nm);
+                if (k) poSubNames[k] = 1;
             });
 
             jobSubs.forEach(sub => {
-                if (poSubIds[sub.id]) return;   // commitment already counted via PO accrual
+                if (!sub) return;
+                // commitment already counted via PO accrual
+                if (poSubIds[sub.id] || poSubIds[sub.subId] || poSubIds[sub.sub_id]) return;
+                var sk = _subMatchKey(sub.name);
+                if (sk && poSubNames[sk]) return;
                 const earned = (sub.contractAmt || 0) * (jobPct / 100);
                 const accrued = Math.max(0, earned - (sub.billedToDate || 0));
                 totalAccrued += accrued;

@@ -116,6 +116,12 @@ describe('routing a change order\'s cost at a sub contract DROPS it', () => {
   test('a sub holding a live PO is skipped in sub accrual, entirely', () => {
     // This is why `unfunded` is a named state and not a quiet fallback to the
     // sub contract: subAccruedOf would count nothing at all.
+    // NOTE THE SHAPE. This sub's `id` IS the directory sub id, which is the
+    // TABLE shape — a jobs.data blob sub is `{ id: 's' + Date.now(), name }`
+    // and carries no directory id at all. For years this fixture was the only
+    // coverage of the skip, so it passed while the guard could never fire on
+    // real browser-written data. The blob shape is covered in
+    // test/po-sub-double-count.test.js; do not treat this case as proof of it.
     const subs = [{ id: 'sub_gutters', contractAmt: BASE + CO_COST, billedToDate: 0 }];
     expect(subAccruedOf({}, subs, [extendedPO()], 40)).toBe(0);
     // With no PO the same contract DOES accrue — proving the skip, not an

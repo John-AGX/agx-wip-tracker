@@ -89,7 +89,12 @@ function load(pairs) {
 // ── the world ─────────────────────────────────────────────────────────────
 const TABLES = ['users', 'organizations', 'roles', 'leads', 'clients', 'jobs', 'tasks',
   'context_load_events', 'job_change_orders', 'invoices', 'qb_cost_lines',
-  'job_vendor_bills', 'job_purchase_orders'];
+  'job_vendor_bills', 'job_purchase_orders',
+  // subs: job-wip's loadWipInputs LEFT JOINs it to carry each PO's sub NAME,
+  // which is how a jobs.data blob sub (name, no directory id) is matched to
+  // its own PO and kept out of the accrual twice. Without the table declared
+  // here the roll-up query throws and every WIP assertion reads 'undefined'.
+  'subs'];
 
 let eng, auth, ALL_CAPS, shipped;
 

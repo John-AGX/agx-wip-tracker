@@ -526,9 +526,19 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.55';
+const APP_VERSION = '1.56';
 
 const releases = [
+  {
+    version: '1.56',
+    date: '2026-09-25',
+    name: 'A subcontractor with a purchase order is no longer counted twice',
+    summary: 'A sub listed on a job who also holds a purchase order had both amounts added to the job\u2019s cost. Accrued cost, projected cost and profit were all out by the sub\u2019s earned contract.',
+    changes: [
+      { type: 'fixed', text: 'A job counted a subcontractor twice when the sub was both listed on the job and holding a purchase order. The purchase order already carries that commitment, and there has always been a rule to skip the sub\u2019s own contract so it is not added again \u2014 but the rule compared two different kinds of id and could never match, so it never once took effect. Accrued cost and projected cost were overstated by the sub\u2019s earned contract, and the profit shown on the job was understated by the same amount. The two are now matched on the sub\u2019s name, which both records carry.' },
+      { type: 'fixed', text: 'Two firms with the same name but different endings \u2014 \u201cSmith Roofing LLC\u201d and \u201cSmith Roofing Inc\u201d \u2014 are treated as the separate companies they are, so one is never skipped because of the other. Only capitalisation and punctuation are ignored when comparing.' },
+    ],
+  },
   {
     version: '1.55',
     date: '2026-09-25',

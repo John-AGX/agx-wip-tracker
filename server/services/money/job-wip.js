@@ -130,18 +130,53 @@ function poAccruedOf(purchaseOrders, vendorBills, jobPct) {
   return total;
 }
 
+// A sub's name, reduced to something two stores can be compared on. Case and
+// punctuation only — no stripping of LLC/Inc, because "Smith Roofing LLC" and
+// "Smith Roofing Inc" are two companies and merging them would silently delete
+// one's accrual. A miss here leaves the old double-count; a false hit would
+// erase real cost, so this errs toward the miss.
+function subKey(name) {
+  return String(name == null ? '' : name)
+    .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
 // Sub accrual — earned-but-unbilled on sub contracts. A sub that already has
 // a live PO is SKIPPED: its commitment is counted by poAccruedOf, and counting
 // the sub contract again would overstate accrued cost and understate profit.
+//
+// MATCHING THE TWO STORES IS THE WHOLE JOB, and it is why this once did
+// nothing. `subs` is the jobs.data blob array, whose rows are born in the
+// browser as `{ id: 's' + Date.now(), name, contractAmt, ... }` — an id local
+// to that array, with NO directory-sub field anywhere on the row. `po.sub_id`
+// is a `subs` table id (`sub_<ts>_<rand>`). Comparing the two could never
+// match, so the skip never fired and every blob sub's contract was accrued ON
+// TOP of its own PO. The old unit test hid it by giving the blob sub the
+// directory id as its `id` — a shape no browser has ever written.
+//
+// So match on what the two stores genuinely share: the directory id when a row
+// carries one, else the sub's NAME. purchaseOrders rows reaching here carry
+// sub_name (loadWipInputs joins `subs`); a caller that supplies POs without it
+// falls back to id-only matching and behaves exactly as before.
 function subAccruedOf(job, subs, purchaseOrders, jobPct) {
   if (job.ngAccruedCosts != null) return num(job.ngAccruedCosts);
   const poSubIds = new Set();
+  const poSubNames = new Set();
   for (const po of purchaseOrders || []) {
-    if (po.sub_id && LIVE_PO_STATUSES(po.status)) poSubIds.add(po.sub_id);
+    if (!LIVE_PO_STATUSES(po.status)) continue;
+    if (po.sub_id) poSubIds.add(po.sub_id);
+    const k = subKey(po.sub_name);
+    if (k) poSubNames.add(k);
   }
   let total = 0;
   for (const sub of subs || []) {
+    if (!sub) continue;
+    // `id` first for the table-shaped caller, then the explicit link field if
+    // one is ever added, then the name — the only key a blob row actually has.
     if (poSubIds.has(sub.id)) continue;
+    if (sub.subId && poSubIds.has(sub.subId)) continue;
+    if (sub.sub_id && poSubIds.has(sub.sub_id)) continue;
+    const k = subKey(sub.name);
+    if (k && poSubNames.has(k)) continue;
     const earned = num(sub.contractAmt) * (jobPct / 100);
     total += Math.max(0, earned - num(sub.billedToDate));
   }
@@ -340,16 +375,21 @@ async function loadWipInputs(db, jobIds) {
     db.query(
       `SELECT job_id, po_id, amount, status
          FROM job_vendor_bills WHERE job_id = ANY($1)`, [ids]),
+    // sub_name rides along so subAccruedOf can match a jobs.data blob sub,
+    // which carries a name and no directory id. LEFT JOIN: a PO with no sub
+    // (materials-only) still loads, with sub_name NULL.
     db.query(
-      `SELECT id, job_id, sub_id, status, data
-         FROM job_purchase_orders WHERE job_id = ANY($1)`, [ids]),
+      `SELECT po.id, po.job_id, po.sub_id, po.status, po.data, s.name AS sub_name
+         FROM job_purchase_orders po
+         LEFT JOIN subs s ON s.id = po.sub_id
+        WHERE po.job_id = ANY($1)`, [ids]),
   ]);
   for (const r of qb.rows) slot(r.job_id).qbCostLines.push(r);
   for (const r of bills.rows) slot(r.job_id).vendorBills.push(r);
   for (const r of pos.rows) {
     const d = r.data || {};
     slot(r.job_id).purchaseOrders.push({
-      id: r.id, sub_id: r.sub_id, status: r.status,
+      id: r.id, sub_id: r.sub_id, sub_name: r.sub_name || null, status: r.status,
       lines: Array.isArray(d.lines) ? d.lines : [],
       title: d.title || '',
     });
@@ -366,4 +406,5 @@ module.exports = {
   poOrderedTotal,
   poAccruedOf,
   subAccruedOf,
+  subKey,
 };
