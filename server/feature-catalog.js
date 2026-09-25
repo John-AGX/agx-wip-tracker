@@ -533,9 +533,9 @@ const releases = [
     version: '1.55',
     date: '2026-09-25',
     name: 'The chat stays open, and works on the Site Plan',
-    summary: 'Leave the chat open and it is still open after a reload. And on the Site Plan it now sits beside the map instead of being buried under it.',
+    summary: 'Leave the chat open and it is still open after a reload. And on the Site Plan it now sits beside the map instead of covering it.',
     changes: [
-      { type: 'fixed', text: 'The chat was unusable on the Site Plan. The Site Plan is a full-screen page in its own right, and it was drawn OVER the chat, so opening the chat there appeared to do nothing. The chat now sits above it, and the map makes room for it the way every other page does — the two sit side by side.' },
+      { type: 'fixed', text: 'The chat covered the Site Plan instead of docking beside it. The Site Plan is a full-screen page pinned to all four edges of the window, so unlike every other page it did not give up any width when the chat opened \u2014 the chat just sat on top of the map. The map now makes room the same way the rest of the app does, and the two sit side by side.' },
       { type: 'fixed', text: 'A map or drawing that just lost width is now told to redraw at its new size. Maps and canvases measure themselves in pixels and do not notice a stylesheet, so the Site Plan kept drawing at the old width after the chat opened, closed or was resized.' },
       { type: 'new', text: 'The chat remembers whether it was open. Leave it open and it is there again after a reload; close it and it stays closed. It waits for the app to be on screen first, so it never appears over the sign-in page, and it never reopens over a page that is not the app at all.' },
     ],

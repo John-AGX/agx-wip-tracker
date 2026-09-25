@@ -1200,13 +1200,14 @@ function p86Ask(message, opts) {
     if (panel) return panel;
     panel = document.createElement('div');
     panel.id = 'p86-ai-panel';
-    // ABOVE THE SITE PLAN. #nodeGraphTab is a fixed, full-viewport PAGE at
-    // z-index 500 (it was 99 when this said 200), so at 200 the chat opened
-    // UNDERNEATH the site plan and could not be seen at all there. 600 clears
-    // it while staying below modals and full-page editors (1000+), which are
-    // meant to cover the chat.
+    // 200 clears every full-page surface that can be under the drawer:
+    // #nodeGraphTab (the site plan) is z-index 99 and, being positioned, it
+    // traps its own children below that. Modals and full-page editors sit at
+    // 1000+ and are meant to cover the chat, so this stays well under them.
+    // NOTE: css/nodegraph.css is a dead copy that says 500 — the page loads
+    // nodegraph/nodegraph.css. Read that one before trusting a number here.
     var initialWidth = clampAIPanelWidth(loadAIPanelWidth());
-    panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:' + initialWidth + 'px;max-width:92vw;min-width:' + AI_PANEL_WIDTH_MIN + 'px;background:var(--surface,#141419);border-left:1px solid var(--border,#333);box-shadow:-4px 0 22px rgba(0,0,0,0.6);z-index:600;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.22s ease;';
+    panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:' + initialWidth + 'px;max-width:92vw;min-width:' + AI_PANEL_WIDTH_MIN + 'px;background:var(--surface,#141419);border-left:1px solid var(--border,#333);box-shadow:-4px 0 22px rgba(0,0,0,0.6);z-index:200;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.22s ease;';
     panel.innerHTML =
       // Left-edge resize grabber. Wider than it looks (12px hit area)
       // for easy targeting, but visually only a thin 2px line that
@@ -7779,10 +7780,11 @@ function p86Ask(message, opts) {
       'body.p86-ai-resizing { transition: none !important; cursor: ew-resize; user-select: none; } ' +
       'body.p86-ai-resizing * { user-select: none !important; } ' +
       // THE SITE PLAN IS A FIXED, FULL-VIEWPORT PAGE (#nodeGraphTab, inset 0).
-      // body padding never moves a fixed element, so on the site plan the chat
-      // sat on top of the map however wide it was. Giving the page the same
-      // right inset as the drawer's width docks the two side by side, exactly
-      // as body padding does for every ordinary page.
+      // The drawer was always drawn above it, but body padding cannot move a
+      // fixed element, so the map kept the whole viewport and the chat covered
+      // it instead of sitting beside it. Giving the page the same right inset
+      // as the drawer's width docks the two side by side, exactly as body
+      // padding does for every ordinary page.
       'body.p86-ai-open #nodeGraphTab { right: var(--p86-ai-w, 0px); transition: right 0.16s ease; } ' +
       'body.p86-ai-resizing #nodeGraphTab { transition: none !important; } ' +
       '@media (max-width: 1100px) { body.p86-ai-open #nodeGraphTab { right: 0; } } ' +

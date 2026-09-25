@@ -234,14 +234,17 @@ describe('the grip can be found and used', () => {
 });
 
 describe('the site plan is a page, not a backdrop', () => {
-  // #nodeGraphTab is position:fixed, inset 0, z-index 500 — a full-viewport
-  // PAGE. Body padding cannot move a fixed element, and at the old z-index of
-  // 200 the chat opened underneath it.
+  // #nodeGraphTab is position:fixed, inset 0 — a full-viewport PAGE. Body
+  // padding cannot move a fixed element, so the map kept the whole viewport
+  // and the drawer covered it rather than docking beside it.
+  //
+  // The z-index here is 99, from nodegraph/nodegraph.css, which is what the
+  // page actually loads. css/nodegraph.css is a dead copy that says 500.
   test('the chat sits ABOVE the site plan, and still below modals', () => {
     const z = /z-index:(\d+);display:flex;flex-direction:column;transform:translateX\(100%\)/.exec(src);
     expect(z).not.toBeNull();
     const panelZ = Number(z[1]);
-    const sitePlanZ = 500;   // css/nodegraph.css #nodeGraphTab
+    const sitePlanZ = 99;    // nodegraph/nodegraph.css #nodeGraphTab
     const modalZ = 1000;     // .modal
     expect(panelZ).toBeGreaterThan(sitePlanZ);
     expect(panelZ).toBeLessThan(modalZ);
