@@ -387,6 +387,10 @@ function p86Ask(message, opts) {
       return (b.amount || 0) - (a.amount || 0);
     });
 
+    // What is ON SCREEN, kept for the CSV export: exporting anything other
+    // than the rows in front of you is a different report with the same name.
+    _state.visible = lines;
+
     var filterTotal = lines.reduce(function(s, l) { return s + l.amount; }, 0);
 
     // ── Header strip ────────────────────────────────────────────
@@ -398,8 +402,25 @@ function p86Ask(message, opts) {
           (mostRecent ? ' &middot; latest report: <strong>' + escapeHTML(mostRecent) + '</strong>' : '') +
         '</span>' +
       '</div>' +
-      '<button class="success" style="margin-left:auto;" onclick="(function(){var b=document.getElementById(\'qbCostsImportBtn\');if(b)b.click();})()">&#x1F4E5; Re-import</button>' +
+      '<button class="ee-btn secondary" style="margin-left:auto;" onclick="window.qbCostsView.exportCsv()">&#x2B07; Export CSV</button>' +
+      '<button class="success" onclick="(function(){var b=document.getElementById(\'qbCostsImportBtn\');if(b)b.click();})()">&#x1F4E5; Re-import</button>' +
     '</div>';
+
+    // MONTH-END ACCRUALS. Each one is a pair — the accrual and its reversal —
+    // and a pair inside one export cancels to zero, which is why they are left
+    // out of cost. A NON-ZERO sum means an export was cut BETWEEN the halves,
+    // so this job is carrying an adjustment with no reversal. Silent until it
+    // happens, and it is the one number that says the import window was wrong.
+    var accrualNet = 0;
+    var isAccrualFn = (window.p86CostBuckets && p86CostBuckets.isAccrualLine) ? p86CostBuckets.isAccrualLine : function () { return false; };
+    allLines.forEach(function (l) { if (isAccrualFn(l)) accrualNet += (Number(l.amount) || 0); });
+    if (Math.abs(accrualNet) > 0.005) {
+      headerHtml += '<div style="background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.45);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:11.5px;color:var(--text,#eef0f6);line-height:1.5;">' +
+        '<strong>Month-end accruals do not cancel on this job: ' + fmtMoney(accrualNet) + '.</strong> ' +
+        'An accrual and its reversal always net to zero, so this means an import was cut between the two \u2014 the export window crossed a month end. ' +
+        'Re-import a window that covers both halves and this goes back to zero. The amount is left out of cost either way.' +
+      '</div>';
+    }
 
     // ── Summary cards ───────────────────────────────────────────
     var summaryHtml = '';
@@ -1369,7 +1390,58 @@ function p86Ask(message, opts) {
 
   // ── Public API ───────────────────────────────────────────────
   window.renderJobQBCosts = renderJobQBCosts;
+  // ── CSV of what is on screen ──────────────────────────────────────
+  // Every filter, the search and the sort are already applied to
+  // _state.visible, so this exports the rows in front of you, in their
+  // order — not the whole job.
+  function csvCell(v) {
+    var s = v == null ? '' : String(v);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  function buildingNameFor(jobId, buildingId) {
+    if (!buildingId) return '';
+    var b = ((window.appData && appData.buildings) || []).filter(function (x) { return x && x.id === buildingId; })[0];
+    return b ? (b.name || b.label || buildingId) : buildingId;
+  }
+
+  function csvFor(jobId, lines) {
+    var CB = window.p86CostBuckets;
+    var head = ['Date', 'Vendor', 'Account', 'Class', 'Memo', 'Amount', 'Bucket', 'Building'];
+    var rows = (lines || []).map(function (l) {
+      var bucket = (CB && CB.effectiveBucket) ? CB.effectiveBucket(l) : '';
+      var label = bucket;
+      if (CB && CB.CANON) {
+        CB.CANON.forEach(function (b) { if (b.code === bucket) label = b.label; });
+      }
+      return [l.date || '', l.vendor || '', l.account || '', l.klass || '', l.memo || '',
+        (Number(l.amount) || 0).toFixed(2), label, buildingNameFor(jobId, l.buildingId || l.building_id)];
+    });
+    return [head].concat(rows).map(function (r) { return r.map(csvCell).join(','); }).join('\r\n');
+  }
+
+  function exportCsv() {
+    var jobId = _state.jobId;
+    var lines = _state.visible || [];
+    if (!lines.length) return;
+    var name = 'qb-costs';
+    var jobs = (window.appData && window.appData.jobs) || [];
+    var job = jobs.filter(function (j) { return j.id === jobId; })[0];
+    if (job && job.jobNumber) name = String(job.jobNumber).replace(/[^A-Za-z0-9_-]+/g, '') + '-costs';
+    var blob = new Blob(['\ufeff' + csvFor(jobId, lines)], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = name + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
   window.qbCostsView = {
+    exportCsv: exportCsv,
+    _csvFor: csvFor,
     filterByCategory: filterByCategory,
     filterByVendor: filterByVendor,
     filterByTxnType: filterByTxnType,

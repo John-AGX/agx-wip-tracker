@@ -2734,6 +2734,16 @@
         .jobshub-summary { font-size: 11.5px; color: var(--text-dim); padding: 0 2px 8px; }
         .jobshub-loading, .jobshub-empty, .jobshub-error { padding: 24px; text-align: center; color: var(--text-dim); font-size: 13px; }
         .jobshub-error { color: #f87171; }
+        /* Detailed Costs (cross-job) — the org rollup strip. */
+        .jhc-strip { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 2px 10px; }
+        .jhc-tile { display: flex; align-items: center; gap: 7px; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 7px 11px; font-size: 12px; }
+        .jhc-tile-total { border-color: var(--accent); }
+        .jhc-dot { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+        .jhc-lab { color: var(--text-dim); }
+        .jhc-lab em { font-style: normal; opacity: 0.75; }
+        .jhc-val { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+        .jhc-note { font-size: 11.5px; color: var(--text-dim); line-height: 1.5; padding: 0 2px 10px; max-width: 900px; }
+        .jhc-detail { border-top: 1px solid var(--border); margin-top: 4px; }
         .jobshub-table tbody tr { cursor: pointer; }
         .jobshub-table tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
         .jobshub-po-coming { max-width: 520px; margin: 32px auto; text-align: center; background: var(--surface2); border: 1px solid var(--border); border-radius: 14px; padding: 32px 28px; }

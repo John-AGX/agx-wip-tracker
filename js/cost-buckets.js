@@ -44,7 +44,10 @@
     if (/\bsub|subcontract/.test(s)) return 'subs';
     if (/labor|labour|hourly|burden|payroll|wage/.test(s)) return 'labor';
     if (/equip|rental|machine/.test(s)) return 'equipment';
-    if (/general\s*condition|permit|engineering|overhead|insurance|\bbond\b|\bfee\b/.test(s)) return 'gc';
+    // 'travel' joins the general conditions: a live account named Travel
+    // Expenses was falling to Other, which is the bucket for cost nobody has
+    // classified — not for cost that plainly belongs somewhere.
+    if (/general\s*condition|permit|engineering|overhead|insurance|travel|mileage|\bbond\b|\bfee\b/.test(s)) return 'gc';
     if (/material|supplies|cogs|lumber|hardware/.test(s)) return 'materials';
     return 'other';
   }

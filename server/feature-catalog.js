@@ -526,9 +526,22 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.50';
+const APP_VERSION = '1.51';
 
 const releases = [
+  {
+    version: '1.51',
+    date: '2026-09-24',
+    name: 'Detailed Costs, for every job at once',
+    summary: 'A new Detailed Costs page under Jobs: every job that has cost against it, what it cost by bucket, and one click into that job\u2019s own cost detail \u2014 without opening the job. Plus an export, and a warning for the one import mistake that quietly inflates cost.',
+    changes: [
+      { type: 'new', text: 'Jobs \u203a Detailed Costs. Every job carrying imported cost, with materials, labour, equipment and general conditions side by side, what has been counted as cost, and when that job last received an import. Search for a job by name or number, click it, and its full cost detail opens in place \u2014 the same view the job page has, so the two can never disagree. A button there opens the job itself if you want the rest of it.' },
+      { type: 'new', text: 'Subcontractors are shown as two numbers, because they are two things. Sub cost comes from purchase orders and the bills against them, never from QuickBooks \u2014 counting both would count every sub twice \u2014 so the page shows what QuickBooks recorded beside what Project 86 has actually been billed, and flags any job where QuickBooks knows about sub spend that has no bill here yet. That gap is sub work not invoiced in Project 86.' },
+      { type: 'new', text: 'Export CSV on a job\u2019s costs. It exports exactly the rows on screen, in the order shown, with whatever filter, week or search you have applied \u2014 including the Class column and the bucket each line lands in.' },
+      { type: 'fixed', text: 'Travel and mileage now count as general conditions. They were landing in Other, which is meant for cost nobody has classified, not for cost that plainly belongs somewhere.' },
+      { type: 'fixed', text: 'A job whose month-end accruals do not cancel now says so, on its costs. An accrual and its reversal always net to zero, so anything left over means an import was cut between the two \u2014 the export window crossed a month end. Re-importing a window that covers both halves clears it. The amount was never counted as cost either way; until now nothing told you it had happened.' },
+    ],
+  },
   {
     version: '1.50',
     date: '2026-09-21',

@@ -30,7 +30,7 @@ function p86Ask(message, opts) {
 (function () {
   'use strict';
 
-  var VIEWS = ['purchase-orders', 'bills', 'change-orders', 'rfis', 'submittals'];
+  var VIEWS = ['purchase-orders', 'bills', 'change-orders', 'rfis', 'submittals', 'costs'];
   var DEFAULT_VIEW = 'change-orders';
   var _view = null;
 
@@ -56,7 +56,11 @@ function p86Ask(message, opts) {
     bills:             { status: 'open', job: '', q: '' },
     'change-orders':   { status: 'open', job: '', q: '' },
     rfis:              { status: 'open', job: '', q: '' },
-    submittals:        { status: 'open', job: '', q: '' }
+    submittals:        { status: 'open', job: '', q: '' },
+    // Detailed Costs is not a list of records like its neighbours: it is an
+    // index of JOBS by what they have cost, and one job's own cost detail
+    // opened in place. `job` is which job is open ('' = the index).
+    costs:             { status: 'all', job: '', q: '' }
   };
 
   function esc(v) {
@@ -213,6 +217,7 @@ function p86Ask(message, opts) {
     if (view === 'change-orders')   return renderCO(host);
     if (view === 'rfis')            return renderWorkflow(host, 'rfi', 'RFIs');
     if (view === 'submittals')      return renderWorkflow(host, 'submittal', 'Submittals');
+    if (view === 'costs')           return renderCosts(host);
   }
 
   // The refresh registry's ONE hook into the hub. js/refresh.js calls this from
@@ -1288,6 +1293,199 @@ function p86Ask(message, opts) {
         .catch(function (e) { alert('Could not reset: ' + ((e && e.message) || 'error')); });
     });
   }
+
+  // ── DETAILED COSTS ────────────────────────────────────────────────
+  // Every job that has cost against it, what it cost by bucket, and one
+  // click into that job's own cost detail — without opening the job.
+  //
+  // The detail is the REAL per-job view (js/qb-costs-view.js), mounted into
+  // this page through its customTarget argument. A second copy of it here
+  // would drift from the one on the job page within a release.
+  //
+  // SUBS ARE THE EXCEPTION, and the reason this page shows two numbers for
+  // them. A QuickBooks subcontractor line is NOT counted as cost (the cost
+  // of a sub is its purchase order and the bill against it — counting both
+  // double-counts), so QuickBooks' sub figure is shown beside what Project
+  // 86 has actually been billed, and a job where QuickBooks records sub
+  // spend that P86 has no bill for is flagged: that work is not invoiced
+  // here yet.
+  var _costs = { lines: null, bills: null, loading: false, error: null };
+
+  function costsState() { return _state.costs; }
+
+  function jobLabelFor(jobId) {
+    var jobs = (window.appData && window.appData.jobs) || [];
+    var j = jobs.filter(function (x) { return x.id === jobId; })[0];
+    if (!j) return jobId;
+    if (window.p86JobLabel && typeof window.p86JobLabel.fromJob === 'function') return window.p86JobLabel.fromJob(j);
+    return [j.jobNumber, j.title || j.name].filter(Boolean).join(' ');
+  }
+
+  // One row per job: its lines bucketed, its QuickBooks sub figure, and what
+  // P86 has billed. Pure — takes the two fetched lists, returns rows.
+  function costRowsFrom(lines, bills) {
+    var CB = window.p86CostBuckets;
+    var by = {};
+    (lines || []).forEach(function (l) {
+      var jobId = l.job_id || l.jobId;
+      if (!jobId) return;
+      var r = by[jobId] || (by[jobId] = { jobId: jobId, lines: 0, total: 0, subs: 0, billed: 0, accrual: 0, lastImport: '', buckets: {} });
+      var amt = Number(l.amount) || 0;
+      var bucket = CB && CB.effectiveBucket ? CB.effectiveBucket(l) : 'other';
+      r.lines++;
+      if (CB && CB.isAccrualLine && CB.isAccrualLine(l)) { r.accrual += amt; return; }
+      r.buckets[bucket] = (r.buckets[bucket] || 0) + amt;
+      if (bucket === 'subs') r.subs += amt;
+      else r.total += amt;
+      var rd = l.report_date || l.reportDate || '';
+      if (rd && rd > r.lastImport) r.lastImport = String(rd).slice(0, 10);
+    });
+    (bills || []).forEach(function (b) {
+      var jobId = b.job_id || b.jobId;
+      if (!jobId || !by[jobId]) return;
+      if (String(b.status || '').toLowerCase() === 'void') return;
+      by[jobId].billed += Number(b.amount || b.total || 0) || 0;
+    });
+    return Object.keys(by).map(function (k) { return by[k]; })
+      .sort(function (a, b) { return (b.total + b.subs) - (a.total + a.subs); });
+  }
+
+  function costsTotals(rows) {
+    var t = { lines: 0, total: 0, subs: 0, billed: 0, accrual: 0, jobs: rows.length, buckets: {} };
+    rows.forEach(function (r) {
+      t.lines += r.lines; t.total += r.total; t.subs += r.subs; t.billed += r.billed; t.accrual += r.accrual;
+      Object.keys(r.buckets).forEach(function (b) { t.buckets[b] = (t.buckets[b] || 0) + r.buckets[b]; });
+    });
+    return t;
+  }
+
+  function costsMatch(row, q) {
+    if (!q) return true;
+    return jobLabelFor(row.jobId).toLowerCase().indexOf(q) !== -1;
+  }
+
+  function renderCosts(host) {
+    if (!host) return;
+    var st = costsState();
+    if (st.job) return renderCostsDetail(host, st.job);
+    if (_costs.lines && _costs.bills) return paintCostsIndex(host);
+    if (_costs.loading) return;
+    _costs.loading = true;
+    _costs.error = null;
+    host.innerHTML = '<div class="jhc-wrap"><div class="jobshub-head"><div class="jobshub-title">Detailed Costs</div></div>'
+      + '<div style="color:var(--text-dim,#888);font-style:italic;padding:18px 0;">Reading costs\u2026</div></div>';
+    var api = window.p86Api;
+    Promise.all([
+      (api && api.qbCosts) ? api.qbCosts.list() : Promise.resolve({ lines: [] }),
+      (api && api.bills) ? api.bills.listAll({ status: 'all', limit: 5000 }).catch(function () { return { bills: [] }; }) : Promise.resolve({ bills: [] })
+    ]).then(function (res) {
+      _costs.loading = false;
+      _costs.lines = (res[0] && res[0].lines) || [];
+      _costs.bills = (res[1] && (res[1].bills || res[1].rows)) || [];
+      paintCostsIndex(host);
+    }).catch(function (e) {
+      _costs.loading = false;
+      _costs.error = (e && e.message) || 'Costs could not be read.';
+      paintCostsIndex(host);
+    });
+  }
+
+  function paintCostsIndex(host) {
+    var st = costsState();
+    var rows = costRowsFrom(_costs.lines || [], _costs.bills || []);
+    var q = String(st.q || '').trim().toLowerCase();
+    var shown = rows.filter(function (r) { return costsMatch(r, q); });
+    var t = costsTotals(rows);
+    var CANON = (window.p86CostBuckets && window.p86CostBuckets.CANON) || [];
+    var h = '<div class="jhc-wrap">';
+    h += '<div class="jobshub-head"><div class="jobshub-title">Detailed Costs</div>'
+      + '<span class="jobshub-summary">' + t.jobs + ' job' + (t.jobs === 1 ? '' : 's') + ' \u00b7 ' + t.lines + ' cost lines</span></div>';
+    if (_costs.error) h += '<div class="jobshub-empty">' + esc(_costs.error) + '</div>';
+    // Org rollup: the same buckets a job shows, summed.
+    h += '<div class="jhc-strip">';
+    CANON.forEach(function (b) {
+      var v = t.buckets[b.code] || 0;
+      if (!v && b.code === 'other') return;
+      h += '<div class="jhc-tile"><span class="jhc-dot" style="background:' + b.color + ';"></span>'
+        + '<span class="jhc-lab">' + esc(b.label) + (b.code === 'subs' ? ' <em>(QuickBooks)</em>' : '') + '</span>'
+        + '<span class="jhc-val">' + money(v) + '</span></div>';
+    });
+    h += '<div class="jhc-tile jhc-tile-total"><span class="jhc-lab">Counted as cost</span><span class="jhc-val">' + money(t.total) + '</span></div>';
+    h += '</div>';
+    h += '<div class="jhc-note">Subcontractor cost comes from purchase orders and bills, not from QuickBooks, so the QuickBooks sub figure is shown for matching only and is not in the total. '
+      + 'QuickBooks records ' + money(t.subs) + ' of sub spend; Project 86 has been billed ' + money(t.billed) + '.'
+      + (t.accrual ? ' ' + money(t.accrual) + ' of month-end accruals did not cancel \u2014 an import was cut between an accrual and its reversal.' : '')
+      + '</div>';
+    h += '<div class="jobshub-actions"><input type="search" class="jobshub-search jhc-q" placeholder="Search jobs\u2026" value="' + esc(st.q || '') + '" style="min-width:220px;">'
+      + '<span class="jobshub-summary">' + shown.length + ' of ' + rows.length + ' shown</span></div>';
+    if (!shown.length) {
+      h += '<div class="jobshub-empty">' + (rows.length ? 'No job matches that.' : 'No costs have been imported yet.') + '</div>';
+    } else {
+      h += '<div class="p86-tbl-scroll"><table class="leads-table jobshub-table"><thead><tr>'
+        + '<th>Job</th><th class="num">Lines</th>';
+      CANON.forEach(function (b) { if (b.code !== 'subs' && b.code !== 'other') h += '<th class="num">' + esc(b.label) + '</th>'; });
+      h += '<th class="num">Counted</th><th class="num">Subs (QB / billed)</th><th>Last import</th></tr></thead><tbody>';
+      shown.forEach(function (r) {
+        var gap = r.subs - r.billed;
+        h += '<tr data-jhc-job="' + esc(r.jobId) + '" style="cursor:pointer;">'
+          + '<td><strong>' + esc(jobLabelFor(r.jobId)) + '</strong></td>'
+          + '<td class="num">' + r.lines + '</td>';
+        CANON.forEach(function (b) {
+          if (b.code === 'subs' || b.code === 'other') return;
+          var v = r.buckets[b.code] || 0;
+          h += '<td class="num"' + (v ? '' : ' style="color:var(--text-dim,#888);"') + '>' + money(v) + '</td>';
+        });
+        h += '<td class="num"><strong>' + money(r.total) + '</strong></td>'
+          + '<td class="num">' + money(r.subs) + ' / ' + money(r.billed)
+          + (gap > 1 ? ' <span class="badge p86-statuschip" style="--c:#fbbf24;" title="QuickBooks records sub spend Project 86 has no bill for">' + money(gap) + ' unbilled</span>' : '')
+          + '</td>'
+          + '<td>' + esc(r.lastImport || '') + '</td></tr>';
+      });
+      h += '</tbody></table></div>';
+    }
+    h += '</div>';
+    host.innerHTML = h;
+    var qBox = host.querySelector('.jhc-q');
+    if (qBox) {
+      qBox.addEventListener('input', function () {
+        costsState().q = qBox.value;
+        var pos = qBox.selectionStart;
+        paintCostsIndex(host);
+        var again = host.querySelector('.jhc-q');
+        if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (e) {} }
+      });
+    }
+    Array.prototype.forEach.call(host.querySelectorAll('[data-jhc-job]'), function (tr) {
+      tr.addEventListener('click', function () {
+        costsState().job = tr.getAttribute('data-jhc-job');
+        renderCosts(host);
+      });
+    });
+  }
+
+  function renderCostsDetail(host, jobId) {
+    host.innerHTML = '<div class="jhc-wrap">'
+      + '<div class="jobshub-head"><button type="button" class="ee-btn ghost jhc-back">\u2190 All jobs</button>'
+      + '<div class="jobshub-title" style="margin-left:10px;">' + esc(jobLabelFor(jobId)) + '</div>'
+      + '<span class="jobshub-summary">Detailed costs</span>'
+      + '<button type="button" class="ee-btn ghost jhc-open" style="margin-left:auto;">Open the job</button></div>'
+      + '<div class="jhc-detail"></div></div>';
+    host.querySelector('.jhc-back').addEventListener('click', function () {
+      costsState().job = '';
+      renderCosts(host);
+    });
+    host.querySelector('.jhc-open').addEventListener('click', function () { openParentJob(jobId, 'job-qb-costs'); });
+    var target = host.querySelector('.jhc-detail');
+    if (typeof window.renderJobQBCosts === 'function') window.renderJobQBCosts(jobId, target);
+    else target.innerHTML = '<div class="jobshub-empty">The cost view did not load. Reload the page.</div>';
+  }
+
+  // Open a job's Detailed Costs from anywhere (the jobs list, a search).
+  window.p86OpenJobCosts = function (jobId) {
+    _state.costs.job = jobId || '';
+    if (typeof window.switchTab === 'function') window.switchTab('jobshub');
+    switchJobsHubSubTab('costs');
+  };
 
   window.p86JobsHub = { renderJobsHubInto: renderJobsHubInto, switchJobsHubSubTab: switchJobsHubSubTab };
   window.switchJobsHubSubTab = switchJobsHubSubTab;

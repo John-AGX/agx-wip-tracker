@@ -251,7 +251,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=325">
+    <link rel="stylesheet" href="css/styles.css?v=326">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=70">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -690,6 +690,7 @@
                                 <button class="tab-btn app-nav-child" data-tab="orgmap" data-virtual-tab="orgmap" data-p86-icon="globe" title="Job Map — all jobs on a satellite map"><span class="app-nav-label">Job Map</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="jobshub" data-jobshub-subtab="purchase-orders" data-virtual-tab="jobshub-purchase-orders" data-p86-icon="attachments" title="Purchase Orders"><span class="app-nav-label">Purchase Orders</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="jobshub" data-jobshub-subtab="bills" data-virtual-tab="jobshub-bills" data-p86-icon="banknotes" title="Bills — vendor invoices against POs (Accounts Payable)"><span class="app-nav-label">Bills</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="jobshub" data-jobshub-subtab="costs" data-virtual-tab="jobshub-costs" data-p86-icon="chart" title="Detailed Costs — every job's imported costs, by bucket"><span class="app-nav-label">Detailed Costs</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="jobshub" data-jobshub-subtab="change-orders" data-virtual-tab="jobshub-change-orders" data-p86-icon="edit" title="Change Orders"><span class="app-nav-label">Change Orders</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="jobshub" data-jobshub-subtab="rfis" data-virtual-tab="jobshub-rfis" data-p86-icon="magnifying-glass" title="RFIs"><span class="app-nav-label">RFIs</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="jobshub" data-jobshub-subtab="submittals" data-virtual-tab="jobshub-submittals" data-p86-icon="import" title="Submittals"><span class="app-nav-label">Submittals</span></button>
@@ -3584,7 +3585,7 @@
     <script src="js/site-conditions.js?v=2"></script>
     <script src="js/leads.js?v=104"></script>
     <script src="js/job-costs-import.js?v=17"></script>
-    <script src="js/qb-costs-view.js?v=25"></script>
+    <script src="js/qb-costs-view.js?v=26"></script>
     <script src="js/insights.js?v=14"></script>
     <script src="js/schedule.js?v=55"></script>
     <script src="js/my-day.js?v=11"></script>
@@ -3675,7 +3676,7 @@
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
-    <script src="js/jobs-hub.js?v=28"></script>
+    <script src="js/jobs-hub.js?v=29"></script>
     <script src="js/assembly-studio.js?v=4"></script>
     <script src="js/materials-consolidate.js?v=1"></script>
     <!-- Purchase Order editor — full-window overlay opened from the Jobs
@@ -4056,7 +4057,7 @@
       </div>
     </div>
     <script src="nodegraph/engine.js?v=125"></script>
-    <script src="js/cost-buckets.js?v=5"></script>
+    <script src="js/cost-buckets.js?v=6"></script>
     <script src="nodegraph/ui.js?v=337"></script>
     <!-- Ribbon popovers (Layers / More) + layer visibility persistence.
          Loads after ui.js; only owns the popover chrome — the moved
