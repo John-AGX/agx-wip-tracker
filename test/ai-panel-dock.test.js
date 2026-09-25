@@ -119,15 +119,16 @@ describe('dragging the edge', () => {
       published.push(w);
     };
     const saved = [];
+    const nudged = [];
     const wire = compile(
       [CONSTS, extractFunction(src, 'pushMode'), extractFunction(src, 'clampAIPanelWidth'),
         extractFunction(src, 'wireAIPanelResizer')],
-      ['window', 'document', 'publishAIWidth', 'saveAIPanelWidth'],
-      [window, document, publishAIWidth, (px) => saved.push(px)],
+      ['window', 'document', 'publishAIWidth', 'saveAIPanelWidth', 'nudgeLayout'],
+      [window, document, publishAIWidth, (px) => saved.push(px), () => nudged.push(1)],
       'wireAIPanelResizer'
     );
     wire(panel);
-    return { panel, published, saved, handle: panel.querySelector('#ai-panel-resizer') };
+    return { panel, published, saved, nudged, handle: panel.querySelector('#ai-panel-resizer') };
   }
 
   const down = (el, x) => el.dispatchEvent(new window.PointerEvent('pointerdown', { clientX: x, bubbles: true, cancelable: true }));
@@ -151,6 +152,8 @@ describe('dragging the edge', () => {
     expect(m.panel.style.width).toBe('620px');
     up();
     expect(m.saved).toEqual([620]);
+    // A map or canvas on the page is told to re-measure at the new width.
+    expect(m.nudged.length).toBe(1);
   });
 
   test('dragging right narrows it, and it stops at the minimum', () => {
@@ -227,5 +230,130 @@ describe('the grip can be found and used', () => {
     expect(grip).toContain('aria-label="Resize chat panel"');
     // Without this a finger drag scrolls the page instead of resizing.
     expect(grip).toContain('touch-action:none');
+  });
+});
+
+describe('the site plan is a page, not a backdrop', () => {
+  // #nodeGraphTab is position:fixed, inset 0, z-index 500 — a full-viewport
+  // PAGE. Body padding cannot move a fixed element, and at the old z-index of
+  // 200 the chat opened underneath it.
+  test('the chat sits ABOVE the site plan, and still below modals', () => {
+    const z = /z-index:(\d+);display:flex;flex-direction:column;transform:translateX\(100%\)/.exec(src);
+    expect(z).not.toBeNull();
+    const panelZ = Number(z[1]);
+    const sitePlanZ = 500;   // css/nodegraph.css #nodeGraphTab
+    const modalZ = 1000;     // .modal
+    expect(panelZ).toBeGreaterThan(sitePlanZ);
+    expect(panelZ).toBeLessThan(modalZ);
+  });
+
+  test('the site plan is given the drawer’s width as a right inset, so the two sit side by side', () => {
+    expect(src).toContain('body.p86-ai-open #nodeGraphTab { right: var(--p86-ai-w, 0px);');
+    // And goes back to full width on the screens where the chat overlays.
+    expect(src).toContain('@media (max-width: 1100px) { body.p86-ai-open #nodeGraphTab { right: 0; } }');
+  });
+
+  test('a surface that lost width is told to re-measure — twice, because the slide takes time', () => {
+    jest.useFakeTimers();
+    const fired = [];
+    window.addEventListener('resize', () => fired.push(1));
+    const nudge = compile(['var _nudgeTimer = null;', extractFunction(src, 'nudgeLayout')],
+      ['window', 'setTimeout', 'clearTimeout'], [window, setTimeout, clearTimeout], 'nudgeLayout');
+    nudge();
+    expect(fired.length).toBe(1);        // immediately
+    jest.advanceTimersByTime(300);
+    expect(fired.length).toBe(2);        // and once the transition has landed
+    jest.useRealTimers();
+  });
+});
+
+describe('it opens again after a reload', () => {
+  function restorer(opts) {
+    opts = opts || {};
+    const opened = [];
+    const scheduled = [];
+    const countingSetTimeout = (fn, ms) => { scheduled.push(ms); return setTimeout(fn, ms); };
+    const fn = compile(
+      [extractFunction(src, 'wasOpenLastTime'), extractFunction(src, 'restoreOpenState')],
+      ['window', 'document', 'localStorage', 'setTimeout', 'getComputedStyle', 'open', '_open', '_isDocked', 'AI_PANEL_OPEN_KEY'],
+      [window, document, window.localStorage, countingSetTimeout, window.getComputedStyle,
+        () => opened.push(1), !!opts.alreadyOpen, !!opts.docked, 'p86-ai-panel-open'],
+      'restoreOpenState');
+    return { fn, opened, scheduled };
+  }
+
+  function shell(display) {
+    document.body.innerHTML = '<div id="app-container" style="display:' + display + '"></div>';
+  }
+
+  beforeEach(() => { jest.useFakeTimers(); window.localStorage.clear(); });
+  afterEach(() => { jest.useRealTimers(); });
+
+  test('left open, it comes back once the app shell is on screen', () => {
+    window.localStorage.setItem('p86-ai-panel-open', '1');
+    shell('block');
+    const r = restorer();
+    r.fn();
+    jest.advanceTimersByTime(300);
+    expect(r.opened.length).toBe(1);
+  });
+
+  test('left closed, nothing opens', () => {
+    window.localStorage.setItem('p86-ai-panel-open', '0');
+    shell('block');
+    const r = restorer();
+    r.fn();
+    jest.advanceTimersByTime(2000);
+    expect(r.opened).toEqual([]);
+  });
+
+  test('it waits for the app and never opens over a login screen', () => {
+    window.localStorage.setItem('p86-ai-panel-open', '1');
+    shell('none');            // still signed out
+    const r = restorer();
+    r.fn();
+    jest.advanceTimersByTime(3000);
+    expect(r.opened).toEqual([]);      // nothing yet
+    document.getElementById('app-container').style.display = 'block';
+    jest.advanceTimersByTime(300);
+    expect(r.opened.length).toBe(1);   // and in it comes
+  });
+
+  test('it gives up rather than polling for ever on a page that has no app shell', () => {
+    window.localStorage.setItem('p86-ai-panel-open', '1');
+    document.body.innerHTML = '';      // sub portal / share link
+    const r = restorer();
+    r.fn();
+    jest.advanceTimersByTime(60000);
+    expect(r.opened).toEqual([]);
+    // And it STOPPED: no chat, and no timer still ticking. "Nothing opened"
+    // alone would be just as true of a poll that runs for the life of the tab.
+    const after60s = r.scheduled.length;
+    jest.advanceTimersByTime(60000);
+    expect(r.scheduled.length).toBe(after60s);
+    // It gave up inside its own deadline rather than at some far horizon.
+    expect(after60s).toBeLessThan(60);
+  });
+
+  test('it does not fight something that already opened the chat, or a docked host', () => {
+    window.localStorage.setItem('p86-ai-panel-open', '1');
+    shell('block');
+    const already = restorer({ alreadyOpen: true });
+    already.fn();
+    jest.advanceTimersByTime(2000);
+    expect(already.opened).toEqual([]);
+    const docked = restorer({ docked: true });
+    docked.fn();
+    jest.advanceTimersByTime(2000);
+    expect(docked.opened).toEqual([]);
+  });
+
+  test('docking never writes the remembered state — that is the host page’s doing, not yours', () => {
+    const writes = [];
+    const remember = compile([extractFunction(src, 'rememberOpenState')],
+      ['localStorage', '_isDocked', 'AI_PANEL_OPEN_KEY'],
+      [{ setItem: (k, v) => writes.push(v) }, true, 'p86-ai-panel-open'], 'rememberOpenState');
+    remember(true);
+    expect(writes).toEqual([]);
   });
 });

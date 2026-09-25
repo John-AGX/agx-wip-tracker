@@ -1108,6 +1108,18 @@ function p86Ask(message, opts) {
   // Persist the user's preferred panel width across sessions. Min/max
   // protect against the user pulling it off-screen or shrinking past
   // a usable width — the chat UI breaks below ~320px.
+  // Whether the drawer was open, so a reload puts the workspace back the way
+  // it was left. Only ever written for the DRAWER: docking is a host page's
+  // arrangement, not the user's choice, and restoring it would be wrong.
+  var AI_PANEL_OPEN_KEY = 'p86-ai-panel-open';
+  function rememberOpenState(isOpen) {
+    if (_isDocked) return;
+    try { localStorage.setItem(AI_PANEL_OPEN_KEY, isOpen ? '1' : '0'); } catch (e) {}
+  }
+  function wasOpenLastTime() {
+    try { return localStorage.getItem(AI_PANEL_OPEN_KEY) === '1'; } catch (e) { return false; }
+  }
+
   var AI_PANEL_WIDTH_KEY = 'p86-ai-panel-width';
   var AI_PANEL_WIDTH_MIN = 320;
   var AI_PANEL_WIDTH_MAX_FRAC = 0.92; // 92% of viewport width (overlay mode)
@@ -1169,16 +1181,32 @@ function p86Ask(message, opts) {
     } catch (e) {}
   }
 
+  // A MAP AND A CANVAS DO NOT NOTICE CSS. The site plan sizes its surfaces from
+  // measured pixels on window resize (nodegraph/ui.js reflowGraphSurfaces), and
+  // Google's map reads its container the same way — so a page that just lost
+  // 400px to the drawer keeps drawing at the old size until something tells it.
+  // Nudged twice: now, and after the 0.16s slide, because the final width is
+  // only true once the transition lands.
+  var _nudgeTimer = null;
+  function nudgeLayout() {
+    var fire = function () { try { window.dispatchEvent(new Event('resize')); } catch (e) {} };
+    fire();
+    if (_nudgeTimer) clearTimeout(_nudgeTimer);
+    _nudgeTimer = setTimeout(fire, 220);
+  }
+
   function ensurePanel() {
     var panel = document.getElementById('p86-ai-panel');
     if (panel) return panel;
     panel = document.createElement('div');
     panel.id = 'p86-ai-panel';
-    // z-index 200 sits above the node graph (#nodeGraphTab z-index:99)
-    // so 86 slides in over the graph rather than being
-    // covered by it. Modals (.modal z:1000) still trump the panel.
+    // ABOVE THE SITE PLAN. #nodeGraphTab is a fixed, full-viewport PAGE at
+    // z-index 500 (it was 99 when this said 200), so at 200 the chat opened
+    // UNDERNEATH the site plan and could not be seen at all there. 600 clears
+    // it while staying below modals and full-page editors (1000+), which are
+    // meant to cover the chat.
     var initialWidth = clampAIPanelWidth(loadAIPanelWidth());
-    panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:' + initialWidth + 'px;max-width:92vw;min-width:' + AI_PANEL_WIDTH_MIN + 'px;background:var(--surface,#141419);border-left:1px solid var(--border,#333);box-shadow:-4px 0 22px rgba(0,0,0,0.6);z-index:200;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.22s ease;';
+    panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:' + initialWidth + 'px;max-width:92vw;min-width:' + AI_PANEL_WIDTH_MIN + 'px;background:var(--surface,#141419);border-left:1px solid var(--border,#333);box-shadow:-4px 0 22px rgba(0,0,0,0.6);z-index:600;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.22s ease;';
     panel.innerHTML =
       // Left-edge resize grabber. Wider than it looks (12px hit area)
       // for easy targeting, but visually only a thin 2px line that
@@ -1617,6 +1645,7 @@ function p86Ask(message, opts) {
       var w = parseInt(panel.style.width, 10);
       if (Number.isFinite(w)) saveAIPanelWidth(w);
       publishAIWidth();
+      nudgeLayout();
       panel.style.transition = panel.dataset._priorTransition || 'transform 0.22s ease';
       delete panel.dataset._priorTransition;
       if (line) line.style.background = 'rgba(79,140,255,0.18)';
@@ -1771,6 +1800,8 @@ function p86Ask(message, opts) {
       panel.style.transform = 'translateX(0)';
       document.body.classList.add('p86-ai-open');
       publishAIWidth();
+      rememberOpenState(true);
+      nudgeLayout();
     }
     requestAnimationFrame(slideIn);
     // BELT AND BRACES: the rAF above is for the ANIMATION — the panel's
@@ -2059,6 +2090,8 @@ function p86Ask(message, opts) {
     if (panel) panel.style.transform = 'translateX(100%)';
     document.body.classList.remove('p86-ai-open');
     publishAIWidth();
+    rememberOpenState(false);
+    nudgeLayout();
     _open = false;
     // Stop the rolling-hint rotation while the panel is closed.
     if (_presetRotateTimer) { clearInterval(_presetRotateTimer); _presetRotateTimer = null; }
@@ -7745,6 +7778,14 @@ function p86Ask(message, opts) {
       // Mid-drag the page must track the cursor exactly, not chase it.
       'body.p86-ai-resizing { transition: none !important; cursor: ew-resize; user-select: none; } ' +
       'body.p86-ai-resizing * { user-select: none !important; } ' +
+      // THE SITE PLAN IS A FIXED, FULL-VIEWPORT PAGE (#nodeGraphTab, inset 0).
+      // body padding never moves a fixed element, so on the site plan the chat
+      // sat on top of the map however wide it was. Giving the page the same
+      // right inset as the drawer's width docks the two side by side, exactly
+      // as body padding does for every ordinary page.
+      'body.p86-ai-open #nodeGraphTab { right: var(--p86-ai-w, 0px); transition: right 0.16s ease; } ' +
+      'body.p86-ai-resizing #nodeGraphTab { transition: none !important; } ' +
+      '@media (max-width: 1100px) { body.p86-ai-open #nodeGraphTab { right: 0; } } ' +
       // On narrow screens fall back to the overlay behavior — no point
       // shoving a tablet's content into a 200px column.
       '@media (max-width: 1100px) { body.p86-ai-open { padding-right: 0; } }';
@@ -7819,6 +7860,42 @@ function p86Ask(message, opts) {
     _placePrompt(prompt, opts.autoSend !== false, opts.delay);
   }
 
+  // ── PUT IT BACK THE WAY IT WAS LEFT ──────────────────────────────────
+  // A reload used to close the chat, so anyone working with it open had to
+  // reopen it on every navigation that reloads the app.
+  //
+  // WAITS FOR THE APP, not just the document: this file loads on the login
+  // screen too, and opening a chat over a login form would be absurd. The app
+  // shell (#app-container) is hidden until a session is in hand, so that is the
+  // signal. It gives up after GIVE_UP_MS rather than polling for ever on a page
+  // that will never show it (the sub portal, a share link, a login nobody
+  // completes).
+  function restoreOpenState() {
+    if (!wasOpenLastTime()) return;
+    var GIVE_UP_MS = 12000;
+    var STEP_MS = 250;
+    var waited = 0;
+    var tick = function () {
+      if (_open || _isDocked) return;                 // something opened it first
+      var shell = document.getElementById('app-container');
+      var ready = shell && getComputedStyle(shell).display !== 'none';
+      if (ready) {
+        // No entity: the general chat, which is what the launcher opens.
+        try { open(); } catch (e) { /* never block the app over this */ }
+        return;
+      }
+      waited += STEP_MS;
+      if (waited < GIVE_UP_MS) setTimeout(tick, STEP_MS);
+    };
+    setTimeout(tick, STEP_MS);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', restoreOpenState);
+  } else {
+    restoreOpenState();
+  }
+
   window.p86AI = {
     open: open,
     openWithImages: openWithImages,
@@ -7835,6 +7912,10 @@ function p86Ask(message, opts) {
     askDocked: askDocked,   // seed + send a prompt into the docked pane ("Hand to 86")
     undock: undock,
     isDocked: function() { return _isDocked; },
+    // For test/ai-panel-dock.test.js: the reload-restore decision, drivable
+    // without booting the whole app.
+    _restoreOpenState: restoreOpenState,
+    _wasOpenLastTime: wasOpenLastTime,
     // Re-render the AG header + notice when the editor's Plan/Build
     // pill flips. Cheap call (just two DOM text writes).
     refreshPhaseChip: function() { try { refreshModeSpecificUI(); } catch (e) {} }
