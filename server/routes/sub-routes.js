@@ -28,6 +28,9 @@
 
 const express = require('express');
 const { pool } = require('../db');
+// The sub's money comes from their purchase orders, not from job_subs —
+// see services/money/sub-commitments.js for why those columns are dead.
+const { subCommitments } = require('../services/money/sub-commitments');
 const { requireAuth, requireCapability, requireOrgId } = require('../auth');
 const { sendForEvent } = require('../email');
 // Sender identity helpers — a separate, never-mocked module (see its header).
@@ -117,24 +120,44 @@ router.get('/',
   requireAuth, requireCapability('JOBS_VIEW_ALL'), requireOrgId,
   async (req, res) => {
     try {
+      // active_job_count still comes from job_subs — that column counts
+      // ASSIGNMENTS and works (47 across 18 subs, live). The two MONEY columns
+      // did not: nothing has written contract_amt/billed_to_date since the
+      // per-job sub editor was retired, so every sub read $0 contracted while
+      // their purchase orders said otherwise. Money now comes from the POs.
+      //
+      // The job_subs aggregate is now scoped through the job as well. Every
+      // writer already refuses to attach a sub to another tenant's job, so
+      // this is not a leak I measured — it is the predicate the rest of the
+      // file states at the door rather than inferring from the sub's stamp.
       const { rows } = await pool.query(`
-        SELECT s.*,
-               COALESCE(js.active_job_count, 0) AS active_job_count,
-               COALESCE(js.total_contracted, 0) AS total_contracted,
-               COALESCE(js.total_billed, 0) AS total_billed
+        SELECT s.*, COALESCE(js.active_job_count, 0) AS active_job_count
         FROM subs s
         LEFT JOIN (
-          SELECT sub_id,
-                 COUNT(*) FILTER (WHERE status = 'active') AS active_job_count,
-                 SUM(contract_amt) AS total_contracted,
-                 SUM(billed_to_date) AS total_billed
-          FROM job_subs
-          GROUP BY sub_id
+          SELECT jsub.sub_id,
+                 COUNT(*) FILTER (WHERE jsub.status = 'active') AS active_job_count
+          FROM job_subs jsub
+          JOIN jobs j ON j.id = jsub.job_id
+          WHERE (j.organization_id = $1 OR j.organization_id IS NULL)
+          GROUP BY jsub.sub_id
         ) js ON js.sub_id = s.id
         WHERE (s.organization_id = $1 OR s.organization_id IS NULL)
         ORDER BY lower(s.name) ASC
       `, [req.orgId]);
-      res.json({ subs: rows, trades: KNOWN_TRADES });
+
+      const money = await subCommitments(pool, req.orgId);
+      const subs = rows.map((r) => {
+        const m = money.get(r.id) || { contracted: 0, billed: 0, po_count: 0, job_count: 0 };
+        return Object.assign({}, r, {
+          total_contracted: m.contracted,
+          total_billed: m.billed,
+          // What the two money figures were derived FROM, so the page can say
+          // "4 POs on 2 jobs" instead of presenting a bare number.
+          po_count: m.po_count,
+          po_job_count: m.job_count,
+        });
+      });
+      res.json({ subs, trades: KNOWN_TRADES });
     } catch (e) {
       console.error('GET /api/subs error:', e);
       res.status(500).json({ error: 'Server error' });

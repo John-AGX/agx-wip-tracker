@@ -192,7 +192,21 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**575** occurrences of `organization_id IS NULL` across `server/`.
+**578** occurrences of `organization_id IS NULL` across `server/`.
+
+575 → 578: the Subs directory stopped reading `job_subs.contract_amt` (a
+column nothing writes any more, so every sub showed $0 against real purchase
+orders) and now derives contracted/billed from the POs themselves —
+`services/money/sub-commitments.js`, two reads, plus the `job_subs` count in
+`routes/sub-routes.js` which was scoped through the job at the same time.
+All three scope a JOB, and all three carry the arm for the reason every other
+PO read in the codebase carries it (`routes/purchase-order-routes.js`,
+`services/job-financials.js`): a legacy job with a NULL stamp still has real
+purchase orders on it, and the job page counts them. Dropping the arm on just
+these three would have made the directory disagree with the job page on
+exactly the legacy rows — a silent, tenant-shaped discrepancy in money, which
+is worse than the arm. When this item closes they retire with the reads they
+copied, not before.
 
 574 → 575: `<recent_writes>` in `buildTurnContext` (`routes/ai-routes.js`),
 the block that tells 86 and the Assistant what became of each change drafted

@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.56';
+const APP_VERSION = '1.57';
 
 const releases = [
+  {
+    version: '1.57',
+    date: '2026-09-25',
+    name: 'The Subs list shows what each sub is actually contracted for',
+    summary: 'Every subcontractor read $0 contracted. The figure came from a field nothing fills in any more; it now comes from their purchase orders, and the page also shows billed and remaining.',
+    changes: [
+      { type: 'fixed', text: 'The Subs list showed $0 contracted for every subcontractor, including ones holding hundreds of thousands of dollars in purchase orders. It was reading a contract amount that used to be typed in per job and that nothing has filled in since that screen was retired, so the column was always empty and the total at the top always zero. Each sub\u2019s contracted amount is now the sum of their live purchase orders \u2014 the same figure their name already shows on the job.' },
+      { type: 'new', text: 'Billed and Remaining now sit next to Contracted, and the contracted figure says how many purchase orders and jobs it came from. A sub with no live purchase order shows a dash rather than a confident $0, so \u201cnothing yet\u201d and \u201cnothing found\u201d no longer look the same. If more has been billed than the purchase orders committed, Remaining goes red instead of quietly showing a negative.' },
+      { type: 'fixed', text: 'A draft or cancelled purchase order no longer counts toward what a sub is contracted for, and a voided bill no longer counts as billed \u2014 matching how the same numbers are worked out on the job.' },
+    ],
+  },
   {
     version: '1.56',
     date: '2026-09-25',

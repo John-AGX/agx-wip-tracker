@@ -247,11 +247,19 @@ function p86Ask(message, opts) {
     }
 
     if (summaryEl) {
+      // Contracted / billed are the sum of each sub's live PURCHASE ORDERS
+      // (server: services/money/sub-commitments.js). They used to read
+      // job_subs.contract_amt, which nothing writes any more, so every figure
+      // on this page was $0 while the POs said $1.36M.
       var totalContracted = filtered.reduce(function(s, sub) { return s + Number(sub.total_contracted || 0); }, 0);
+      var totalBilled = filtered.reduce(function(s, sub) { return s + Number(sub.total_billed || 0); }, 0);
       var totalActive = filtered.reduce(function(s, sub) { return s + Number(sub.active_job_count || 0); }, 0);
+      var totalPOs = filtered.reduce(function(s, sub) { return s + Number(sub.po_count || 0); }, 0);
       summaryEl.textContent = filtered.length + ' sub' + (filtered.length === 1 ? '' : 's') +
         ' · ' + totalActive + ' active assignment' + (totalActive === 1 ? '' : 's') +
-        ' · ' + fmtMoney(totalContracted) + ' total contracted';
+        ' · ' + fmtMoney(totalContracted) + ' contracted across ' + totalPOs + ' PO' + (totalPOs === 1 ? '' : 's') +
+        ' · ' + fmtMoney(totalBilled) + ' billed' +
+        ' · ' + fmtMoney(totalContracted - totalBilled) + ' remaining';
     }
 
     if (!filtered.length) {
@@ -268,7 +276,8 @@ function p86Ask(message, opts) {
           '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);">' +
             '<tr>' +
               th('Sub', 'left', 'name') + th('Trade', 'left', 'trade') + th('Contact', 'left', 'contact') +
-              th('Active Jobs', 'right', 'activeJobs') + th('Total Contracted', 'right', 'contracted') +
+              th('Active Jobs', 'right', 'activeJobs') + th('Contracted', 'right', 'contracted') +
+              th('Billed', 'right', 'billed') + th('Remaining', 'right', 'remaining') +
               th('Compliance', 'left', 'compliance') + th('Status', 'left', 'status') + th('', 'right', 'actions') +
             '</tr>' +
           '</thead><tbody>' +
@@ -325,7 +334,33 @@ function p86Ask(message, opts) {
         { size: 12, col: 'contact' }
       ) +
       td(s.active_job_count || 0, { mono: true, align: 'right', col: 'activeJobs' }) +
-      td(fmtMoney(s.total_contracted || 0), { mono: true, align: 'right', color: '#34d399', col: 'contracted' }) +
+      td(
+        // The PO count is the provenance of the dollar beside it: a sub with
+        // no live PO reads a dash, not a confident $0.
+        Number(s.po_count || 0) > 0
+          ? fmtMoney(s.total_contracted || 0) +
+            '<div style="font-size:10px;color:var(--text-dim,#888);font-family:inherit;">' +
+              s.po_count + ' PO' + (Number(s.po_count) === 1 ? '' : 's') +
+              (Number(s.po_job_count || 0) > 1 ? ' · ' + s.po_job_count + ' jobs' : '') +
+            '</div>'
+          : '<span style="color:var(--text-dim,#666);">\u2014</span>',
+        { mono: true, align: 'right', color: '#34d399', col: 'contracted' }
+      ) +
+      td(
+        Number(s.total_billed || 0) > 0
+          ? fmtMoney(s.total_billed)
+          : '<span style="color:var(--text-dim,#666);">\u2014</span>',
+        { mono: true, align: 'right', color: '#60a5fa', col: 'billed' }
+      ) +
+      td(
+        // Over-billed goes red rather than showing a quiet negative: it means
+        // the bills against a PO have passed what the PO committed.
+        Number(s.po_count || 0) > 0
+          ? '<span style="color:' + ((Number(s.total_contracted || 0) - Number(s.total_billed || 0)) < 0 ? '#f87171' : '#fbbf24') + ';">' +
+              fmtMoney(Number(s.total_contracted || 0) - Number(s.total_billed || 0)) + '</span>'
+          : '<span style="color:var(--text-dim,#666);">\u2014</span>',
+        { mono: true, align: 'right', col: 'remaining' }
+      ) +
       td(compliance, { size: 11, col: 'compliance' }) +
       td(statusChip(s.status), { align: 'left', col: 'status' }) +
       td(
