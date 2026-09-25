@@ -1110,7 +1110,22 @@ function p86Ask(message, opts) {
   // a usable width — the chat UI breaks below ~320px.
   var AI_PANEL_WIDTH_KEY = 'p86-ai-panel-width';
   var AI_PANEL_WIDTH_MIN = 320;
-  var AI_PANEL_WIDTH_MAX_FRAC = 0.92; // 92% of viewport width
+  var AI_PANEL_WIDTH_MAX_FRAC = 0.92; // 92% of viewport width (overlay mode)
+  // Below this the drawer goes back to being an OVERLAY: on a tablet there is
+  // no room to give a column away, so the page is not pushed. Must stay in step
+  // with the media query in the stylesheet below.
+  var AI_PUSH_MIN_VIEWPORT = 1100;
+  // PUSH MODE. The page is shoved left by exactly the drawer's width, so the
+  // drawer's width IS the width taken off the app. Two limits, whichever bites
+  // first: never more than this share of the viewport, and never so wide that
+  // the page is left with less than a workable column. Without the second, a
+  // 1280px screen at 66% leaves 435px of app, which is narrower than the
+  // tables it has to show.
+  var AI_PANEL_PUSH_MAX_FRAC = 0.66;
+  var AI_PAGE_MIN = 560;
+  // > not >=: the stylesheet's media query is max-width:1100px, which INCLUDES
+  // 1100, so at exactly 1100 the page is not pushed and neither is the clamp.
+  function pushMode() { return window.innerWidth > AI_PUSH_MIN_VIEWPORT; }
   function loadAIPanelWidth() {
     try {
       var v = parseInt(localStorage.getItem(AI_PANEL_WIDTH_KEY), 10);
@@ -1122,7 +1137,13 @@ function p86Ask(message, opts) {
     try { localStorage.setItem(AI_PANEL_WIDTH_KEY, String(px)); } catch (e) {}
   }
   function clampAIPanelWidth(px) {
-    var max = Math.floor(window.innerWidth * AI_PANEL_WIDTH_MAX_FRAC);
+    var vw = window.innerWidth;
+    var max = pushMode()
+      ? Math.min(Math.floor(vw * AI_PANEL_PUSH_MAX_FRAC), vw - AI_PAGE_MIN)
+      : Math.floor(vw * AI_PANEL_WIDTH_MAX_FRAC);
+    // A very narrow window can make that maximum smaller than the minimum;
+    // the minimum wins, because a 200px chat is not a chat.
+    max = Math.max(AI_PANEL_WIDTH_MIN, max);
     return Math.max(AI_PANEL_WIDTH_MIN, Math.min(max, px));
   }
 
@@ -1164,9 +1185,13 @@ function p86Ask(message, opts) {
       // brightens on hover. While dragging we toggle a class that
       // disables the panel's slide transition so the resize feels
       // direct instead of laggy.
-      '<div id="ai-panel-resizer" title="Drag to resize" aria-label="Resize panel" ' +
-        'style="position:absolute;top:0;left:-6px;bottom:0;width:12px;cursor:ew-resize;z-index:1;display:flex;align-items:center;justify-content:center;">' +
-        '<div style="width:2px;height:100%;background:rgba(79,140,255,0.18);transition:background 0.15s;"></div>' +
+      '<div id="ai-panel-resizer" title="Drag to resize \u00b7 double-click to reset" aria-label="Resize chat panel" ' +
+        'role="separator" aria-orientation="vertical" tabindex="0" ' +
+        // touch-action:none or a finger drag scrolls the page instead of resizing.
+        'style="position:absolute;top:0;left:-7px;bottom:0;width:14px;cursor:ew-resize;z-index:1;display:flex;align-items:center;justify-content:center;touch-action:none;">' +
+        '<div style="width:3px;height:100%;background:rgba(79,140,255,0.18);transition:background 0.15s;"></div>' +
+        // A grip people can see: without it the drawer looks like an edge, not a control.
+        '<div aria-hidden="true" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:4px;height:34px;border-radius:3px;background:rgba(79,140,255,0.45);pointer-events:none;"></div>' +
       '</div>' +
       // Header — close button is the most prominent control on the left
       // (mirrors a typical drawer/sidebar UX) so it's never missed.
@@ -1525,13 +1550,18 @@ function p86Ask(message, opts) {
       if (!dragging && line) line.style.background = 'rgba(79,140,255,0.18)';
     });
 
-    handle.addEventListener('mousedown', function(e) {
+    // POINTER, not mouse: the same handler then serves a finger and a pen.
+    // With mousedown alone the drawer could only be resized with a mouse, and
+    // on a touch screen the drag scrolled the page instead.
+    handle.addEventListener('pointerdown', function(e) {
       e.preventDefault();
       e.stopPropagation();
+      try { handle.setPointerCapture(e.pointerId); } catch (err) { /* older engines */ }
       dragging = {
         startX: e.clientX,
         startW: panel.getBoundingClientRect().width
       };
+      document.body.classList.add('p86-ai-resizing');
       // Disable the slide transition mid-drag so the panel tracks
       // the cursor 1:1; restore it after.
       panel.dataset._priorTransition = panel.style.transition || '';
@@ -1539,34 +1569,71 @@ function p86Ask(message, opts) {
       if (line) line.style.background = '#4f8cff';
       document.body.style.cursor = 'ew-resize';
       document.body.style.userSelect = 'none';
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
     });
+
+    // Keyboard: the handle is a real separator control, so the drawer can be
+    // sized without a pointer at all. Home returns it to the default.
+    handle.addEventListener('keydown', function(e) {
+      var step = e.shiftKey ? 64 : 16;
+      var w = panel.getBoundingClientRect().width;
+      if (e.key === 'ArrowLeft') w += step;
+      else if (e.key === 'ArrowRight') w -= step;
+      else if (e.key === 'Home') w = 420;
+      else return;
+      e.preventDefault();
+      w = clampAIPanelWidth(w);
+      applyWidth(w);
+      saveAIPanelWidth(w);
+    });
+
+    // Double-click the grip: back to the default width.
+    handle.addEventListener('dblclick', function(e) {
+      e.preventDefault();
+      var w = clampAIPanelWidth(420);
+      applyWidth(w);
+      saveAIPanelWidth(w);
+    });
+
+    function applyWidth(w) {
+      panel.style.width = w + 'px';
+      // The page moves WITH the drag: publishing here is what makes the
+      // drawer feel docked to the side rather than floating over the page.
+      publishAIWidth();
+      if (handle.setAttribute) handle.setAttribute('aria-valuenow', String(Math.round(w)));
+    }
 
     function onMove(e) {
       if (!dragging) return;
       // Panel grows to the LEFT — moving cursor left should widen.
       var delta = dragging.startX - e.clientX;
-      var w = clampAIPanelWidth(dragging.startW + delta);
-      panel.style.width = w + 'px';
+      applyWidth(clampAIPanelWidth(dragging.startW + delta));
     }
     function onUp() {
       if (!dragging) return;
+      document.body.classList.remove('p86-ai-resizing');
       var w = parseInt(panel.style.width, 10);
       if (Number.isFinite(w)) saveAIPanelWidth(w);
+      publishAIWidth();
       panel.style.transition = panel.dataset._priorTransition || 'transform 0.22s ease';
       delete panel.dataset._priorTransition;
       if (line) line.style.background = 'rgba(79,140,255,0.18)';
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
       dragging = null;
     }
 
     // Re-clamp on viewport resize so a saved 1500px width doesn't
     // leave the panel wider than the new (smaller) screen.
     window.addEventListener('resize', function() {
+      // Crossing the push/overlay threshold changes the maximum, so the width
+      // is re-clamped and republished on every resize, not only a shrink.
+      publishAIWidth();
       var cur = panel.getBoundingClientRect().width;
       var next = clampAIPanelWidth(cur);
       if (next !== cur) panel.style.width = next + 'px';
@@ -7670,7 +7737,14 @@ function p86Ask(message, opts) {
       // (otherwise the rightmost totals chips get hidden behind the
       // 420px-wide overlay). Smooth transition keeps the shift from
       // feeling jarring.
-      'body.p86-ai-open { padding-right: 420px; transition: padding-right 0.22s ease; } ' +
+      // The page is pushed by the drawer's OWN width, read from the live var
+      // publishAIWidth() keeps. It used to be a constant 420px against a
+      // drag-resizable drawer: widen the chat and the page stopped following,
+      // so the drawer covered the right-hand side of whatever you were reading.
+      'body.p86-ai-open { padding-right: var(--p86-ai-w, 420px); transition: padding-right 0.16s ease; } ' +
+      // Mid-drag the page must track the cursor exactly, not chase it.
+      'body.p86-ai-resizing { transition: none !important; cursor: ew-resize; user-select: none; } ' +
+      'body.p86-ai-resizing * { user-select: none !important; } ' +
       // On narrow screens fall back to the overlay behavior — no point
       // shoving a tablet's content into a 200px column.
       '@media (max-width: 1100px) { body.p86-ai-open { padding-right: 0; } }';

@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.53';
+const APP_VERSION = '1.54';
 
 const releases = [
+  {
+    version: '1.54',
+    date: '2026-09-25',
+    name: 'The 86 chat docks to the side',
+    summary: 'Opening the chat now moves the page across by exactly its own width, so nothing sits underneath it. Drag its edge and the page moves with you \u2014 it stays locked to the side, and it can be resized by touch or keyboard as well as by mouse.',
+    changes: [
+      { type: 'fixed', text: 'The chat no longer covers the right-hand side of the page. It always meant to push the page across, but it pushed by a fixed 420px while the chat itself can be dragged wider \u2014 so any chat wider than that sat on top of whatever was underneath: the totals along the right, the last column of a table. The page now moves by the chat\u2019s real width, whatever you have set it to.' },
+      { type: 'improved', text: 'Dragging the edge moves the page with it, live, instead of jumping when you let go \u2014 so it reads as one docked panel rather than a sheet floating over the app. The chat stays locked to the side: dragging changes how wide it is and never where it is.' },
+      { type: 'improved', text: 'How wide it may get is now capped so the app keeps a workable column beside it \u2014 previously it could be dragged to almost the whole window. On a narrow screen it goes back to sitting over the page, which is the only thing that fits there.' },
+      { type: 'improved', text: 'The edge can be dragged with a finger or a pen, not just a mouse, and it has a visible grip. It can also be sized from the keyboard: focus it and use the arrow keys (hold Shift for bigger steps), or press Home \u2014 or double-click it \u2014 to go back to the default width.' },
+    ],
+  },
   {
     version: '1.53',
     date: '2026-09-24',
