@@ -435,10 +435,26 @@ describe('PREVIEW — the payment status mapping, in both directions', () => {
     // The exact-equality guard: 'Partially Paid' must not be swallowed by a
     // substring test into 'paid'.
     expect(billMatch.btBillStatus('Partially Paid')).toBeNull();
+  });
+
+  // The live dataset sends a NUMBER here — there is no text field on bills —
+  // and the codes were measured against what each bill had actually been paid.
+  test('the numeric code Buildertrend really sends is read: 2 is paid, 0 is open, 1 is nobody\u2019s guess', () => {
+    expect(billMatch.btBillStatus('2')).toBe('paid');
+    expect(billMatch.btBillStatus(2)).toBe('paid');
+    expect(billMatch.btBillStatus('0')).toBe('open');
+    // 8 live bills carry it and not one has a payment against it, so it is not
+    // "partly paid" — and a wrong guess here marks a payable settled.
+    expect(billMatch.btBillStatus('1')).toBeNull();
+    expect(billMatch.btBillStatus('7')).toBeNull();
+    // A word still reads as a word.
+    expect(billMatch.btBillStatus('Paid')).toBe('paid');
     expect(billMatch.btBillStatus('Pending Payment')).toBeNull();
     expect(billMatch.btBillStatus('Approved')).toBeNull();
     expect(billMatch.btBillStatus('Void')).toBeNull();
-    expect(billMatch.btBillStatus(2)).toBeNull();
+    // 2 as a NUMBER is the live spelling of paid (see the code map above); an
+    // unknown code is still nothing.
+    expect(billMatch.btBillStatus(9)).toBeNull();
     expect(billMatch.btBillStatus('')).toBeNull();
     // 'void' is deliberately OFF the ladder, so nothing can move onto or off it.
     expect(billMatch.RANK.void).toBeUndefined();

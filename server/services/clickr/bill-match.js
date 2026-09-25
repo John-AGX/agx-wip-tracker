@@ -92,7 +92,33 @@ const STATUS_LABEL = { open: 'Open', approved: 'Approved', paid: 'Paid', void: '
 // textKey lowercases and collapses punctuation, so 'Partially Paid' becomes
 // 'partially paid'. The comparisons below are EXACT for that reason: a
 // .includes('paid') would swallow it, and a .endsWith('paid') would too.
+// THE BILLS DATASET SENDS A NUMBER, NOT A WORD.
+//
+// Every other dataset carries a *Text field beside its code; this one does
+// not (field-map reads r.paymentStatus into paymentStatusText for exactly
+// that reason). So the words below matched nothing and all 104 live bills
+// reported "Buildertrend payment status \"2\" has no Project 86 word" — the
+// same shape as the markupType bug: a code read as if it were a word.
+//
+// WHAT THE CODES MEAN, measured on the live data 2026-09-24 rather than
+// assumed, by reading each bill's own amount against what Buildertrend says
+// has been paid on it:
+//   2 — 73 bills, EVERY ONE paid in full          -> paid
+//   0 — 23 bills, not a cent against any of them  -> open
+//   1 —  8 bills, also nothing paid               -> NOT MAPPED
+//
+// 1 stays unmapped on purpose. It is plainly not "partly paid" (none of the
+// eight has a payment), and nothing in the data says what it IS. A bill
+// status guessed wrong writes a money state onto a payable and drops it off
+// AP aging, so those eight keep reporting themselves for a person to settle.
+const BILL_CODE = { 0: 'open', 2: 'paid' };
+
 function btBillStatus(paymentStatusText) {
+  const raw = norm(paymentStatusText);
+  if (/^[0-9]+$/.test(raw)) {
+    const mapped = BILL_CODE[Number(raw)];
+    return mapped || null;
+  }
   const t = textKey(paymentStatusText);
   if (t === 'paid' || t === 'paid in full') return 'paid';
   if (t === 'unpaid' || t === 'not paid' || t === 'none' || t === 'no payments' || t === 'open') return 'open';

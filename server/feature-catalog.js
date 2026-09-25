@@ -526,9 +526,19 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.51';
+const APP_VERSION = '1.52';
 
 const releases = [
+  {
+    version: '1.52',
+    date: '2026-09-24',
+    name: 'Buildertrend\u2019s bill payments finally read',
+    summary: 'Buildertrend sends a bill\u2019s payment status as a number, and Project 86 was reading it as a word \u2014 so every one of your 104 bills reported that Buildertrend\u2019s status had no Project 86 equivalent, and nothing ever came across. It now reads the number.',
+    changes: [
+      { type: 'fixed', text: 'A bill\u2019s payment status comes across again. The bills feed is the one that sends a code rather than a word, so the comparison never matched and all 104 bills sat waiting on a status Project 86 said it could not understand. Buildertrend currently marks 73 of them paid in full \u2014 those can now be settled in Project 86 instead of ageing as open payables.' },
+      { type: 'improved', text: 'What each code means was measured, not assumed: every bill\u2019s own amount was read against what Buildertrend says has been paid on it. One code, carried by eight bills, is left deliberately unmapped \u2014 none of the eight has a payment against it, so it plainly does not mean part-paid, and nothing in the data says what it does mean. Those eight keep asking for a person rather than being guessed at, because a wrong guess marks a payable settled.' },
+    ],
+  },
   {
     version: '1.51',
     date: '2026-09-24',
