@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.52';
+const APP_VERSION = '1.53';
 
 const releases = [
+  {
+    version: '1.53',
+    date: '2026-09-24',
+    name: 'Receipts from the counter',
+    summary: 'A material used on a work order can carry the receipt for it, photographed at the counter — and because a receipt is a picture of prices, it goes up to the office and never comes back down a crew link.',
+    changes: [
+      { type: 'new', text: 'Send a receipt with the material. The crew takes a photo at the counter, or picks one from the phone, and it goes up with the line — up to three per line, for two hours after it is sent, and only while the office has not decided the line yet.' },
+      { type: 'new', text: 'The office sees the receipts on the line they belong to, and opens them full size to check what was paid before accepting the quantity.' },
+      { type: 'improved', text: 'A receipt never travels back. The crew link says only that a receipt was sent and how many; the picture itself is left out of the site photos, out of the completion report the property manager reads, and out of every answer a link can see. It is the one photo on a work order that only the office can open.' },
+    ],
+  },
   {
     version: '1.52',
     date: '2026-09-24',

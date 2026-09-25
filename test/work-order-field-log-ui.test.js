@@ -21,7 +21,11 @@ function lines() {
       { id: 'l_wait', status: 'submitted', source: 'crew', author_label: 'Luis', work_date: '2026-09-21', crew_size: 1, hours: 8, work_performed: 'Tested the float switch.', person_hours: 8 },
       { id: 'l_fix', status: 'accepted', source: 'crew', author_label: 'Marco', work_date: '2026-09-21', crew_size: 2, hours: 6.5, office_hours: 6, work_performed: 'Replaced the check valve.', person_hours: 12 },
     ],
-    materials: [],
+    materials: [
+      { id: 'm_rec', status: 'submitted', source: 'crew', author_label: 'Marco', description: '2" PVC check valve', quantity: 1, unit: 'ea',
+        receipts: [{ id: 'att_r1', filename: 'receipt.jpg', thumb_url: 'https://cdn.test/r1t', web_url: 'https://cdn.test/r1w' }] },
+      { id: 'm_none', status: 'accepted', source: 'crew', description: 'PVC primer', quantity: 1, unit: 'kit', receipts: [] },
+    ],
   };
 }
 
@@ -87,9 +91,13 @@ describe('what the office sees', () => {
     expect(host.querySelector('[data-line="l_wait"] .p86-fl-accept').textContent).toBe('Accept');
   });
 
-  test('a person who can only read the ticket gets no buttons', () => {
+  test('a person who can only read the ticket can look, and change nothing', () => {
     const { host } = mount({ canEdit: false });
-    expect(host.querySelectorAll('button').length).toBe(0);
+    // No decision, no correction, no entry …
+    expect(host.querySelectorAll('.p86-fl-accept, .p86-fl-reject, .p86-fl-change, .p86-fl-open-add').length).toBe(0);
+    expect(host.querySelectorAll('.p86-fl-form').length).toBe(0);
+    // … but a receipt is evidence, and looking at it changes nothing.
+    expect(host.querySelectorAll('.p86-fl-shot').length).toBe(1);
   });
 
   test('a panel whose read failed says so instead of showing zeros', () => {
@@ -143,6 +151,26 @@ describe('what each button sends', () => {
     await tick();
     expect(calls[0][0]).toBe('addLabor');
     expect(calls[0][2]).toMatchObject({ hours: '3', crew_size: 1, task_id: 'k1', work_performed: 'Swapped the pressure switch.' });
+  });
+});
+
+describe('receipts', () => {
+  test('a material line shows its receipt photos, and one with none shows nothing', () => {
+    const { host } = mount();
+    expect(host.querySelectorAll('[data-line="m_rec"] .p86-fl-shot').length).toBe(1);
+    expect(host.querySelector('[data-line="m_rec"] .p86-fl-shot img').getAttribute('src')).toBe('https://cdn.test/r1t');
+    expect(host.querySelectorAll('[data-line="m_none"] .p86-fl-receipts').length).toBe(0);
+  });
+
+  test('clicking one opens the lightbox on the real rows, and sends no decision', () => {
+    const opened = [];
+    window.p86Attachments = { openLightbox: (photos, i, opts) => opened.push([photos, i, opts]) };
+    const { host, calls } = mount();
+    host.querySelector('[data-line="m_rec"] .p86-fl-shot').click();
+    expect(opened).toHaveLength(1);
+    expect(opened[0][0][0].web_url).toBe('https://cdn.test/r1w');
+    expect(opened[0][1]).toBe(0);
+    expect(calls).toEqual([]);
   });
 });
 

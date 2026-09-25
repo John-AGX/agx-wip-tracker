@@ -180,15 +180,24 @@ async function taskPhotosByTask(db, orgId, taskIds) {
  *
  * The work order's SITE photos: images on the ticket itself (entity_type
  * 'service_ticket'), newest first, at most 60. Photos tagged 'flag' belong to
- * a flagged problem and are left out IN THE WHERE, before the LIMIT, so a
- * ticket carrying a wall of flag photos still shows its site photos; the JS
- * filter below stays as the case-insensitive backstop. `by` names who added
+ * a flagged problem, and photos tagged 'receipt' to a material line — both are
+ * left out IN THE WHERE, before the LIMIT, so a ticket carrying a wall of them
+ * still shows its site photos; the JS filter below stays as the
+ * case-insensitive backstop.
+ *
+ * THE RECEIPT EXCLUSION IS A MONEY RULE, not tidiness. A receipt is a picture
+ * of prices. This list is what the crew link shows and what the office's own
+ * Site photos card shows, so a receipt goes UP from the person who stood at
+ * the counter and comes back only on the field-log panel, office-side. `by` names who added
  * each one — the crew link's label (or 'Crew link') for a photo with no
  * uploader, otherwise the uploader's name when withNames is set (the office
  * read) or 'Office' (the crew read, which never shows office names). via_link
  * says it came from a link.
  */
 const SITE_PHOTO_LIMIT = 60;
+// Tags that make a photo something other than a site photo. 'flag' belongs to
+// a flagged problem; 'receipt' is a picture of prices on a material line.
+const NOT_A_SITE_PHOTO = Object.freeze(['flag', 'receipt']);
 
 function tagList(tags) {
   let list = tags;
@@ -201,6 +210,12 @@ function tagList(tags) {
 async function ticketSitePhotos(db, orgId, ticketId, opts) {
   if (orgId == null || ticketId == null || String(ticketId) === '') return [];
   const withNames = !!(opts && opts.withNames);
+  // One clause per excluded tag, in the containment idiom the rest of this
+  // codebase uses. The tags are BOUND parameters; nothing is written into the
+  // SQL text.
+  const notSitePhoto = NOT_A_SITE_PHOTO.map(function (_tag, i) {
+    return 'NOT ($' + (i + 3) + ' = ANY (SELECT jsonb_array_elements_text(tags)))';
+  }).join(' AND ');
   // The flag exclusion is a WHERE PREDICATE, not a post-filter. The LIMIT runs
   // in the database, so filtering afterwards let flag photos eat the window:
   // FLAG_OPEN_CAP (20) open flags x FLAG_PHOTO_CAP (6) photos = 120 rows on the
@@ -222,12 +237,15 @@ async function ticketSitePhotos(db, orgId, ticketId, opts) {
        LEFT JOIN users u ON u.id = a.uploaded_by AND u.organization_id = a.organization_id` : '') + `
       WHERE a.entity_type = 'service_ticket' AND a.entity_id = $1 AND a.organization_id = $2
         AND a.mime_type LIKE 'image/%'
-        AND NOT ($3 = ANY (SELECT jsonb_array_elements_text(tags)))
+        AND ${notSitePhoto}
       ORDER BY a.uploaded_at DESC LIMIT 120`,
-    [String(ticketId), orgId, 'flag']
+    [String(ticketId), orgId].concat(NOT_A_SITE_PHOTO)
   );
   const rows = r.rows
-    .filter(function (row) { return tagList(row.tags).indexOf('flag') < 0; })
+    .filter(function (row) {
+      const tags = tagList(row.tags);
+      return !NOT_A_SITE_PHOTO.some(function (tag) { return tags.indexOf(tag) >= 0; });
+    })
     .slice(0, SITE_PHOTO_LIMIT);
   if (!rows.length) return [];
 

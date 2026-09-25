@@ -497,11 +497,20 @@ describe('REGISTER 2 — the route population', () => {
     //      and no upstream call. A param-less GET, so it is DRIVEN here (with no
     //      ids it answers an empty map); the cross-org arm is pinned by
     //      test/weather-leads-route.test.js against the real handler.
-    expect(R.routes).toBe(627);
+    //      627 -> 628: POST /api/service-ticket-share/:token/materials-used/
+    //      :lineId/receipt — the receipt photo on a material line, on the same
+    //      share router and built exactly like the flag photo door: its gate
+    //      runs BEFORE multer, so a refused upload is never buffered, and it
+    //      finds the line only through THIS link (another link's line is the
+    //      same 404 an absent one gets). A WRITE, waived here and driven by
+    //      test/work-order-field-capture.test.js, which also pins that the
+    //      stored photo is tagged 'receipt' and so never reaches the crew
+    //      read, the site photos or any url the crew can see.
+    expect(R.routes).toBe(628);
     expect(R.routers).toBe(79);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (142 driven, 485 counted)', () => {
+  test('the DRIVEN / COUNTED-WAIVED split is committed (142 driven, 486 counted)', () => {
     // 466 -> 476: the ten Work Orders (1.30) routes above, every one waived.
     // 476 -> 477: POST /api/clients/merge, a write (see the note above).
     // 139 -> 141: the two Work Orders (1.33) reads above. Both are GETs with
@@ -511,7 +520,8 @@ describe('REGISTER 2 — the route population', () => {
     // 478 -> 485: the seven field-capture doors (see the note above).
     // 141 -> 142: GET /api/weather/leads (see above) — a param-less GET, so the
     // driven side moves and the waived side does not.
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 142, waived: 485 });
+    // 485 -> 486: the receipt door, a write (see the note above).
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 142, waived: 486 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

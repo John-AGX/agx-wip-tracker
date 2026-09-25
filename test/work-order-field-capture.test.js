@@ -19,6 +19,10 @@
 //   * a crew link sees only the lines IT sent, with a status word, and never
 //     the office's numbers, notes or any total;
 //   * another tenant cannot read or decide a line;
+//   * A RECEIPT IS A PICTURE OF PRICES: it goes up from the crew and never
+//     comes back down — the crew answer and the crew read carry a COUNT, the
+//     stored photo is tagged so the site photos leave it out, and only the
+//     office read returns a url;
 //   * THE FINISH RULE, on all three roads to Work complete — the crew's
 //     Finish, the office's status door, and the last building ticked: a work
 //     order billed after the work does not get there with no time on it, and
@@ -56,6 +60,7 @@ const FIELD_ROUTES = path.join(ROUTES_DIR, 'service-ticket-field-routes.js');
 const FIELD_SERVICE = path.join(SERVICES_DIR, 'service-ticket-field-capture.js');
 
 const fc = require('../server/services/service-ticket-field-capture');
+const workOrderSvc = require('../server/services/service-ticket-workorder');
 
 const TABLES = [
   'organizations', 'users', 'roles', 'jobs', 'job_access', 'leads', 'tasks', 'attachments', 'clients', 'estimates',
@@ -180,6 +185,7 @@ async function drive(router, method, routePath, opts) {
   const layer = router.stack.find((l) => l.route && l.route.path === routePath && l.route.methods[method]);
   if (!layer) throw new Error('route not declared: ' + method + ' ' + routePath);
   let chain = layer.route.stack.map((s) => s.handle);
+  if (o.skipHandler) chain = chain.filter((h) => h.name !== o.skipHandler);
   if (o.fromHandler) {
     const at = chain.findIndex((h) => h.name === o.fromHandler);
     if (at < 0) throw new Error('no handler named ' + o.fromHandler + ' on ' + routePath);
@@ -196,6 +202,7 @@ async function drive(router, method, routePath, opts) {
     protocol: 'https',
     ip: '127.0.0.1',
     get: () => 'project86.test',
+    file: o.file,
   };
   for (const h of chain) {
     let advanced = false;
@@ -218,6 +225,21 @@ const crewPatch = (token, body) => drive(shareRouter, 'patch', '/service-ticket-
   { params: { token }, body, fromHandler: 'loadTicketShare' });
 const crewTick = (token, taskId) => drive(shareRouter, 'post', '/service-ticket-share/:token/subtasks/:taskId/done',
   { params: { token, taskId }, body: { done: true }, fromHandler: 'loadTicketShare' });
+// A tiny valid JPEG, and the receipt door driven the way the flag photo door
+// is: multer is skipped, req.file put in place by hand.
+const JPEG = Buffer.from(
+  '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a' +
+  'HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAA' +
+  'AAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==', 'base64');
+const sendReceipt = (token, lineId, opts) => drive(shareRouter, 'post',
+  '/service-ticket-share/:token/materials-used/:lineId/receipt',
+  { params: { token, lineId }, body: (opts && opts.body) || {}, fromHandler: 'loadTicketShare',
+    skipHandler: 'multerOnePhoto',
+    file: { buffer: JPEG, mimetype: 'image/jpeg', originalname: 'receipt.jpg', size: JPEG.length } });
+const receiptRows = () => eng.all("SELECT * FROM attachments WHERE entity_type = 'service_ticket' ORDER BY id");
+const lineOf = (id) => eng.all('SELECT * FROM service_ticket_materials_used WHERE id = ?', id)[0];
+const parseIds = (v) => (typeof v === 'string' ? JSON.parse(v) : (v || []));
+
 const officeEnter = (as, id, kind, body, router) => drive(router || shareRouter, 'post',
   '/service-tickets/:id/' + (kind === 'labor' ? 'labor' : 'materials-used'), { as, params: { id }, body });
 const officeDecide = (as, id, kind, lineId, body) => drive(shareRouter, 'post',
@@ -275,6 +297,8 @@ function mutantFieldRouter(pairs) {
     },
     crewActor: (share) => ({ kind: 'share', shareId: share.id, label: share.recipient_name || null }),
     applyCrewName: async () => {},
+    storeShareImage: async () => ({ mime: 'image/jpeg', buf: Buffer.from([0]), thumbUrl: 'https://cdn.test/t', webUrl: 'https://cdn.test/w' }),
+    upload: { single: () => (req, res, next) => next() },
     ticketAccessOk: async () => true,
     loadOwnedTicket: async (id, orgId) => eng.all('SELECT * FROM service_tickets WHERE id = ? AND organization_id = ?', id, orgId)[0] || null,
   });
@@ -286,7 +310,7 @@ function mutantFieldRouter(pairs) {
 describe('what a line is allowed to say', () => {
   test('a time line needs a real day, a crew, hours and what was done', () => {
     expect(fc.validateLabor(LABOR, { today: TODAY })).toMatchObject({ ok: true, crewSize: 2, hours: 6.5 });
-    const refuse = (b) => fc.validateLabor(Object.assign({}, LABOR, b), { today: '2026-09-21' }).field;
+    const refuse = (b) => fc.validateLabor(Object.assign({}, LABOR, { work_date: '2026-09-21' }, b), { today: '2026-09-21' }).field;
     expect(refuse({ work_date: '2026-02-30' })).toBe('work_date');
     expect(refuse({ work_date: '2026-09-25' })).toBe('work_date');       // not happened yet
     expect(refuse({ work_date: '2025-01-01' })).toBe('work_date');       // over a year ago
@@ -500,6 +524,103 @@ describe('the office enters, accepts, corrects and rejects', () => {
     const r = await officeDecide(WIDE, 'st_tm', 'labor', 'lab_other', { decision: 'reject' });
     expect(answer(r)).toEqual([404, fc.MSG.lineNotFound]);
     expect(eng.all("SELECT status FROM service_ticket_labor WHERE id = 'lab_other'")[0].status).toBe('submitted');
+  });
+});
+
+// ── 4b. the receipt on a material line ────────────────────────────────────
+
+describe('a receipt goes up from the crew and never comes back down', () => {
+  async function sendMaterial(token) {
+    const r = await crewSend(null, token || TOK.tm, 'material', MATERIAL);
+    expect(r.statusCode).toBe(200);
+    return r.body.line.id;
+  }
+
+  test('stored on the ticket, tagged receipt, listed by the line — and the answer carries no url', async () => {
+    const lineId = await sendMaterial();
+    const r = await sendReceipt(TOK.tm, lineId);
+    expect(r.statusCode).toBe(200);
+    expect(Object.keys(r.body.receipt)).toEqual(['id']);
+    const [att] = receiptRows();
+    expect(att).toMatchObject({ entity_type: 'service_ticket', entity_id: 'st_tm', organization_id: 1, uploaded_by: null });
+    expect(parseIds(att.tags)).toEqual(['receipt']);
+    expect(parseIds(lineOf(lineId).receipt_ids)).toEqual([att.id]);
+    // Nothing in the answer is a link to the picture.
+    expect(JSON.stringify(r.body)).not.toMatch(/http|url|thumb/i);
+  });
+
+  test('the crew read counts them and never shows one', async () => {
+    const lineId = await sendMaterial();
+    await sendReceipt(TOK.tm, lineId);
+    const read = await crewRead(null, TOK.tm);
+    const line = read.body.field_capture.materials[0];
+    expect(line.receipts).toBe(1);
+    const text = JSON.stringify(read.body.field_capture);
+    expect(text).not.toMatch(/cdn\.test|thumb_url|web_url|receipt_ids|att_/);
+  });
+
+  test('and it is not a site photo, on any link or on the office read', async () => {
+    const lineId = await sendMaterial();
+    await sendReceipt(TOK.tm, lineId);
+    const read = await crewRead(null, TOK.tm);
+    expect(read.body.site_photos).toEqual([]);
+    const office = await workOrderSvc.ticketSitePhotos(require('../server/db').pool, 1, 'st_tm', { withNames: true });
+    expect(office).toEqual([]);
+  });
+
+  test('the OFFICE sees it, with the url it needs to look at the evidence', async () => {
+    const lineId = await sendMaterial();
+    await sendReceipt(TOK.tm, lineId);
+    const log = await fieldLog(WIDE, 'st_tm');
+    const line = log.body.materials[0];
+    expect(line.receipts).toHaveLength(1);
+    expect(line.receipts[0]).toMatchObject({ filename: 'receipt.jpg' });
+    expect(line.receipts[0].web_url).toBeTruthy();
+  });
+
+  test('another link cannot put a receipt on a line it did not send', async () => {
+    const lineId = await sendMaterial(TOK.tm);
+    const r = await sendReceipt(TOK.tm2, lineId);
+    expect(answer(r)).toEqual([404, fc.MSG.receiptLineNotFound]);
+    expect(receiptRows()).toHaveLength(0);
+  });
+
+  test('once the office has decided the line, it takes no more evidence', async () => {
+    const lineId = await sendMaterial();
+    await officeDecide(WIDE, 'st_tm', 'material', lineId, { decision: 'accept' });
+    const r = await sendReceipt(TOK.tm, lineId);
+    expect(answer(r)).toEqual([409, fc.MSG.receiptDecided]);
+    expect(receiptRows()).toHaveLength(0);
+  });
+
+  test('three is the cap', async () => {
+    const lineId = await sendMaterial();
+    for (let i = 0; i < fc.RECEIPT_CAP; i += 1) expect((await sendReceipt(TOK.tm, lineId)).statusCode).toBe(200);
+    const over = await sendReceipt(TOK.tm, lineId);
+    expect(answer(over)).toEqual([409, fc.MSG.receiptCap]);
+    expect(receiptRows()).toHaveLength(fc.RECEIPT_CAP);
+    expect(parseIds(lineOf(lineId).receipt_ids)).toHaveLength(fc.RECEIPT_CAP);
+  });
+
+  test('the same upload sent twice stores one photo', async () => {
+    const lineId = await sendMaterial();
+    const body = { upload_id: 'up-receipt-0001' };
+    const first = await sendReceipt(TOK.tm, lineId, { body });
+    const again = await sendReceipt(TOK.tm, lineId, { body });
+    expect([first.statusCode, again.statusCode, again.body.duplicate]).toEqual([200, 200, true]);
+    expect(again.body.receipt.id).toBe(first.body.receipt.id);
+    expect(receiptRows()).toHaveLength(1);
+  });
+
+  test('a work order that bills nothing has no receipt door either', async () => {
+    const r = await sendReceipt(TOK.none, 'stmat_nope');
+    expect(answer(r)).toEqual([409, fc.MSG.notTimeAndMaterials]);
+  });
+
+  test('a view link cannot send one', async () => {
+    const lineId = await sendMaterial();
+    expect((await sendReceipt(TOK.view, lineId)).statusCode).toBe(403);
+    expect(receiptRows()).toHaveLength(0);
   });
 });
 

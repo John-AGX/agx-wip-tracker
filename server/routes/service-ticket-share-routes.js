@@ -2097,6 +2097,10 @@ require('./service-ticket-field-routes').registerFieldCaptureRoutes(router, {
   applyCrewName,
   ticketAccessOk,
   loadOwnedTicket,
+  // The receipt door takes the same image pipeline and the same one-photo
+  // parser the flag door does, with its own gate ahead of multer.
+  storeShareImage,
+  upload: { single: function () { return multerOnePhoto; } },
 });
 
 module.exports = router;

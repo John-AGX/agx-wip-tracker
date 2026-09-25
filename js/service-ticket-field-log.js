@@ -12,6 +12,9 @@
 //   * every line the crew sent, waiting ones first, with Accept, Change and
 //     Reject. Change writes the office's number BESIDE the tech's — the claim
 //     stays on the line, so "the tech said 8, it was 6" stays readable;
+//   * the receipt photos on a material line. This is the ONLY screen they
+//     appear on: a receipt is a picture of prices, so it goes up from the crew
+//     and never comes back down a link, and the site-photo read leaves it out;
 //   * Add time / Add material, for work phoned in or written on paper. Those
 //     lines are born accepted and say the office entered them;
 //   * the totals, counted from ACCEPTED lines only, with the waiting ones
@@ -110,6 +113,17 @@
     return '<strong>' + esc(l.description || '') + '</strong> · ' + claimed(l.quantity, l.office_quantity, l.unit || '');
   }
 
+  function receiptsHTML(l) {
+    var shots = Array.isArray(l.receipts) ? l.receipts : [];
+    if (!shots.length) return '';
+    return '<div class="p86-fl-receipts">' + shots.map(function (p, i) {
+      var src = p.thumb_url || p.web_url || '';
+      return '<button type="button" class="p86-fl-shot" data-receipt="' + i + '" ' +
+        'title="Receipt" aria-label="Receipt photo ' + (i + 1) + '">' +
+        (src ? '<img src="' + esc(src) + '" alt="" loading="lazy" />' : 'Receipt') + '</button>';
+    }).join('') + '</div>';
+  }
+
   function lineHTML(kind, l, t, canEdit) {
     var key = 'change:' + kind + ':' + l.id;
     var editing = canEdit && _open[String(t.id)] === key;
@@ -117,6 +131,7 @@
     var html = '<div class="p86-fl-line' + (l.status === 'submitted' ? ' is-waiting' : '') + '" data-kind="' + esc(kind) + '" data-line="' + esc(l.id) + '">' +
       '<div class="p86-fl-line-h"><span>' + (kind === 'labor' ? laborHead(l) : materialHead(l)) + '</span>' + statusChip(l) + '</div>' +
       (kind === 'labor' && l.work_performed ? '<div class="p86-fl-what">' + esc(l.work_performed) + '</div>' : '') +
+      (kind === 'material' ? receiptsHTML(l) : '') +
       '<div class="p86-fl-meta">' + esc(where) + ' · ' + esc(whoLine(l)) +
         (l.office_note ? ' · <em>' + esc(l.office_note) + '</em>' : '') + '</div>';
     if (canEdit && !editing) {
@@ -235,6 +250,15 @@
     Array.prototype.forEach.call(node.querySelectorAll('button, .p86-fl-in'), function (el) { el.disabled = !!on; });
   }
 
+  // The line as the last read saw it — the photos are on the read, not in
+  // the DOM, so the lightbox is handed the real rows.
+  function lineOf(ctx, kind, lineId) {
+    var log = (ctx && ctx.r && ctx.r.field_log) || {};
+    var list = kind === 'material' ? log.materials : log.labor;
+    var hit = (Array.isArray(list) ? list : []).filter(function (l) { return String(l.id) === String(lineId); })[0];
+    return hit || null;
+  }
+
   function wire(node, ctx) {
     var t = (ctx && ctx.t) || {};
     var tid = String(t.id);
@@ -259,6 +283,15 @@
         (b.closest('.p86-fl-addform') && b.closest('.p86-fl-addform').getAttribute('data-kind'));
       var lineId = line ? line.getAttribute('data-line') : null;
 
+      if (b.classList.contains('p86-fl-shot')) {
+        var line = lineOf(ctx, kind, lineId);
+        var shots = (line && Array.isArray(line.receipts)) ? line.receipts : [];
+        var viewer = window.p86Attachments;
+        if (shots.length && viewer && typeof viewer.openLightbox === 'function') {
+          viewer.openLightbox(shots, Number(b.getAttribute('data-receipt')) || 0, { parentLabel: 'Receipt · ' + (line.description || '') });
+        }
+        return undefined;
+      }
       if (b.classList.contains('p86-fl-open-add')) { _open[tid] = 'add:' + kind; return repaint(); }
       if (b.classList.contains('p86-fl-change')) { _open[tid] = 'change:' + kind + ':' + lineId; return repaint(); }
       if (b.classList.contains('p86-fl-cancel')) { delete _open[tid]; return repaint(); }

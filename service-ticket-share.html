@@ -331,6 +331,14 @@
     #report .file.cam-file { display: none; }
   }
   .no-capture #report .file.cam-file { display: none; }
+  /* The receipt camera button follows the same two conditions as the field
+     report's Take photo: no camera for a mouse, and none where a browser
+     ignores capture (a Windows tablet). Its own rules, so the report's — which
+     test/work-order-take-photo.test.js pins to the letter — stay untouched. */
+  @media not all and (pointer: coarse) {
+    .tm-rec .file.cam-file { display: none; }
+  }
+  .no-capture .tm-rec .file.cam-file { display: none; }
   .bnotes { display: grid; }
   .bnote { font-size: 14px; padding: 6px 0; border-top: 1px solid var(--border); }
   .bnote:first-child { border-top: 0; padding-top: 0; }
@@ -450,6 +458,18 @@
   }
   .tm-form textarea { resize: vertical; }
   .tm-form .btn { justify-self: start; }
+  .tm-rec { display: flex; gap: 6px; flex-wrap: wrap; }
+  /* The two receipt buttons read like the field report's, which are styled
+     under #report: the same shape, restated for this card. */
+  .tm-rec .file {
+    display: inline-flex; align-items: center; justify-content: center; text-align: center;
+    flex: 1 1 0; min-width: 0; min-height: 44px; border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 14px; cursor: pointer; color: var(--text-2); font-size: 14px; font-weight: 600;
+  }
+  .tm-rec .file input { display: none; }
+  .tm-rec .file .camico { margin-right: 6px; }
+  .tm-rec .file:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+  .tm-picks { display: flex; gap: 6px; flex-wrap: wrap; }
   .tm-sent { display: grid; gap: 7px; margin-top: 12px; }
   .tm-sent > .lbl { margin: 0; }
   .tm-line { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
@@ -2193,6 +2213,10 @@
   };
   var tmBusy = { labor: false, material: false };
   var tmNote = { labor: null, material: null };
+  // Receipt photos PICKED but not yet sent: they have nowhere to go until the
+  // material line exists, so they are held here and queued the moment it does.
+  // [{ file, url }] — the url is a preview and is revoked when it goes.
+  var tmReceipts = [];
 
   function localToday() {
     var n = new Date();
@@ -2245,10 +2269,13 @@
       body = l.work_performed || '';
     } else {
       // A material leads with WHAT it was; how much and where sit under it.
+      // A receipt is COUNTED, never shown: the office has it.
+      var recs = Number(l.receipts) || 0;
       return '<div class="tm-line">' +
         '<div class="tm-line-h"><span class="tm-line-what">' + esc(l.description || '') + '</span>' +
           '<span class="tm-st' + (st.cls ? ' ' + st.cls : '') + '">' + esc(st.text) + '</span></div>' +
-        '<div class="tm-line-n">' + esc(String(l.quantity)) + (l.unit ? ' ' + esc(l.unit) : '') + ' · ' + esc(where) + '</div>' +
+        '<div class="tm-line-n">' + esc(String(l.quantity)) + (l.unit ? ' ' + esc(l.unit) : '') + ' · ' + esc(where) +
+          (recs ? ' · ' + esc(recs === 1 ? 'receipt sent' : recs + ' receipts sent') : '') + '</div>' +
       '</div>';
     }
     return '<div class="tm-line">' +
@@ -2289,8 +2316,21 @@
             '<label>Unit<input type="text" maxlength="30" placeholder="ea, ft, gal" class="tm-in" data-tm="material.unit" value="' + esc(tmValue('material', 'unit')) + '"' + off('material') + ' /></label>' +
           '</div>' +
           tmBuildingSelect('material', tasks) +
+          // The receipt: taken at the counter, sent to the office with the
+          // line. It is never shown back here — a receipt is a picture of
+          // prices, and this link can be forwarded to anyone.
+          '<div class="tm-rec">' +
+            '<label class="file cam-file tm-cam" tabindex="0" role="button">' + CAM_ICON(16) +
+              'Receipt photo<input type="file" class="tm-rec-in" accept="image/*" capture="environment"' + off('material') + ' /></label>' +
+            '<label class="file" tabindex="0" role="button"><input type="file" class="tm-rec-in" accept="image/*" multiple' + off('material') + ' />Upload receipt</label>' +
+          '</div>' +
+          (tmReceipts.length ? '<div class="tm-picks">' + tmReceipts.map(function (p, i) {
+            return '<span class="shot flag-pend">' + (p.url ? '<img src="' + esc(p.url) + '" alt="" />' : '') +
+              '<button type="button" class="flag-photo-rm tm-rec-rm" data-idx="' + i + '" aria-label="Remove receipt">&#xD7;</button></span>';
+          }).join('') + '</div>' : '') +
           '<button type="button" class="btn primary tm-send" data-kind="material"' + off('material') + '>Send material</button>' +
           '<div class="msg" id="tmMsg-material">' + (tmNote.material ? esc(tmNote.material.text) : '') + '</div>' +
+          upqElHTML('receipt', 'tmRecUpq') +
         '</div>';
     }
     if (labor.length || mats.length) {
@@ -2317,6 +2357,44 @@
     return body;
   }
 
+  // A picked receipt, previewed locally. The same shape the problem form
+  // keeps its photos in, and dropped the same way.
+  function addReceiptPicks(input) {
+    var files = Array.prototype.slice.call(input.files || []);
+    input.value = '';
+    files.forEach(function (file) {
+      if (!file || tmReceipts.length >= 3) return;
+      var same = tmReceipts.some(function (p) {
+        return p.file.name === file.name && p.file.size === file.size && p.file.lastModified === file.lastModified;
+      });
+      if (same) return;
+      var url = '';
+      try { url = URL.createObjectURL(file); } catch (e) { url = ''; }
+      tmReceipts.push({ file: file, url: url });
+    });
+    render(lastData);
+  }
+
+  function dropReceiptPick(i) {
+    var p = tmReceipts[i];
+    if (!p) return;
+    if (p.url) { try { URL.revokeObjectURL(p.url); } catch (e) { /* already gone */ } }
+    tmReceipts.splice(i, 1);
+    render(lastData);
+  }
+
+  // The line has landed: its receipts can go now, one target key for all of
+  // them, so the card can say how they are getting on.
+  function sendReceiptsFor(lineId) {
+    if (!tmReceipts.length || !lineId) return;
+    var files = tmReceipts.map(function (p) { return p.file; });
+    tmReceipts.forEach(function (p) {
+      if (p.url) { try { URL.revokeObjectURL(p.url); } catch (e) { /* already gone */ } }
+    });
+    tmReceipts = [];
+    addPhotos(files, { key: 'receipt', receiptLineId: lineId });
+  }
+
   function sendTimeLine(kind) {
     if (tmBusy[kind]) return;
     tmBusy[kind] = true;
@@ -2331,8 +2409,10 @@
       body: JSON.stringify(tmBody(kind))
     }).then(function (r) {
       return readJSON(r, 'That could not be sent.');
-    }).then(function () {
+    }).then(function (data) {
       if (!alive()) return;
+      // The line is stored, so its receipts have somewhere to go.
+      if (kind === 'material') sendReceiptsFor(data && data.line && data.line.id);
       // Confirmed: the form starts over (the day and the crew stay — the
       // next line is usually the same day and the same people).
       var keep = kind === 'labor'
@@ -2366,6 +2446,13 @@
     });
     Array.prototype.forEach.call(root.querySelectorAll('.tm-send'), function (b) {
       b.addEventListener('click', function () { if (!b.disabled) sendTimeLine(b.getAttribute('data-kind')); });
+    });
+    Array.prototype.forEach.call(root.querySelectorAll('.tm-rec-in'), function (inp) {
+      openFileOnKey(inp.parentNode);
+      inp.addEventListener('change', function () { addReceiptPicks(inp); });
+    });
+    Array.prototype.forEach.call(root.querySelectorAll('.tm-rec-rm'), function (b) {
+      b.addEventListener('click', function () { dropReceiptPick(Number(b.getAttribute('data-idx'))); });
     });
   }
 
@@ -2741,6 +2828,10 @@
     }
     var target = item.target || {};
     var toFlag = target.flagId != null;
+    // A receipt belongs to ONE material line and is gated the same way a
+    // problem's photo is (the line still waiting on the office, inside two
+    // hours, under three), so it carries its upload id in a header too.
+    var toReceipt = target.receiptLineId != null;
     var fd = new FormData();
     if (target.kind) fd.append('kind', target.kind);
     if (crewName.trim() && !toFlag) fd.append('name', crewName.trim());
@@ -2749,15 +2840,17 @@
     var base = '/api/service-ticket-share/' + encodeURIComponent(token);
     var url = toFlag
       ? base + '/flags/' + encodeURIComponent(target.flagId) + '/photo'
-      : target.taskId != null
-        ? base + '/subtasks/' + encodeURIComponent(target.taskId) + '/photo'
-        : base + '/photo';
+      : toReceipt
+        ? base + '/materials-used/' + encodeURIComponent(target.receiptLineId) + '/receipt'
+        : target.taskId != null
+          ? base + '/subtasks/' + encodeURIComponent(target.taskId) + '/photo'
+          : base + '/photo';
     var init = { method: 'POST', body: fd, cache: 'no-store', signal: signal };
     // The problem door checks its photo cap, its 2 hours and whether the
     // office resolved it BEFORE it reads the upload. The upload id rides in a
     // header too, so a retried photo that already landed is recognised there
     // instead of being refused.
-    if (toFlag) init.headers = { 'X-Upload-Id': item.uploadId };
+    if (toFlag || toReceipt) init.headers = { 'X-Upload-Id': item.uploadId };
     return fetch(url, init).then(function (r) {
       return readJSON(r, 'That photo could not be uploaded.');
     }).then(null, function (err) {
@@ -2765,7 +2858,7 @@
       // past its 2 hours). The queue stops every waiting photo on a 409, so it
       // is passed on as a plain refusal of this photo alone; building photos
       // waiting behind it still go.
-      if (toFlag && err && Number(err.status) === 409) err.status = 400;
+      if ((toFlag || toReceipt) && err && Number(err.status) === 409) err.status = 400;
       throw err;
     }).then(function (data) {
       // A 200 that is not the server's answer (a Wi-Fi sign-in page, a proxy)

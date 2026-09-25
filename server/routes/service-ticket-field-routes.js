@@ -7,6 +7,18 @@
 //   PUBLIC (no auth — the token IS the credential):
 //     POST /api/service-ticket-share/:token/labor            FC1 send time
 //     POST /api/service-ticket-share/:token/materials-used   FC2 send a material
+//     POST /api/service-ticket-share/:token/materials-used/:lineId/receipt
+//                                                            FC8 one receipt photo
+//       stShareIpLimiter, stShareWriteLimiter, loadTicketShare, receiptGate,
+//       upload.single('file')
+//       -> receiptGate runs BEFORE multer, so a refused upload is never
+//          buffered: the crew gate, the ticket billing after the work, the line
+//          sent through THIS link, still waiting on the office, within 2 hours
+//          of being sent, under 3 receipts
+//       -> upload_id (multipart field, or X-Upload-Id header / ?upload_id= so
+//          the gate can see it): a photo already on the line answers
+//          duplicate:true even when the gate would now refuse; a stored row
+//          that never made it onto the line is put on it, once
 //       stShareIpLimiter, stShareWriteLimiter, loadTicketShare
 //       -> crewGate (a respond link; the ticket not draft, approved, closed or
 //          cancelled) -> the ticket bills after the work (bill_as
@@ -31,6 +43,11 @@
 //
 // NO MONEY, NO TOTALS TO THE CREW. The crew answers are publicLine — the line
 // this link sent, a status word, and nothing the office changed.
+//
+// AND NO RECEIPT COMES BACK. A receipt is a picture of prices. It goes UP from
+// the person who stood at the counter and is never served down any link: the
+// crew answer carries a COUNT, the photo is tagged so the site-photo read
+// leaves it out, and only the office read returns a url.
 'use strict';
 
 const { pool } = require('../db');
@@ -39,10 +56,12 @@ const { callerOrgId } = require('../org-access');
 const { stShareIpLimiter, stShareWriteLimiter } = require('../rate-limit');
 const fc = require('../services/service-ticket-field-capture');
 const workOrder = require('../services/service-ticket-workorder');
+const dedupe = require('../services/upload-dedupe');
 const tz = require('../timezone');
 
 const TICKET_NOT_FOUND = 'Service ticket not found';
-const REQUIRED_DEPS = ['loadTicketShare', 'crewGate', 'crewActor', 'applyCrewName', 'ticketAccessOk', 'loadOwnedTicket'];
+const REQUIRED_DEPS = ['loadTicketShare', 'crewGate', 'crewActor', 'applyCrewName', 'ticketAccessOk',
+  'loadOwnedTicket', 'storeShareImage'];
 
 // The URL word for each kind of line.
 const PATH_OF = Object.freeze({ labor: 'labor', material: 'materials-used' });
@@ -70,12 +89,18 @@ function validate(kind, body, today) {
   return kind === 'labor' ? fc.validateLabor(body, { today: today }) : fc.validateMaterial(body);
 }
 
+function storageModule() { return require('../storage').storage; }
+
 function registerFieldCaptureRoutes(router, deps) {
   const d = deps || {};
   REQUIRED_DEPS.forEach(function (name) {
     if (typeof d[name] !== 'function') throw new Error('registerFieldCaptureRoutes: missing dependency ' + name);
   });
-  const { loadTicketShare, crewGate, crewActor, applyCrewName, ticketAccessOk, loadOwnedTicket } = d;
+  if (!d.upload || typeof d.upload.single !== 'function') {
+    throw new Error('registerFieldCaptureRoutes: missing dependency upload');
+  }
+  const { loadTicketShare, crewGate, crewActor, applyCrewName, ticketAccessOk, loadOwnedTicket,
+    storeShareImage, upload } = d;
 
   // ── FC1 / FC2: the crew sends a line ──────────────────────────────────
   function crewDoor(kind) {
@@ -158,6 +183,189 @@ function registerFieldCaptureRoutes(router, deps) {
     router.post('/service-ticket-share/:token/' + PATH_OF[kind],
       stShareIpLimiter, stShareWriteLimiter, loadTicketShare, crewDoor(kind));
   });
+
+  // ── FC8: one receipt photo on a material line ─────────────────────────
+  // The same pipeline a flagged problem's photo takes
+  // (service-ticket-flag-routes.js F2), with one difference that matters: the
+  // stored row is tagged 'receipt', which is what keeps it out of the site
+  // photos the crew link and the completion report read.
+  function duplicateBody(found) {
+    return { ok: true, duplicate: true, receipt: { id: found.id } };
+  }
+
+  function findTicketUpload(ticket, uploadId) {
+    if (!uploadId) return Promise.resolve(null);
+    return dedupe.findUpload(pool, {
+      orgId: ticket.organization_id, entityType: 'service_ticket', entityId: ticket.id, uploadId: uploadId,
+    });
+  }
+
+  // The multipart body is not parsed when the gate runs, so the header or the
+  // query parameter is the only copy of the upload id it can read.
+  function earlyUploadId(req) {
+    const h = req.headers && req.headers['x-upload-id'];
+    const q = req.query && req.query.upload_id;
+    return dedupe.uploadIdFrom({ upload_id: typeof h === 'string' && h ? h : q });
+  }
+
+  // BEFORE multer. A request refused here never has its file read.
+  async function receiptGate(req, res, next) {
+    try {
+      if (!crewGate(req, res)) return;
+      if (!fc.fieldCaptureOn(req.ticket)) return res.status(409).json({ error: fc.MSG.notTimeAndMaterials });
+      const lineId = String(req.params.lineId || '');
+      if (!fc.LINE_ID_RE.test(lineId)) return res.status(404).json({ error: fc.MSG.receiptLineNotFound });
+      const row = await fc.loadMaterialForReceipt(pool, req.ticket, req.share.id, lineId);
+      const verdict = fc.materialMayTakeReceipt(row);
+      const early = earlyUploadId(req);
+      if (!verdict.ok) {
+        // A receipt that already landed on this line, sent again because its
+        // answer was lost, is not refused because the office has since
+        // decided the line or the two hours have run out.
+        if (row && early) {
+          const found = await findTicketUpload(req.ticket, early);
+          if (found && fc.lineHasReceipt(row, found.id)) return res.json(duplicateBody(found));
+        }
+        return res.status(verdict.status).json({ error: verdict.error });
+      }
+      req.materialLine = row;
+      req.receiptUploadId = early;
+      next();
+    } catch (e) {
+      console.error('[service-ticket-field] receipt gate failed', e);
+      res.status(500).json({ error: fc.MSG.receiptFailed });
+    }
+  }
+
+  // Is the photo on the line after all (the append committed and only its
+  // answer was lost)? true, false, or null when even this read failed.
+  async function receiptLanded(share, ticket, lineId, attachmentId) {
+    try {
+      const row = await fc.loadMaterialForReceipt(pool, ticket, share.id, lineId);
+      return !!row && fc.lineHasReceipt(row, attachmentId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Best effort: the attachment row goes, and its stored files only once the
+  // row is gone (a row left behind is finished by the retry, and needs them).
+  async function removeUnattached(orgId, attachmentId, keys) {
+    try {
+      await pool.query('DELETE FROM attachments WHERE id = $1 AND organization_id = $2', [attachmentId, orgId]);
+    } catch (_) {
+      return;
+    }
+    await dedupe.discardKeys(storageModule(), keys);
+  }
+
+  router.post('/service-ticket-share/:token/materials-used/:lineId/receipt',
+    stShareIpLimiter, stShareWriteLimiter, loadTicketShare, receiptGate, upload.single('file'),
+    async function addReceipt(req, res) {
+      try {
+        const share = req.share;
+        const ticket = req.ticket;
+        const line = req.materialLine;
+        const orgId = ticket.organization_id;
+
+        const uploadId = dedupe.uploadIdFrom(req.body) || req.receiptUploadId || null;
+        const duplicateOf = async function () {
+          const found = await findTicketUpload(ticket, uploadId);
+          if (!found) return false;
+          if (fc.lineHasReceipt(line, found.id)) {
+            res.json(duplicateBody(found));
+            return true;
+          }
+          const holder = await fc.receiptHolder(pool, ticket, found.id);
+          if (holder !== String(line.id) && (holder || !fc.isReceiptRow(found))) {
+            // The upload id belongs to another line's receipt, or to a photo
+            // that is not a receipt: never moved onto this line.
+            res.status(409).json({ error: fc.MSG.receiptFailed });
+            return true;
+          }
+          const attached = await fc.attachReceipt(pool, ticket, line.id, found.id);
+          if (!attached.ok) {
+            res.status(attached.status).json({ error: attached.error });
+            return true;
+          }
+          if (attached.added) await receiptAdded(share, ticket, line.id, found.id);
+          res.json(duplicateBody(found));
+          return true;
+        };
+        if (await duplicateOf()) return;
+
+        const attId = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        const img = await storeShareImage(req.file, 'service_ticket/' + ticket.id + '/' + attId);
+        if (!img || img.error) {
+          return res.status((img && img.status) || 400).json({ error: (img && img.error) || 'No file' });
+        }
+        const keys = [img.thumbKey, img.webKey, img.originalKey];
+
+        const posR = await pool.query(
+          "SELECT COALESCE(MAX(position), -1) AS max_pos FROM attachments WHERE entity_type = 'service_ticket' AND entity_id = $1 AND organization_id = $2",
+          [ticket.id, orgId]
+        );
+        const position = (posR.rows[0] && posR.rows[0].max_pos != null) ? Number(posR.rows[0].max_pos) + 1 : 0;
+
+        let ins;
+        try {
+          ins = await pool.query(
+            // uploaded_by NULL: a logged-out crew member. organization_id from
+            // the TICKET row in hand. Tagged 'receipt', which is what keeps it
+            // off every crew-facing and client-facing photo list.
+            `INSERT INTO attachments (id, entity_type, entity_id, folder, filename, mime_type, size_bytes, width, height, thumb_url, web_url, original_url, thumb_key, web_key, original_key, position, uploaded_by, organization_id, tags, client_upload_id)
+             VALUES ($1,'service_ticket',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19)
+             RETURNING id`,
+            [attId, ticket.id, 'general', (req.file && req.file.originalname) || null, img.mime,
+             img.buf ? img.buf.length : 0, img.width == null ? null : img.width, img.height == null ? null : img.height,
+             img.thumbUrl || null, img.webUrl || null, img.originalUrl || null,
+             img.thumbKey || null, img.webKey || null, img.originalKey || null, position, null,
+             orgId, JSON.stringify([fc.RECEIPT_TAG]), uploadId]
+          );
+        } catch (e) {
+          if (uploadId && dedupe.isUploadIdConflict(e)) {
+            await dedupe.discardKeys(storageModule(), keys);
+            if (await duplicateOf()) return;
+          }
+          throw e;
+        }
+
+        let attached;
+        try {
+          attached = await fc.attachReceipt(pool, ticket, line.id, attId);
+        } catch (e) {
+          // The row is stored but may not be on the line. If the append did
+          // commit, this is a success; if it did not, the row and its files go,
+          // so no hidden photo is left behind; if even that cannot be told, the
+          // row stays and a retry with its upload id finishes it.
+          const landed = await receiptLanded(share, ticket, line.id, attId);
+          if (landed !== true) {
+            if (landed === false) await removeUnattached(orgId, attId, keys);
+            throw e;
+          }
+          attached = { ok: true, added: true };
+        }
+        if (!attached.ok) {
+          await pool.query('DELETE FROM attachments WHERE id = $1 AND organization_id = $2', [attId, orgId]);
+          await dedupe.discardKeys(storageModule(), keys);
+          return res.status(attached.status).json({ error: attached.error });
+        }
+        if (attached.added) await receiptAdded(share, ticket, line.id, attId);
+
+        // The ANSWER carries no url either: the page it is going to is a crew
+        // link, and it only needs to know the receipt arrived.
+        res.json({ ok: true, receipt: { id: (ins.rows[0] && ins.rows[0].id) || attId } });
+      } catch (e) {
+        console.error('[service-ticket-field] receipt failed', e);
+        res.status(500).json({ error: fc.MSG.receiptFailed });
+      }
+    });
+
+  async function receiptAdded(share, ticket, lineId, attachmentId) {
+    lastUsed(share, ticket);
+    await workOrder.insertEvent(pool, ticket, 'photo_added', crewActor(share),
+      { line_id: lineId, kind: 'receipt', attachment_id: attachmentId });
+  }
 
   // ── FC3: the office reads the field log ───────────────────────────────
   router.get('/service-tickets/:id/field-log', requireAuth, async function readFieldLog(req, res) {

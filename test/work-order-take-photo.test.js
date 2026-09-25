@@ -1142,22 +1142,36 @@ const HIDE_BLOCK_REPORT =
   '    #report .file.cam-file { display: none; }\n' +
   '  }\n';
 const NO_CAPTURE_REPORT_RULE = '  .no-capture #report .file.cam-file { display: none; }\n';
+// Phase 3's receipt camera on a work order billed after the work. Its own
+// block and its own no-capture rule, deliberately not folded into the report's
+// above: the two controls are hidden on the same two conditions but belong to
+// different cards, and a shared selector would make an edit to one read as a
+// break in the other.
+const HIDE_BLOCK_RECEIPT =
+  '  @media not all and (pointer: coarse) {\n' +
+  '    .tm-rec .file.cam-file { display: none; }\n' +
+  '  }\n';
+const NO_CAPTURE_RECEIPT_RULE = '  .no-capture .tm-rec .file.cam-file { display: none; }\n';
 
 describe('service-ticket-share.html: the crew camera controls show only for a finger', () => {
   const SHEET = rules(styleOf(SHARE_HTML));
 
   test('the inline CSS hides .th-add.th-cam and .btn.cam-btn under the same media query', () => {
-    // Two blocks on that query: the punch list's pair, then the field report's
-    // Take photo (its own describe below). Nothing else hides under it.
-    expect(count(SHARE_HTML, '@media not all and (pointer: coarse) {')).toBe(2);
+    // Three blocks on that query: the punch list's pair, the field report's
+    // Take photo, and (Phase 3) the receipt camera on the time and materials
+    // card. Nothing else hides under it.
+    expect(count(SHARE_HTML, '@media not all and (pointer: coarse) {')).toBe(3);
     expect(count(SHARE_HTML, HIDE_BLOCK_CREW)).toBe(1);
     expect(count(SHARE_HTML, HIDE_BLOCK_REPORT)).toBe(1);
+    expect(count(SHARE_HTML, HIDE_BLOCK_RECEIPT)).toBe(1);
+    expect(count(SHARE_HTML, NO_CAPTURE_RECEIPT_RULE)).toBe(1);
     const hide = SHEET.filter((r) => r.media.length === 1 && r.media[0] === HIDE_MEDIA);
     expect(hide.map((r) => ({ selectors: r.selectors, decls: r.decls }))).toEqual([
       { selectors: ['.th-add.th-cam', '.btn.cam-btn'], decls: [{ prop: 'display', value: 'none' }] },
       { selectors: ['#report .file.cam-file'], decls: [{ prop: 'display', value: 'none' }] },
+      { selectors: ['.tm-rec .file.cam-file'], decls: [{ prop: 'display', value: 'none' }] },
     ]);
-    expect(SHEET.filter((r) => r.media.some((m) => /pointer/.test(m))).length).toBe(2);
+    expect(SHEET.filter((r) => r.media.some((m) => /pointer/.test(m))).length).toBe(3);
   });
 
   // For each camera control: the display rules it must beat are the .th-add /

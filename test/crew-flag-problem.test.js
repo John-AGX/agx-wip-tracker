@@ -564,7 +564,7 @@ describe('sending', () => {
   });
 
   test('FIRES: without the X-Upload-Id header, the photo door cannot recognise a retried photo early', async () => {
-    const broken = mutate(SHARE_SCRIPT, "    if (toFlag) init.headers = { 'X-Upload-Id': item.uploadId };\n", '');
+    const broken = mutate(SHARE_SCRIPT, "    if (toFlag || toReceipt) init.headers = { 'X-Upload-Id': item.uploadId };\n", '');
     const net = makeNet(payload());
     net.on(isFlagPost, () => res(200, { ok: true, flag: flag({ id: 'fl_77' }) }));
     net.on(isFlagPhoto('fl_77'), () => res(200, { ok: true, photo: { id: 'att_1' } }));
@@ -790,7 +790,7 @@ describe('photos that did not go', () => {
   });
 
   test('FIRES: pass the 409 on as it came and the queue refuses the building photo too', async () => {
-    const broken = mutate(SHARE_SCRIPT, '      if (toFlag && err && Number(err.status) === 409) err.status = 400;\n', '');
+    const broken = mutate(SHARE_SCRIPT, '      if ((toFlag || toReceipt) && err && Number(err.status) === 409) err.status = 400;\n', '');
     const net = await flagPhotoRefusedWhileBuildingPhotoWaits(broken);
     expect(net.of(isBuildingPhoto('tk_784'))).toEqual([]);
   });

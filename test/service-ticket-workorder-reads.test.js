@@ -242,8 +242,9 @@ describe('ticketSitePhotos', () => {
 
   test('MUTANT: with the flag exclusion out of the WHERE, the LIMIT throws the site photos away and the card is empty', async () => {
     seedWallOfFlags();
-    const M = mutant("        AND NOT ($3 = ANY (SELECT jsonb_array_elements_text(tags)))\n",
-      '        AND ($3 = $3)\n');
+    // Both tags still have to be BOUND: the parameter list is the real one,
+    // and a statement that stops referencing $4 is a shim error, not a result.
+    const M = mutant('        AND ${notSitePhoto}\n', '        AND ($3 = $3 AND $4 = $4)\n');
     expect(await M.ticketSitePhotos(eng.pool, 1, 'st1', {})).toEqual([]);
   });
 
@@ -263,10 +264,32 @@ describe('ticketSitePhotos', () => {
     expect(ids).not.toContain('pFlagCaps');
   });
 
+  test('a RECEIPT is never a site photo — not on the office read, not on the crew read', async () => {
+    seedPhotos();
+    sitePhoto('pReceipt', { by: null, tags: ['receipt'], at: '2026-09-15 12:31:00' });
+    const office = (await W.ticketSitePhotos(eng.pool, 1, 'st1', { withNames: true })).map((p) => p.id);
+    const crew = (await W.ticketSitePhotos(eng.pool, 1, 'st1', {})).map((p) => p.id);
+    expect(office).not.toContain('pReceipt');
+    expect(crew).not.toContain('pReceipt');
+  });
+
+  test('MUTANT: with receipt off the excluded list, a picture of prices lands in Site photos', async () => {
+    seedPhotos();
+    sitePhoto('pReceipt', { by: null, tags: ['receipt'], at: '2026-09-15 12:31:00' });
+    const M = mutant("const NOT_A_SITE_PHOTO = Object.freeze(['flag', 'receipt']);",
+      "const NOT_A_SITE_PHOTO = Object.freeze(['flag']);");
+    const ids = (await M.ticketSitePhotos(eng.pool, 1, 'st1', {})).map((p) => p.id);
+    expect(ids).toContain('pReceipt');
+  });
+
   test('MUTANT: without the JS filter the hand-typed \'Flag\' lands in Site photos', async () => {
     seedPhotos();
     sitePhoto('pFlagCaps', { by: null, tags: ['Flag'], at: '2026-09-15 12:30:00' });
-    const M = mutant("    .filter(function (row) { return tagList(row.tags).indexOf('flag') < 0; })\n", '');
+    const M = mutant(
+      "    .filter(function (row) {\n" +
+      "      const tags = tagList(row.tags);\n" +
+      "      return !NOT_A_SITE_PHOTO.some(function (tag) { return tags.indexOf(tag) >= 0; });\n" +
+      "    })\n", '    .filter(function () { return true; })\n');
     const ids = (await M.ticketSitePhotos(eng.pool, 1, 'st1', { withNames: true })).map((p) => p.id);
     expect(ids).toContain('pFlagCaps');
     // normalizeTagsInput preserves the case a retag typed, so the WHERE alone

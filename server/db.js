@@ -5239,6 +5239,13 @@ async function initSchema() {
       description       TEXT NOT NULL,
       quantity          NUMERIC(12,2) NOT NULL,
       unit              TEXT,
+      -- Phase 3: the receipt photos on this line. Attachments on the TICKET
+      -- tagged 'receipt', listed here the way service_ticket_flags lists a
+      -- problem's photos. A RECEIPT IS A PICTURE OF PRICES, so unlike every
+      -- other photo on a work order it never travels back down a crew link,
+      -- and services/service-ticket-workorder.js ticketSitePhotos leaves the
+      -- tag out of the site photos the crew and the completion report read.
+      receipt_ids       JSONB NOT NULL DEFAULT '[]'::jsonb,
       status            TEXT NOT NULL DEFAULT 'submitted',
       office_quantity   NUMERIC(12,2),
       office_note       TEXT,

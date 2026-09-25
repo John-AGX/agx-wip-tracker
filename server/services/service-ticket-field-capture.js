@@ -60,6 +60,15 @@ const CREW_LIST_LIMIT = 100;
 const OFFICE_LIST_LIMIT = 500;
 // A work date more than this far back is a typo, not a late timesheet.
 const WORK_DATE_MAX_AGE_DAYS = 366;
+// Receipt photos on ONE material line, and how long after the line was sent
+// they may still be added. The same shape and the same window as a flag's
+// photos (services/service-ticket-flags.js): the photos belong to the thing
+// that was just sent, not to the work order for ever.
+const RECEIPT_CAP = 3;
+const RECEIPT_WINDOW_HOURS = 2;
+// The tag that keeps a receipt out of every crew-facing and client-facing
+// photo list. Named once, read by the site-photo query.
+const RECEIPT_TAG = 'receipt';
 
 const CLIENT_REF_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const LINE_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
@@ -92,6 +101,11 @@ const MSG = Object.freeze({
   officeHours: 'Hours must be more than 0 and no more than 24.',
   officeCrewSize: 'People on site must be 1 to 50.',
   officeQuantity: 'The quantity must be more than 0.',
+  receiptLineNotFound: 'That material line is not on this work order.',
+  receiptDecided: 'The office has already dealt with that line. Send the receipt as a new line, or call the office.',
+  receiptWindow: 'A receipt can only be added in the first 2 hours. Send the material again with the photo.',
+  receiptCap: 'That line already has 3 receipt photos.',
+  receiptFailed: 'Something went wrong uploading that receipt.',
   timeMissing: 'No time has been sent on this work order yet. It is billed from the time and the work performed, so send yours before finishing.',
   officeTimeMissing: 'No time has been entered on this work order, and it is billed from the time worked.',
 });
@@ -126,6 +140,23 @@ function readAmount(v) {
 function readCount(v) {
   const n = typeof v === 'number' ? v : (typeof v === 'string' && /^\d{1,3}$/.test(v.trim()) ? Number(v.trim()) : NaN);
   return Number.isInteger(n) ? n : null;
+}
+
+// receipt_ids arrives parsed (jsonb) or as text (a driver that does not decode
+// it). null and anything malformed read as no receipts.
+function idList(v) {
+  let list = v;
+  if (typeof list === 'string') {
+    try { list = JSON.parse(list); } catch (_) { list = []; }
+  }
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  list.forEach(function (id) {
+    if (id == null || id === '') return;
+    const s = String(id);
+    if (out.indexOf(s) < 0) out.push(s);
+  });
+  return out;
 }
 
 function dayNumber(ymd) {
@@ -317,6 +348,10 @@ function publicLine(kind, row, liveTaskIds) {
     base.description = r.description == null ? '' : String(r.description);
     base.quantity = numberOr(r.quantity, null);
     base.unit = r.unit == null ? null : String(r.unit);
+    // HOW MANY receipts, never the receipts. A receipt is a picture of prices:
+    // the crew member who took it stood at the counter, but the link they
+    // hold is forwardable, so no url for one ever leaves the office side.
+    base.receipts = idList(r.receipt_ids).length;
   }
   return base;
 }
@@ -368,6 +403,16 @@ function officeLine(kind, row) {
     out.unit = r.unit == null ? null : String(r.unit);
     out.office_quantity = numberOr(r.office_quantity, null);
     out.billable_quantity = effective(r, 'quantity', 'office_quantity');
+    // The office DOES see them: this is the evidence a bill is made from.
+    out.receipts = (Array.isArray(r.receipts) ? r.receipts : []).map(function (p) {
+      return {
+        id: p.id,
+        filename: p.filename == null ? null : p.filename,
+        thumb_url: p.thumb_url == null ? null : p.thumb_url,
+        web_url: p.web_url == null ? null : p.web_url,
+        uploaded_at: p.uploaded_at == null ? null : p.uploaded_at,
+      };
+    });
   }
   return out;
 }
@@ -394,7 +439,7 @@ function officeSummary(labor, materials) {
 
 const CREW_COLS = {
   labor: 'id, task_id, work_date, crew_size, hours, work_performed, status, office_hours, office_crew_size, created_at',
-  material: 'id, task_id, description, quantity, unit, status, office_quantity, created_at',
+  material: 'id, task_id, description, quantity, unit, status, office_quantity, receipt_ids, created_at',
 };
 
 function tableOf(kind) {
@@ -456,20 +501,175 @@ async function officeRows(db, kind, ticket, lineId) {
 }
 
 /**
+ * receiptPhotos(db, ticket, rows) -> Map<attachmentId, photo>
+ * Only images on THIS ticket in THIS org: an id a line lists that is not one
+ * of those is simply not shown. The same read flagPhotos does, and for the
+ * same reason — the list is a pointer, not a permission.
+ */
+async function receiptPhotos(db, ticket, rows) {
+  const out = new Map();
+  if (!ticketOk(ticket)) return out;
+  const ids = [];
+  (Array.isArray(rows) ? rows : []).forEach(function (r) {
+    idList(r && r.receipt_ids).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+  });
+  if (!ids.length) return out;
+  const r = await db.query(
+    `SELECT id, filename, mime_type, thumb_url, web_url, uploaded_at
+       FROM attachments
+      WHERE id = ANY($1::text[]) AND entity_type = 'service_ticket' AND entity_id = $2
+        AND organization_id = $3 AND mime_type LIKE 'image/%'`,
+    [ids, String(ticket.id), ticket.organization_id]
+  );
+  r.rows.forEach(function (p) { out.set(String(p.id), p); });
+  return out;
+}
+
+function receiptsFor(row, byId) {
+  return idList(row && row.receipt_ids)
+    .map(function (id) { return byId.get(id); })
+    .filter(Boolean);
+}
+
+// The material rows with their receipt photos looked up and hung on each row,
+// ready for officeLine.
+async function withReceipts(db, ticket, rows) {
+  const byId = await receiptPhotos(db, ticket, rows);
+  return rows.map(function (r) { return Object.assign({}, r, { receipts: receiptsFor(r, byId) }); });
+}
+
+/**
  * listOfficeLines(db, ticket) -> { labor, materials, summary }
  * Waiting lines first, then newest.
  */
 async function listOfficeLines(db, ticket) {
   if (!ticketOk(ticket)) return { labor: [], materials: [], summary: officeSummary([], []) };
   const labor = (await officeRows(db, 'labor', ticket, null)).map(function (r) { return officeLine('labor', r); });
-  const materials = (await officeRows(db, 'material', ticket, null)).map(function (r) { return officeLine('material', r); });
+  const materialRows = await withReceipts(db, ticket, await officeRows(db, 'material', ticket, null));
+  const materials = materialRows.map(function (r) { return officeLine('material', r); });
   return { labor: labor, materials: materials, summary: officeSummary(labor, materials) };
 }
 
 async function loadOfficeLine(db, kind, ticket, lineId) {
   if (!ticketOk(ticket) || lineId == null) return null;
-  const rows = await officeRows(db, kind, ticket, lineId);
-  return rows[0] ? officeLine(kind, rows[0]) : null;
+  let rows = await officeRows(db, kind, ticket, lineId);
+  if (!rows[0]) return null;
+  if (kind === 'material') rows = await withReceipts(db, ticket, rows);
+  return officeLine(kind, rows[0]);
+}
+
+// ── receipts ──────────────────────────────────────────────────────────────
+
+/**
+ * loadMaterialForReceipt(db, ticket, shareId, lineId) -> row | null
+ * Pinned to id + ticket + org + THIS link: another link's line is not found,
+ * and neither is the office's own. in_window is decided by the DATABASE clock,
+ * never the app server's.
+ */
+async function loadMaterialForReceipt(db, ticket, shareId, lineId) {
+  if (!ticketOk(ticket) || shareId == null) return null;
+  if (typeof lineId !== 'string' || !LINE_ID_RE.test(lineId)) return null;
+  const r = await db.query(
+    `SELECT id, status, receipt_ids, created_at,
+            (created_at >= NOW() - INTERVAL '${RECEIPT_WINDOW_HOURS} hours') AS in_window
+       FROM service_ticket_materials_used
+      WHERE id = $1 AND ticket_id = $2 AND organization_id = $3 AND share_id = $4 AND source = 'crew'`,
+    [lineId, ticket.id, ticket.organization_id, String(shareId)]
+  );
+  return r.rows[0] || null;
+}
+
+/**
+ * materialMayTakeReceipt(row) -> {ok:true} | {ok:false, status, error}
+ * The line must exist, still be waiting on the office, be inside the window
+ * and have room. A line the office has already accepted or rejected takes no
+ * more evidence: the decision was made on what it could see.
+ */
+function materialMayTakeReceipt(row) {
+  if (!row) return { ok: false, status: 404, error: MSG.receiptLineNotFound };
+  if (row.status !== 'submitted') return { ok: false, status: 409, error: MSG.receiptDecided };
+  const fresh = row.in_window === true || row.in_window === 1 || row.in_window === '1' ||
+    row.in_window === 't' || row.in_window === 'true';
+  if (!fresh) return { ok: false, status: 409, error: MSG.receiptWindow };
+  if (idList(row.receipt_ids).length >= RECEIPT_CAP) return { ok: false, status: 409, error: MSG.receiptCap };
+  return { ok: true };
+}
+
+function lineHasReceipt(row, attachmentId) {
+  if (!row || attachmentId == null || attachmentId === '') return false;
+  return idList(row.receipt_ids).indexOf(String(attachmentId)) >= 0;
+}
+
+// Is this stored attachment a receipt at all? A row that is not tagged one is
+// never moved onto a line.
+function isReceiptRow(att) {
+  if (!att) return false;
+  return idList(att.tags).indexOf(RECEIPT_TAG) >= 0;
+}
+
+/**
+ * receiptHolder(db, ticket, attachmentId) -> line id | null
+ * The material line of this ticket, in this org, whose list holds it.
+ */
+async function receiptHolder(db, ticket, attachmentId) {
+  if (!ticketOk(ticket) || attachmentId == null || attachmentId === '') return null;
+  const r = await db.query(
+    'SELECT id, receipt_ids FROM service_ticket_materials_used WHERE ticket_id = $1 AND organization_id = $2',
+    [ticket.id, ticket.organization_id]
+  );
+  const hit = (r.rows || []).find(function (row) { return lineHasReceipt(row, attachmentId); });
+  return hit ? String(hit.id) : null;
+}
+
+/**
+ * attachReceipt(db, ticket, lineId, attachmentId)
+ *   -> {ok:true, added:true|false} | {ok:false, status, error}
+ * The append is decided under FOR UPDATE on the line, so two photos racing for
+ * the last slot cannot both take it.
+ */
+async function attachReceipt(db, ticket, lineId, attachmentId) {
+  const client = await db.connect();
+  let open = false;
+  try {
+    await client.query('BEGIN');
+    open = true;
+    const r = await client.query(
+      `SELECT id, receipt_ids FROM service_ticket_materials_used
+        WHERE id = $1 AND ticket_id = $2 AND organization_id = $3 AND status = 'submitted'
+        FOR UPDATE`,
+      [String(lineId), ticket.id, ticket.organization_id]
+    );
+    if (!r.rows[0]) {
+      await client.query('ROLLBACK');
+      open = false;
+      return { ok: false, status: 409, error: MSG.receiptDecided };
+    }
+    const ids = idList(r.rows[0].receipt_ids);
+    const id = String(attachmentId);
+    if (ids.indexOf(id) >= 0) {
+      await client.query('ROLLBACK');
+      open = false;
+      return { ok: true, added: false };
+    }
+    if (ids.length >= RECEIPT_CAP) {
+      await client.query('ROLLBACK');
+      open = false;
+      return { ok: false, status: 409, error: MSG.receiptCap };
+    }
+    ids.push(id);
+    await client.query(
+      'UPDATE service_ticket_materials_used SET receipt_ids = $1::jsonb WHERE id = $2 AND ticket_id = $3 AND organization_id = $4',
+      [JSON.stringify(ids), String(lineId), ticket.id, ticket.organization_id]
+    );
+    await client.query('COMMIT');
+    open = false;
+    return { ok: true, added: true };
+  } catch (e) {
+    if (open) { try { await client.query('ROLLBACK'); } catch (_) { /* the throw below matters */ } }
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 // A crew line on this ticket, sent through THIS link, by its client_ref.
@@ -609,6 +809,16 @@ async function loadClaim(db, kind, ticket, lineId) {
 
 module.exports = {
   KINDS,
+  RECEIPT_CAP,
+  RECEIPT_WINDOW_HOURS,
+  RECEIPT_TAG,
+  receiptPhotos,
+  loadMaterialForReceipt,
+  materialMayTakeReceipt,
+  lineHasReceipt,
+  isReceiptRow,
+  receiptHolder,
+  attachReceipt,
   STATUSES,
   SOURCES,
   TABLES,
