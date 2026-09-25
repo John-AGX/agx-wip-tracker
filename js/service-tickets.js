@@ -3303,6 +3303,14 @@
         '<div class="p86-st-modal-row">' +
           '<div><label class="p86-st-lbl" for="p86StDue">Due</label>' +
             '<input type="date" id="p86StDue" data-st-field="due_date" /></div>' +
+          '<div><label class="p86-st-lbl" for="p86StBills">How it bills</label>' +
+            '<select id="p86StBills">' +
+              '<option value="" selected>Not billed from time</option>' +
+              '<option value="work_order">Work order &mdash; billed after the work</option>' +
+              '<option value="service_ticket">Service ticket &mdash; contract price</option>' +
+            '</select></div>' +
+          '<div id="p86StPriceBox" hidden><label class="p86-st-lbl" for="p86StPrice">Contract price</label>' +
+            '<input type="text" id="p86StPrice" inputmode="decimal" placeholder="8250.00" /></div>' +
           '<div><label class="p86-st-lbl" for="p86StAssignee">Assigned to</label>' +
             '<select id="p86StAssignee" data-st-field="assignee_user_id">' +
               '<option value="" selected>Unassigned</option>' +
@@ -3381,6 +3389,13 @@
       askClose();
     }
     _createTyped = typed;
+    var billsSel = wrap.querySelector('#p86StBills');
+    var priceBox = wrap.querySelector('#p86StPriceBox');
+    if (billsSel && priceBox) {
+      billsSel.addEventListener('change', function () {
+        priceBox.hidden = billsSel.value !== 'service_ticket';
+      });
+    }
     document.addEventListener('keydown', onKey);
     wrap.addEventListener('click', function (e) { if (e.target === wrap) askClose(); });
     wrap.querySelector('#p86StCancel').addEventListener('click', askClose);
@@ -3413,6 +3428,18 @@
       };
       var who = val('#p86StAssignee');
       if (/^\d+$/.test(who)) payload.assignee_user_id = Number(who);
+      // How it bills. Sent ONLY when chosen: silence keeps the shape every
+      // ticket had before the two kinds (bill_as 'none'), which is what the
+      // server does with a create that says nothing.
+      var bills = val('#p86StBills');
+      if (bills === 'work_order' || bills === 'service_ticket') {
+        payload.kind = bills;
+        if (bills === 'service_ticket') {
+          var price = val('#p86StPrice').trim();
+          if (!price) { go.disabled = false; showErr('title', 'A service ticket needs its contract price.'); return; }
+          payload.contract_amount = price;
+        }
+      }
       api().create(payload).then(function (r) {
         close();
         toast('Ticket created');

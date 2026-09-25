@@ -17,6 +17,28 @@
 .p86-fl-sum strong { color: var(--text, #fff); }
 .p86-fl-waiting { color: var(--yellow, #d97706); font-weight: 600; }
 
+/* How it bills — the switch that turns the card on, on the card it turns on. */
+.p86-fl-basis {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+  margin: 0 0 10px; font-size: 12.5px;
+}
+.p86-fl-basis-l { font-weight: 600; color: var(--text, #fff); }
+.p86-fl-basis-h { color: var(--text-dim, #888); flex: 1 1 200px; }
+.p86-fl-basis.is-editing {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px;
+  padding: 10px; border: 1px dashed var(--border, #333); border-radius: 8px;
+}
+.p86-fl-basis.is-editing label { display: grid; gap: 4px; font-size: 11.5px; color: var(--text-dim, #aaa); min-width: 0; }
+/* display:grid above beats the hidden attribute on its own, which left the
+   contract price box on screen for every choice. */
+.p86-fl-basis.is-editing label[hidden] { display: none; }
+.p86-fl-basis.is-editing select, .p86-fl-basis.is-editing input {
+  width: 100%; min-width: 0; box-sizing: border-box; font: inherit; font-size: 13px;
+  padding: 6px 8px; border-radius: 6px;
+  border: 1px solid var(--border, #333); background: var(--input-bg, var(--bg, #0e1116)); color: var(--text, #fff);
+}
+.p86-fl-basis-warn { grid-column: 1 / -1; font-size: 11.5px; color: var(--yellow, #d97706); }
+
 .p86-fl-group { margin-bottom: 12px; }
 .p86-fl-gh {
   font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;

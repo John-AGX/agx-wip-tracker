@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.57';
+const APP_VERSION = '1.58';
 
 const releases = [
+  {
+    version: '1.58',
+    date: '2026-09-25',
+    name: 'Say how a work order bills',
+    summary: 'Time and materials only ever appeared on a work order converted from a lead, because a ticket raised on a job is born billing nothing and nothing in the office could say otherwise. Now it can — on the New ticket form and on any ticket already open.',
+    changes: [
+      { type: 'fixed', text: 'A work order raised on a job could never collect time, materials or receipts. Every ticket starts out billing nothing, exactly as it always did, and until now only the Convert screen on a lead could make one that bills after the work — so on an ordinary job the crew link looked no different at all.' },
+      { type: 'new', text: 'How it bills is now a question on the New service ticket form: not billed from time, a work order billed after the work, or a service ticket at a contract price. Leave it alone and the ticket behaves exactly as tickets always have.' },
+      { type: 'new', text: 'And it can be set on a ticket that already exists, from the Time and materials panel on the work order. It says what changing it means before you press it: a ticket that has been issued takes a number in the other series, the old number stays on the record, and turning a service ticket back into a work order drops its contract price.' },
+      { type: 'improved', text: 'The moment a work order is marked billed after the work, the crew see the time and materials card on the link they already have — no new link, nothing to resend.' },
+    ],
+  },
   {
     version: '1.57',
     date: '2026-09-25',

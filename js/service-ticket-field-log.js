@@ -20,10 +20,27 @@
 //   * the totals, counted from ACCEPTED lines only, with the waiting ones
 //     counted apart, so a number nobody has looked at never reads as settled.
 //
+// HOW IT BILLS lives here too. A ticket raised on a job is born billing
+// nothing (bill_as 'none'), exactly as every ticket did before the two kinds,
+// and the card above only exists on one billed AFTER the work. So the choice
+// sits on the panel it turns on: mark a work order billed after the work, or a
+// service ticket sold at a contract price, and the crew's card appears on
+// their link. Changing between the two gives the ticket a number in the other
+// series — the server renumbers it and keeps the old number on the record —
+// so the control says so before it is pressed.
+//
 // No price, rate or cost appears here: that is the billing phase. The crew
 // link never sees anything this panel shows except its own line and a word.
 (function () {
   'use strict';
+
+  // What each basis is called, and what it means for the people on site.
+  var BASIS = {
+    none: { label: 'Not billed from time', help: 'Nothing is collected from the crew and nothing is billed from this ticket.' },
+    time_materials: { label: 'Work order — billed after the work', help: 'The crew sends their time, what they did and what they used; you accept it below.' },
+    contract: { label: 'Service ticket — contract price', help: 'Sold at a price agreed up front.' }
+  };
+  var KIND_OF = { time_materials: 'work_order', contract: 'service_ticket' };
 
   var STATUS = {
     submitted: { text: 'Waiting on you', cls: 'wait' },
@@ -210,9 +227,60 @@
     return '<div class="p86-fl-sum">' + parts.join(' · ') + '</div>';
   }
 
-  function panelHTML(log, t, ctx) {
-    if (!log) return '';
+  function money(v) {
+    var n = Number(v);
+    if (!isFinite(n)) return '';
+    return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  // The basis row: what this ticket bills on, and (for an editor) the switch.
+  function basisHTML(t, ctx, editing) {
     var canEdit = !!(ctx && ctx.canEdit);
+    var basis = String((t && t.bill_as) || 'none');
+    var b = BASIS[basis] || BASIS.none;
+    if (!editing) {
+      return '<div class="p86-fl-basis">' +
+        '<span class="p86-fl-basis-l">' + esc(b.label) +
+          (basis === 'contract' && t.contract_amount != null ? ' · ' + esc(money(t.contract_amount)) : '') + '</span>' +
+        '<span class="p86-fl-basis-h">' + esc(b.help) + '</span>' +
+        (canEdit ? '<button type="button" class="ee-btn secondary p86-fl-basis-edit">' +
+          (basis === 'none' ? 'Set how it bills' : 'Change') + '</button>' : '') +
+      '</div>';
+    }
+    var numbered = !!t.ticket_number;
+    return '<div class="p86-fl-basis is-editing">' +
+      '<label>How it bills<select class="p86-fl-in" data-f="basis">' +
+        ['none', 'time_materials', 'contract'].map(function (k) {
+          return '<option value="' + k + '"' + (k === basis ? ' selected' : '') + '>' + esc(BASIS[k].label) + '</option>';
+        }).join('') +
+      '</select></label>' +
+      '<label class="p86-fl-price"' + (basis === 'contract' ? '' : ' hidden') + '>Contract price' +
+        '<input type="text" inputmode="decimal" class="p86-fl-in" data-f="contract_amount" value="' +
+        esc(t.contract_amount != null ? t.contract_amount : '') + '" placeholder="8250.00" /></label>' +
+      '<div class="p86-fl-basis-warn">' +
+        (numbered ? 'Changing between a work order and a service ticket gives this ticket a new number in the other series. The old number stays on the record.'
+          : 'A ticket takes its number from how it bills when it is issued.') +
+        ' Turning a service ticket back into a work order drops its contract price.' +
+      '</div>' +
+      '<div class="p86-fl-formacts">' +
+        '<button type="button" class="ee-btn primary p86-fl-basis-save">Save</button>' +
+        '<button type="button" class="ee-btn secondary p86-fl-cancel">Cancel</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function panelHTML(log, t, ctx) {
+    var canEdit = !!(ctx && ctx.canEdit);
+    var basis = String((t && t.bill_as) || 'none');
+    // Nothing to show and nothing to set: a reader looking at an ordinary
+    // ticket gets no panel at all.
+    if (!log && (!canEdit || basis !== 'none')) return '';
+    if (!log) {
+      return '<div class="p86-fl" data-fl-ticket="' + esc(t.id) + '">' +
+        '<label class="p86-st-lbl">Time and materials</label>' +
+        basisHTML(t, ctx, _open[String(t.id)] === 'basis') +
+      '</div>';
+    }
     var labor = Array.isArray(log.labor) ? log.labor : [];
     var mats = Array.isArray(log.materials) ? log.materials : [];
     var open = _open[String(t.id)] || '';
@@ -220,6 +288,7 @@
       '<label class="p86-st-lbl">Time and materials' +
         (log.summary && log.summary.waiting ? ' <span class="p86-fl-badge">' + esc(log.summary.waiting) + ' to review</span>' : '') +
       '</label>' +
+      basisHTML(t, ctx, open === 'basis') +
       (log.failed ? '<div class="p86-fl-empty">The time and materials could not be loaded. Reload to try again.</div>' : summaryHTML(log));
 
     html += '<div class="p86-fl-group"><div class="p86-fl-gh">Time</div>' +
@@ -267,6 +336,15 @@
     var panel = node.querySelector ? (node.classList && node.classList.contains('p86-fl') ? node : node.querySelector('.p86-fl')) : null;
     if (!panel) return;
 
+    // The price box belongs to the contract choice alone.
+    var basisSel = panel.querySelector('.p86-fl-basis [data-f="basis"]');
+    if (basisSel) {
+      basisSel.addEventListener('change', function () {
+        var price = panel.querySelector('.p86-fl-price');
+        if (price) price.hidden = basisSel.value !== 'contract';
+      });
+    }
+
     // Half-typed office entries survive a repaint.
     Array.prototype.forEach.call(panel.querySelectorAll('.p86-fl-addform .p86-fl-in'), function (el) {
       var kind = el.closest('.p86-fl-addform').getAttribute('data-kind');
@@ -291,6 +369,36 @@
           viewer.openLightbox(shots, Number(b.getAttribute('data-receipt')) || 0, { parentLabel: 'Receipt · ' + (line.description || '') });
         }
         return undefined;
+      }
+      if (b.classList.contains('p86-fl-basis-edit')) { _open[tid] = 'basis'; return repaint(); }
+      if (b.classList.contains('p86-fl-basis-save')) {
+        var box = b.closest('.p86-fl-basis');
+        var vals = formValues(box);
+        var body = { kind: vals.basis === 'none' ? null : KIND_OF[vals.basis] };
+        if (vals.basis === 'contract') {
+          if (!String(vals.contract_amount || '').trim()) {
+            toast('A service ticket needs its contract price.', 'error');
+            return undefined;
+          }
+          body.contract_amount = vals.contract_amount;
+        }
+        if (body.kind === null) {
+          // 'none' is not a word the kind door takes: a ticket goes back to
+          // billing nothing only by the office asking for it plainly, which
+          // the server has no verb for yet. Say so instead of sending a
+          // request that would be refused.
+          toast('A ticket that already bills cannot go back to billing nothing. Cancel it instead.', 'error');
+          return undefined;
+        }
+        busy(box, true);
+        return st.update(t.id, body).then(function () {
+          delete _open[tid];
+          toast('Saved — the crew link follows this');
+          return repaint();
+        }, function (err) {
+          busy(box, false);
+          toast((err && err.message) || 'That did not save.', 'error');
+        });
       }
       if (b.classList.contains('p86-fl-open-add')) { _open[tid] = 'add:' + kind; return repaint(); }
       if (b.classList.contains('p86-fl-change')) { _open[tid] = 'change:' + kind + ':' + lineId; return repaint(); }
@@ -361,11 +469,12 @@
     detailSections: function (ctx) {
       var c = ctx || {};
       var r = c.r || {};
-      if (!r.field_log) return [];
+      // No field log AND nothing an editor could switch on: no section.
+      if (!r.field_log && !(c.canEdit && String((c.t && c.t.bill_as) || 'none') === 'none')) return [];
       return [{
         key: 'field-log',
         slot: 'afterSite',
-        html: panelHTML(r.field_log, c.t || {}, c),
+        html: panelHTML(r.field_log || null, c.t || {}, c),
         wire: function (node, live) { wire(node, live || c); }
       }];
     },

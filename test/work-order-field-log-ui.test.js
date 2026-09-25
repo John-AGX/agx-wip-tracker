@@ -36,9 +36,10 @@ function mount(opts) {
     decideFieldLine: (id, kind, line, body) => { calls.push(['decide', id, kind, line, body]); return Promise.resolve({ ok: true }); },
     addLabor: (id, body) => { calls.push(['addLabor', id, body]); return Promise.resolve({ ok: true }); },
     addMaterial: (id, body) => { calls.push(['addMaterial', id, body]); return Promise.resolve({ ok: true }); },
+    update: (id, body) => { calls.push(['update', id, body]); return Promise.resolve({ ok: true }); },
   } };
   const ctx = {
-    t: { id: 'st_tm', status: 'in_progress' },
+    t: Object.assign({ id: 'st_tm', status: 'in_progress', bill_as: 'time_materials' }, o.t || {}),
     r: { tasks: [{ id: 'k1', title: 'Bldg 4 pump room' }], field_log: o.log === undefined ? lines() : o.log },
     canEdit: o.canEdit !== false,
     parseSubtaskTitle: (t) => ({ head: t }),
@@ -58,14 +59,86 @@ function mount(opts) {
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 describe('the panel is only on a work order billed after the work', () => {
-  test('no field_log in the read, no panel at all', () => {
-    expect(FL.extension.detailSections({ r: {}, t: { id: 'x' } })).toEqual([]);
-    expect(FL.extension.detailSections({ r: { field_log: null }, t: { id: 'x' } })).toEqual([]);
+  test('no field_log and nothing to switch on: no panel at all', () => {
+    expect(FL.extension.detailSections({ r: {}, t: { id: 'x' }, canEdit: false })).toEqual([]);
+    expect(FL.extension.detailSections({ r: { field_log: null }, t: { id: 'x', bill_as: 'contract' }, canEdit: true })).toEqual([]);
   });
 
   test('registered with the ticket screen, after the crew’s problems', () => {
     const entry = window.p86StExt.list().find((e) => e.name === 'field-log');
     expect(entry && entry.order).toBe(35);
+  });
+});
+
+describe('how it bills — the switch that turns the card on', () => {
+  test('a ticket that bills nothing shows the setter, and no lines', () => {
+    const { host } = mount({ log: null, t: { bill_as: 'none' } });
+    expect(host.textContent).toContain('Not billed from time');
+    expect(host.querySelector('.p86-fl-basis-edit').textContent).toBe('Set how it bills');
+    expect(host.querySelectorAll('.p86-fl-line').length).toBe(0);
+  });
+
+  test('a reader sees no setter on a ticket that bills nothing — there is nothing there for them', () => {
+    expect(FL.extension.detailSections({ r: { field_log: null }, t: { id: 'st_x', bill_as: 'none' }, canEdit: false })).toEqual([]);
+  });
+
+  test('marking it billed after the work sends the kind, and nothing else', async () => {
+    const { host, calls } = mount({ log: null, t: { bill_as: 'none' } });
+    host.querySelector('.p86-fl-basis-edit').click();
+    await tick();
+    const sel = host.querySelector('[data-f="basis"]');
+    sel.value = 'time_materials';
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    host.querySelector('.p86-fl-basis-save').click();
+    await tick();
+    expect(calls).toEqual([['update', 'st_tm', { kind: 'work_order' }]]);
+  });
+
+  test('a service ticket needs its price before anything is sent', async () => {
+    const { host, calls } = mount({ log: null, t: { bill_as: 'none' } });
+    host.querySelector('.p86-fl-basis-edit').click();
+    await tick();
+    const sel = host.querySelector('[data-f="basis"]');
+    sel.value = 'contract';
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    expect(host.querySelector('.p86-fl-price').hidden).toBe(false);
+    host.querySelector('.p86-fl-basis-save').click();
+    await tick();
+    expect(calls).toEqual([]);
+    host.querySelector('[data-f="contract_amount"]').value = '8250';
+    host.querySelector('.p86-fl-basis-save').click();
+    await tick();
+    expect(calls).toEqual([['update', 'st_tm', { kind: 'service_ticket', contract_amount: '8250' }]]);
+  });
+
+  test('the price box is really hidden until a contract is chosen — the stylesheet has to let the hidden attribute win', () => {
+    // display:grid on the form labels beat [hidden] on its own, so the box
+    // stood there asking for a contract price on a work order.
+    const css = require('fs').readFileSync(require('path').join(__dirname, '..', 'css', 'service-ticket-field-log.css'), 'utf8');
+    expect(css).toMatch(/\.p86-fl-basis\.is-editing label\[hidden\]\s*\{\s*display:\s*none/);
+  });
+
+  test('a numbered ticket is told its number will change before it is switched', async () => {
+    const { host } = mount({ log: null, t: { bill_as: 'none', ticket_number: 'WO-0042' } });
+    host.querySelector('.p86-fl-basis-edit').click();
+    await tick();
+    expect(host.querySelector('.p86-fl-basis-warn').textContent).toContain('new number in the other series');
+    // An open form is deliberately kept across repaints, so this test closes
+    // the one it opened rather than leaving it open for the next.
+    host.querySelector('.p86-fl-cancel').click();
+  });
+
+  test('a work order that already bills says so, and offers Change', () => {
+    const { host } = mount();
+    expect(host.querySelector('.p86-fl-basis-l').textContent).toContain('billed after the work');
+    expect(host.querySelector('.p86-fl-basis-edit').textContent).toBe('Change');
+  });
+
+  test('a service ticket shows the price it was sold at', () => {
+    const { host } = mount({ log: null, t: { bill_as: 'contract', contract_amount: '8250.00' } });
+    // No field log on a contract ticket, and an editor may still see the basis
+    // — but nothing to switch ON, so the panel stays away.
+    expect(host.innerHTML).toBe('');
   });
 });
 
