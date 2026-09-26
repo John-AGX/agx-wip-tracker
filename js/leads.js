@@ -272,7 +272,7 @@ function p86Ask(message, opts) {
       case 'title': {
         var loc = [l.city, l.state].filter(Boolean).join(', ');
         var suffix = loc ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + escapeHTML(loc) + '</span>' : '';
-        return '<td data-col="title" class="lead-title-cell" title="' + escapeAttr(l.title) + (loc ? ' · ' + loc : '') + '"><strong>' + escapeHTML(l.title || '') + '</strong>' + suffix + '</td>';
+        return '<td data-col="title" class="lead-title-cell" title="' + escapeAttr(l.title) + (loc ? ' · ' + loc : '') + '"><strong>' + escapeHTML(l.title || '') + '</strong>' + (window.p86BtBadge ? window.p86BtBadge.render(l) : '') + suffix + '</td>';
       }
       case 'client': return '<td data-col="client">' + (l.client_name ? escapeHTML(l.client_name) : '<span style="color:var(--text-dim,#666);font-style:italic;">no client</span>') + '</td>';
       case 'status': return '<td data-col="status"><span class="badge lead-' + (l.status || 'new') + '">' + escapeHTML(statusMeta(l.status).label) + '</span></td>';

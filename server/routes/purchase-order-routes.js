@@ -115,7 +115,11 @@ function shapeRow(r) {
     approved_at: r.approved_at,
     approved_by: r.approved_by,
     created_at: r.created_at,
-    updated_at: r.updated_at
+    updated_at: r.updated_at,
+    // The Buildertrend link, for the provenance mark. Undefined rather than
+    // null when the caller's SELECT did not ask for the column, so a door
+    // that does not carry it renders no badge instead of asserting "local".
+    bt_po_id: r.bt_po_id
   };
 }
 
@@ -130,7 +134,7 @@ router.get('/jobs/:jobId/purchase-orders', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT po.id, po.job_id, po.owner_id, po.sub_id, po.status, po.po_number,
-              po.data, po.is_locked, po.approved_at, po.approved_by, po.created_at, po.updated_at,
+              po.data, po.is_locked, po.approved_at, po.approved_by, po.created_at, po.updated_at, po.bt_po_id,
               s.name AS sub_name
          FROM job_purchase_orders po
          JOIN jobs j ON j.id = po.job_id
@@ -168,7 +172,7 @@ router.get('/purchase-orders', requireAuth, async (req, res) => {
     const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 300));
     const { rows } = await pool.query(
       `SELECT po.id, po.job_id, po.owner_id, po.sub_id, po.status, po.po_number,
-              po.data, po.is_locked, po.approved_at, po.approved_by, po.created_at, po.updated_at,
+              po.data, po.is_locked, po.approved_at, po.approved_by, po.created_at, po.updated_at, po.bt_po_id,
               j.data->>'jobNumber' AS job_number,
               j.data->>'title'     AS job_title,
               s.name AS sub_name
@@ -223,7 +227,7 @@ router.get('/purchase-orders/:id', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT po.id, po.job_id, po.owner_id, po.sub_id, po.status, po.po_number,
-              po.data, po.is_locked, po.approved_at, po.approved_by, po.created_at, po.updated_at,
+              po.data, po.is_locked, po.approved_at, po.approved_by, po.created_at, po.updated_at, po.bt_po_id,
               j.data->>'jobNumber' AS job_number,
               j.data->>'title'     AS job_title,
               s.name AS sub_name

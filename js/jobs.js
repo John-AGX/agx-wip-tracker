@@ -28,6 +28,16 @@ function p86Ask(message, opts) {
 // print an internal bookkeeping word on documents that leave the company.
 // So this renders only where it is called — the jobs list and the job page,
 // both internal — and job-label.js is untouched.
+// Which system this job lives in — Buildertrend's own mark, our cube, or
+// both. Unlike btOpenBadge below this is not Buildertrend's OPINION of the
+// job, it is where the record IS, so it is safe on any internal surface.
+// Still internal-only for the same reason: js/job-label.js stays untouched,
+// so nothing here can reach a purchase order, a signed change order or a
+// crew text.
+function btWhereBadge(job) {
+    return window.p86BtBadge ? window.p86BtBadge.render(job) : '';
+}
+
 function btOpenBadge(job) {
     var s = job && job.btStatus ? String(job.btStatus).trim().toLowerCase() : '';
     if (s !== 'open') return '';
@@ -2255,7 +2265,7 @@ function renderJobsMain() {
                 if (readOnly) pmCell += ' <span style="font-size:9px;color:var(--text-dim,#888);margin-left:4px;">view only</span>';
                 row.innerHTML = `
                     <td class="job-check-cell" style="width:34px;text-align:center;" onclick="event.stopPropagation();"><input type="checkbox" class="job-check" data-id="${p86Enc(job.id)}" ${_jobsSelected.has(job.id) ? 'checked' : ''} onclick="event.stopPropagation();window.p86JobsSelect(p86Dec('${p86Enc(job.id)}'),this.checked);"></td>
-                    <td data-col="name"><strong>${escapeHTML(window.p86JobLabel.fromJob(job))}</strong>${btOpenBadge(job)}${typeLabel}</td>
+                    <td data-col="name"><strong>${escapeHTML(window.p86JobLabel.fromJob(job))}</strong>${btWhereBadge(job)}${btOpenBadge(job)}${typeLabel}</td>
                     <td data-col="client">${escapeHTML(job.client) || '—'}</td>
                     <td data-col="pm">${pmCell}</td>
                     <td data-col="status"><span class="badge ${statusClass}">${escapeHTML(job.status)}</span></td>
@@ -3706,7 +3716,7 @@ function renderJobsMain() {
                 if (!titleEl || !titleEl.parentNode) return;
                 var old = titleEl.parentNode.querySelector('.bt-open-badge-slot');
                 if (old) old.remove();
-                var html = btOpenBadge(job);
+                var html = btWhereBadge(job) + btOpenBadge(job);
                 if (!html) return;
                 var slot = document.createElement('span');
                 slot.className = 'bt-open-badge-slot';

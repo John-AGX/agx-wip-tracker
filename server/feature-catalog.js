@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.59';
+const APP_VERSION = '1.60';
 
 const releases = [
+  {
+    version: '1.60',
+    date: '2026-09-26',
+    name: 'You can see which records are in Buildertrend',
+    summary: 'A small mark beside a job, lead, estimate or purchase order says whether it is also in Buildertrend or lives only in Project 86.',
+    changes: [
+      { type: 'new', text: 'Jobs, leads, estimates and purchase orders now carry a small mark that says where the record lives. Buildertrend\u2019s own icon means it is in Buildertrend and came from there, so a sync can change it. The Project 86 cube means it is ours alone and Buildertrend has never heard of it. Until now the only way to tell was to open the Buildertrend sync page and look the record up.' },
+      { type: 'new', text: 'There is a third mark for a record that STARTED in Project 86 and was sent to Buildertrend: Buildertrend\u2019s icon with the Project 86 cube pinned to its corner. Nothing shows it yet, because the connection to Buildertrend currently only reads \u2014 it cannot create anything over there. The mark is ready for when it can.' },
+      { type: 'improved', text: 'Hovering any of the marks says what it means in a sentence, including which side wins if the two disagree. A record with no mark is never ambiguous: every job, lead, estimate and purchase order shows one of the three.' },
+    ],
+  },
   {
     version: '1.59',
     date: '2026-09-25',

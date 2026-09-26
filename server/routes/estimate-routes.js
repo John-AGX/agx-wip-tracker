@@ -205,6 +205,9 @@ router.get('/', requireAuth, async (req, res) => {
       // Numeric in PG (BIGINT), stringified so the client's String()
       // comparisons behave the same as they do for jobs and leads.
       market_id: r.market_id != null ? String(r.market_id) : null,
+      // Already SELECTed for the matcher; it never reached the client. The
+      // provenance mark beside an estimate's name needs it.
+      bt_worksheet_id: r.bt_worksheet_id || null,
       // THE JOB THIS ESTIMATE IS FILED UNDER, and it is NOT `job_id`.
       // data.job_id — which the spread above may already have put on this
       // object — means "this estimate was SOLD onto that job", and it is what

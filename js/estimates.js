@@ -834,7 +834,7 @@ function renderEstimatesList() {
                     : '<span style="color:var(--text-dim,#666);">—</span>';
                 return '<tr style="cursor:pointer;" onclick="editEstimate(p86Dec(\'' + p86Enc(est.id) + '\'))">' +
                     '<td class="est-check-cell" style="width:34px;text-align:center;" onclick="event.stopPropagation();"><input type="checkbox" class="est-check" data-id="' + est.id + '"' + (_estSelected.has(est.id) ? ' checked' : '') + ' onclick="event.stopPropagation();window.p86EstSelect(p86Dec(\'' + p86Enc(est.id) + '\'),this.checked);"></td>' +
-                    '<td data-col="title"><strong>' + escapeHTML(est.title || '(untitled)') + '</strong>' + titleSuffix + '</td>' +
+                    '<td data-col="title"><strong>' + escapeHTML(est.title || '(untitled)') + '</strong>' + (window.p86BtBadge ? window.p86BtBadge.render(est) : '') + titleSuffix + '</td>' +
                     '<td data-col="client">' + clientLabel + '</td>' +
                     '<td data-col="status" style="white-space:nowrap;"><span class="est-status-badge p86-statuschip" style="--c:' + sm.color + ';">' + sm.label + '</span>' + statusAction + '</td>' +
                     (estMarketMulti() ? '<td data-col="market">' + estMarketChip(est) + '</td>' : '') +

@@ -156,7 +156,7 @@ router.get('/', requireAuth, async (req, res) => {
     // data remains visible until the NOT NULL tightening commit.
     const { rows } = await pool.query(`
       SELECT j.id, j.data, j.owner_id, j.created_at, j.updated_at,
-             j.geocode_lat, j.geocode_lng, j.geocode_address, j.market_id,
+             j.geocode_lat, j.geocode_lng, j.geocode_address, j.market_id, j.bt_job_id,
              COALESCE(ja.access_level, '') AS access_level
       FROM jobs j
       LEFT JOIN job_access ja ON ja.job_id = j.id AND ja.user_id = $1
@@ -182,7 +182,12 @@ router.get('/', requireAuth, async (req, res) => {
         // client compares market ids everywhere else. The blob's legacy
         // `market` NAME still rides along inside the spread above; the
         // shared p86Markets predicate prefers this and falls back to it.
-        market_id: j.market_id != null ? String(j.market_id) : null };
+        market_id: j.market_id != null ? String(j.market_id) : null,
+        // Which system this job lives in, for the provenance mark beside its
+        // name (js/bt-badge.js). The COLUMN, never the blob: the Buildertrend
+        // sync owns it, and a client-supplied copy would let anyone paint a
+        // job as linked to Buildertrend when it is not. Stripped on save below.
+        bt_job_id: j.bt_job_id || null };
     });
     res.json({ jobs: result });
   } catch (e) {
@@ -1256,6 +1261,12 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), requireOrgId, 
         // label while the FK — and therefore the market's P&L — silently
         // stayed put. Strip it so the name is what resolves.
         delete jobBlob.market_id;
+        // bt_job_id is the Buildertrend LINK, written only by the sync
+        // (services/clickr/sync-apply.js). It rides out on the GET for the
+        // provenance badge, so it must be stripped here or a bulk save would
+        // round-trip it into the blob — where it would shadow the column and
+        // could be set to anything by anyone. Same rule as market_id above.
+        delete jobBlob.bt_job_id;
         // organization_id is the TENANT boundary and it lives on the column,
         // stamped from the caller's token below. A copy in the JSONB would be
         // client-supplied and would shadow the column for anything reading the
