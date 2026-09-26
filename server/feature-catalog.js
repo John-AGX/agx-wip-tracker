@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.58';
+const APP_VERSION = '1.59';
 
 const releases = [
+  {
+    version: '1.59',
+    date: '2026-09-25',
+    name: 'A photo you just took asks what it is',
+    summary: 'Taking a photo on a project saved it silently — there was nowhere to caption, dictate, tag or mark it up. Now the block comes up the moment the camera hands the photo back.',
+    changes: [
+      { type: 'fixed', text: 'Take Photos saved each shot with no questions asked. The buttons were set to skip the per-photo block on the understanding that captions and markup would happen in the photo viewer afterwards — but nothing on the Photos tab ever opened the viewer, so there was no way at all to dictate, tag or annotate a photo you had just taken.' },
+      { type: 'improved', text: 'One photo now brings up the block as soon as you press OK on the camera: a caption with the microphone for dictation, the tags, and Annotate before saving. Quick save puts it away untouched, and from then on the rest of that walkthrough is saved silently — it stops asking until you finish and start again.' },
+      { type: 'improved', text: 'Picking many photos from the library still saves them straight away, as before: twenty photos is a transfer, not twenty decisions, and they are captioned from the grid.' },
+    ],
+  },
   {
     version: '1.58',
     date: '2026-09-25',

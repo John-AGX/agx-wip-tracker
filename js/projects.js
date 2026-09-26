@@ -326,6 +326,35 @@
   // modal and POST directly with whatever's already in the form.
   // Reset on every new batch.
   var _quickSaveThisBatch = false;
+  // Sticky "don't ask again" for a walkthrough: set when Quick save is pressed
+  // while the camera loop is running, cleared when the walkthrough ends. One
+  // shot per tap means every shot would otherwise ask again.
+  var _walkthroughQuickSave = false;
+
+  /**
+   * wantsPreview(fileCount, quickSaveSticky) -> boolean
+   *
+   * Does this batch get the per-photo block — the caption, the microphone,
+   * the tags and Annotate before saving?
+   *
+   * ONE photo does. That is the shot somebody just took or the single file
+   * they picked, and it is the moment they know what it is a picture of;
+   * making them find it again in the grid afterwards is how a photo ends up
+   * with no caption at all. Both capture buttons used to quick-save every
+   * time, with a comment saying caption and annotate "happen in the viewer" —
+   * but nothing on this screen opened the viewer, so on a real walkthrough the
+   * block never appeared and there was nowhere to dictate or tag.
+   *
+   * A BULK pick does not: twenty photos from the library is a transfer, not
+   * twenty decisions, and they are captioned from the grid.
+   *
+   * Nor does a walkthrough that has already said skip — see
+   * _walkthroughQuickSave.
+   */
+  function wantsPreview(fileCount, quickSaveSticky) {
+    if (quickSaveSticky) return false;
+    return Number(fileCount) === 1;
+  }
 
   // ──────────────────────────────────────────────────────────────────
   // Top-level list view
@@ -1775,9 +1804,14 @@
           // Two distinct paths (John, streamline). CAMERA input carries
           // capture="environment" + pure image/* → taps open the camera DIRECTLY
           // (no Camera/Files sheet). LIBRARY input is image/* + multiple + NO
-          // capture → one library open, bulk-select 20+ at once. Both quick-save
-          // (no per-photo preview modal); caption/annotate happen in the viewer.
-          '<button class="primary" onclick="document.getElementById(\'projPhotoCameraInput\').click();" title="Open the camera and snap photos — each saves instantly">&#x1F4F7; Take Photos</button>' +
+          // capture → one library open, bulk-select 20+ at once.
+          //
+          // ONE photo gets the block — caption, dictate, tags, Annotate — as
+          // soon as the camera hands it back (wantsPreview). A bulk pick is
+          // saved straight away and captioned from the grid. This used to
+          // quick-save both, with caption and annotate left to a viewer that
+          // nothing on this screen ever opened.
+          '<button class="primary" onclick="document.getElementById(\'projPhotoCameraInput\').click();" title="Open the camera — each shot asks for a caption, tags or a markup before it saves">&#x1F4F7; Take Photos</button>' +
           '<button class="secondary" onclick="document.getElementById(\'projPhotoFileInput\').click();" title="Pick many photos from your library at once">&#x1F5BC;&#xFE0F; Upload Photos</button>' +
           '<input type="file" id="projPhotoCameraInput" accept="image/*" capture="environment" style="display:none;" />' +
           '<input type="file" id="projPhotoFileInput" accept="image/*" multiple style="display:none;" />' +
@@ -1954,7 +1988,12 @@
     if (cameraInput) {
       cameraInput.addEventListener('change', function(e) {
         if (e.target.files && e.target.files.length) {
-          uploadFiles(e.target.files, { quickSave: true, keepOpen: true });
+          // One shot per tap: the block comes up the moment the camera hands
+          // the photo back, unless this walkthrough already said skip.
+          uploadFiles(e.target.files, {
+            quickSave: !wantsPreview(e.target.files.length, _walkthroughQuickSave),
+            keepOpen: true,
+          });
         }
         cameraInput.value = '';
       });
@@ -1963,7 +2002,10 @@
     if (fileInput) {
       fileInput.addEventListener('change', function(e) {
         if (e.target.files && e.target.files.length) {
-          uploadFiles(e.target.files, { quickSave: true, keepOpen: false });
+          uploadFiles(e.target.files, {
+            quickSave: !wantsPreview(e.target.files.length, false),
+            keepOpen: false,
+          });
         }
         fileInput.value = '';
       });
@@ -1982,7 +2024,7 @@
         e.preventDefault();
         feedHost.classList.remove('p86-proj-drop-active');
         if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
-          uploadFiles(e.dataTransfer.files, { quickSave: true });
+          uploadFiles(e.dataTransfer.files, { quickSave: !wantsPreview(e.dataTransfer.files.length, false) });
         }
       });
     }
@@ -5953,6 +5995,7 @@
     // keepOpen re-opens the CAMERA after the batch for the next shot.
     _quickSaveThisBatch = !!opts.quickSave;
     _walkthroughKeepOpen = !!opts.keepOpen;
+    if (!_walkthroughKeepOpen) _walkthroughQuickSave = false;
     var fileList = Array.from(files);
     var chain = Promise.resolve();
     fileList.forEach(function(f) {
@@ -6012,6 +6055,9 @@
         if (action === 'cancel') return reject(new Error('cancelled'));
         if (action === 'quick') {
           _quickSaveThisBatch = true;
+          // In a walkthrough every shot is its own batch, so "skip the rest"
+          // has to outlive this one or the block returns on the next tap.
+          if (_walkthroughKeepOpen) _walkthroughQuickSave = true;
           // Honor whatever the preview gave us — caption / tags /
           // annotations the user already typed should still land
           // even though they hit Quick Save instead of Save. Falls
@@ -6094,7 +6140,7 @@
           // current photo AND exits the capture loop so the camera
           // doesn't pop back up after this save.
           '<button class="ee-btn secondary" id="upPrevDone" style="display:none;" title="Save this photo and stop the walkthrough capture loop">&#x2714;&#xFE0F; Save &amp; finish</button>' +
-          '<button class="ee-btn secondary" id="upPrevQuick" title="Save this one, then skip the preview for the rest of this batch">&#x26A1; Quick save (skip previews)</button>' +
+          '<button class="ee-btn secondary" id="upPrevQuick" title="Save this one, then stop asking for the rest of this walkthrough">&#x26A1; Quick save (skip previews)</button>' +
           '<button class="primary" id="upPrevSave">Save</button>' +
         '</div>' +
       '</div>';
@@ -6184,6 +6230,7 @@
         _walkthroughTags = pendingTags.slice();
         paintWalkthroughTagStrip();
         _walkthroughKeepOpen = false;
+        _walkthroughQuickSave = false;
         close('save', {
           caption: caption || null,
           tags: pendingTags.slice(),
