@@ -5920,7 +5920,7 @@ function p86Ask(message, opts) {
       '<td style="padding:6px 4px;"><input type="checkbox" data-tag-sel="' + t.id + '" ' + checked + ' /></td>' +
       '<td style="padding:6px 4px;white-space:nowrap;">' +
         tagPinPreview(t) +
-        '<span class="p86-chip-tag" style="--h:' + (t.hue != null ? t.hue : hueFromName(t.name)) + ';">#' + escapeHTML(t.name) + '</span>' +
+        '<span class="p86-chip-tag" style="--h:' + (t.hue != null ? t.hue : hueFromName(t.name)) + ';">' + escapeHTML(t.name) + '</span>' +
       '</td>' +
       '<td style="padding:6px 4px;color:var(--text-dim,#aaa);">' + Number(t.use_count || 0) + '</td>' +
       '<td style="padding:6px 4px;color:' + (archived ? '#888' : '#34d399') + ';font-size:11px;">' + (archived ? 'Archived' : 'Active') + '</td>' +

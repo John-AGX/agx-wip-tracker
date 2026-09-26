@@ -72,8 +72,10 @@
   }
   // Deterministic hue from a string — used to color tag chips
   // consistently across renders.
+  // A tag's colour follows the WORD, not its capitals: Office and office are
+  // the same tag and must not be two colours.
   function hueFor(str) {
-    var s = String(str || '');
+    var s = String(str || '').toLowerCase();
     var h = 0;
     for (var i = 0; i < s.length; i++) {
       h = ((h << 5) - h) + s.charCodeAt(i);
@@ -656,7 +658,7 @@
                 return '<span class="p86-proj-card-badge"><span class="p86-proj-card-badge-k">' + escapeHTML(b.k) + ':</span> ' + escapeHTML(b.v) + '</span>';
               }).join('') +
               tags.map(function(t) {
-                return '<span class="p86-chip-tag-mini" style="--h:' + hueFor(t) + ';">#' + escapeHTML(t) + '</span>';
+                return '<span class="p86-chip-tag-mini" style="--h:' + hueFor(t) + ';">' + escapeHTML(t) + '</span>';
               }).join('') +
               (extraTags ? '<span class="p86-chip-tag-mini p86-chip-tag-more">+' + extraTags + '</span>' : '') +
             '</div>'
@@ -1291,6 +1293,12 @@
   //   opts.getTags() → string[]
   //   opts.setTags(string[]) → void  (parent persists)
   // ──────────────────────────────────────────────────────────────────
+  // Is this tag already on the list, whatever its capitals?
+  function hasTag(list, tag) {
+    var key = String(tag || '').toLowerCase();
+    return (list || []).some(function (t) { return String(t).toLowerCase() === key; });
+  }
+
   function mountTagEditor(host, opts) {
     if (!host) return;
     function paint() {
@@ -1299,7 +1307,7 @@
         '<div class="p86-tag-editor-chips">' +
           tags.map(function(t, i) {
             return '<span class="p86-chip-tag" style="--h:' + hueFor(t) + ';">' +
-              '#' + escapeHTML(t) +
+              escapeHTML(t) +
               '<button type="button" class="p86-tag-remove" data-idx="' + i + '">&times;</button>' +
             '</span>';
           }).join('') +
@@ -1322,11 +1330,17 @@
       var input = host.querySelector('.p86-tag-editor-input');
       var suggestEl = host.querySelector('.p86-tag-suggest');
 
+      // A tag is written the way it was typed. The server has always kept the
+      // case (services/attachment-tags.js) and so does the photo viewer's own
+      // editor; this one lowercased on the way in, so every tag added from a
+      // project — including every photo taken on a walkthrough — came out
+      // shouting in lower case. Dedup stays case-INSENSITIVE, so Office cannot
+      // be added twice as office.
       function commit(value) {
-        var clean = String(value || '').trim().toLowerCase().slice(0, 32);
+        var clean = String(value || '').trim().slice(0, 32);
         if (!clean) return;
         var current = opts.getTags();
-        if (current.indexOf(clean) !== -1) return;
+        if (hasTag(current, clean)) return;
         if (current.length >= 20) {
           alert('Up to 20 tags per project.');
           return;
@@ -1340,13 +1354,13 @@
 
       function renderSuggest(list) {
         var current = opts.getTags();
-        var typed = String(input.value || '').trim().toLowerCase().slice(0, 32);
+        var typed = String(input.value || '').trim().slice(0, 32);
         // Suggestions from the catalog, minus anything already on
         // this entity. orgTags.suggest returns them in use_count DESC
         // order — most-used first — so the visible list IS the
         // favorites list.
         var filtered = (list || []).filter(function(t) {
-          return current.indexOf(t) === -1;
+          return !hasTag(current, t);
         }).slice(0, 8);
         // "Create" entry — only when the user has typed something
         // that isn't already on this entity AND isn't already an
@@ -1354,8 +1368,8 @@
         // the user a single-click way to mint a brand-new tag
         // without having to know about the Enter/comma shortcut.
         var canCreate = !!typed
-          && current.indexOf(typed) === -1
-          && filtered.indexOf(typed) === -1;
+          && !hasTag(current, typed)
+          && !hasTag(filtered, typed);
         if (!filtered.length && !canCreate) {
           suggestEl.style.display = 'none';
           return;
@@ -1365,7 +1379,7 @@
           html += '<div class="p86-tag-suggest-create-row">' +
             '<button type="button" class="p86-tag-suggest-create" data-create="' + escapeAttr(typed) + '">' +
               '<span class="p86-tag-suggest-create-plus">&#x2295;</span>' +
-              '<span>Create <strong>#' + escapeHTML(typed) + '</strong></span>' +
+              '<span>Create <strong>' + escapeHTML(typed) + '</strong></span>' +
             '</button>' +
           '</div>';
         }
@@ -1379,7 +1393,7 @@
           }
           html += '<div class="p86-tag-suggest-rows">' +
             filtered.map(function(t) {
-              return '<button type="button" class="p86-tag-suggest-row" data-tag="' + escapeAttr(t) + '" style="--h:' + hueFor(t) + ';">#' + escapeHTML(t) + '</button>';
+              return '<button type="button" class="p86-tag-suggest-row" data-tag="' + escapeAttr(t) + '" style="--h:' + hueFor(t) + ';">' + escapeHTML(t) + '</button>';
             }).join('') +
           '</div>';
         }
@@ -5147,7 +5161,7 @@
     names.forEach(function(t) {
       var active = f.tag === t;
       html += '<button class="p86-chip-photo-tag' + (active ? ' active' : '') + '" data-mk-tag="' + escapeAttr(t) + '" style="--h:' + hueFor(t) + ';">' +
-        '#' + escapeHTML(t) + ' <span class="p86-chip-count">' + tagCounts[t] + '</span>' +
+        escapeHTML(t) + ' <span class="p86-chip-count">' + tagCounts[t] + '</span>' +
       '</button>';
     });
     host.innerHTML = html;
@@ -5602,7 +5616,7 @@
                 '<div id="btRemoveChips" class="p86-tag-editor-chips">' +
                   Object.keys(existingTagCounts).sort().map(function(t) {
                     return '<button class="p86-chip-tag" data-mk-remove="' + escapeAttr(t) + '" style="--h:' + hueFor(t) + ';">' +
-                      '#' + escapeHTML(t) + ' <span class="p86-chip-count">' + existingTagCounts[t] + '/' + ids.length + '</span>' +
+                      escapeHTML(t) + ' <span class="p86-chip-count">' + existingTagCounts[t] + '/' + ids.length + '</span>' +
                     '</button>';
                   }).join('') +
                 '</div>' +
@@ -6088,6 +6102,20 @@
     return window.p86Api.attachments.upload('project', projectId, file, extra);
   }
 
+  // A camera filename ("17904256268456008751715988656382.jpg", "IMG_4821.jpg",
+  // "PXL_20260925_122430.jpg") is noise: it wrapped the heading onto two lines
+  // of a phone and named nothing the photo in front of you does not. A file
+  // somebody chose from their library usually HAS a name worth showing, so
+  // that one keeps it.
+  function previewHeading(file, isImage) {
+    var name = String((file && file.name) || '').trim();
+    var stem = name.replace(/\.[^.]+$/, '');
+    var fromCamera = !stem || /^[0-9_-]+$/.test(stem) ||
+      /^(img|dsc|pxl|photo|image|screenshot)[0-9_\s-]*$/i.test(stem);
+    if (!isImage) return name || 'Add file';
+    return fromCamera ? 'Add photo' : name;
+  }
+
   // Open the preview modal for one file. cb(action, payload) where
   // action ∈ {'save', 'quick', 'cancel'} and payload ∈ {caption, tags, annotations}.
   function openUploadPreview(file, projectId, cb) {
@@ -6109,7 +6137,7 @@
     modal.innerHTML =
       '<div class="modal-content" style="max-width:580px;">' +
         '<div class="modal-header">' +
-          '<span>Upload preview — ' + escapeHTML(file.name) + '</span>' +
+          '<span>' + escapeHTML(previewHeading(file, isImage)) + '</span>' +
           '<button class="p86-modal-close" data-close>&times;</button>' +
         '</div>' +
         '<div class="p86-proj-create-body">' +
@@ -6119,14 +6147,14 @@
           '<div class="p86-field">' +
             '<span>Caption</span>' +
             '<div class="p86-caption-row">' +
-              '<textarea id="upPrevCaption" rows="2" placeholder="Optional. Use 🎤 to dictate."></textarea>' +
+              '<textarea id="upPrevCaption" rows="2" placeholder="What is this a photo of? Optional — tap the mic to talk."></textarea>' +
               '<button type="button" id="upPrevMic" class="p86-mic-btn" title="Dictate (voice → text)">' +
                 (typeof window.p86Icon === 'function' ? window.p86Icon('composer-mic') : '&#x1F3A4;') +
               '</button>' +
             '</div>' +
           '</div>' +
           '<div class="p86-field">' +
-            '<span>Tags <small style="color:var(--text-dim,#888);font-weight:400;text-transform:none;letter-spacing:0;">(sticky — applies to next photo too)</small></span>' +
+            '<span>Tags <small style="color:var(--text-dim,#888);font-weight:400;text-transform:none;letter-spacing:0;">carry to the next photo</small></span>' +
             '<div id="upPrevTagsEditor" class="p86-tag-editor"></div>' +
           '</div>' +
           '<div class="p86-field">' +
@@ -6134,13 +6162,12 @@
             '<span id="upPrevAnnoCount" style="font-size:11px;color:var(--text-dim,#888);margin-left:8px;"></span>' +
           '</div>' +
         '</div>' +
-        '<div class="modal-footer">' +
-          '<button class="ee-btn secondary" data-close>Cancel</button>' +
-          // "Done" appears only in walkthrough mode — saves the
-          // current photo AND exits the capture loop so the camera
-          // doesn't pop back up after this save.
-          '<button class="ee-btn secondary" id="upPrevDone" style="display:none;" title="Save this photo and stop the walkthrough capture loop">&#x2714;&#xFE0F; Save &amp; finish</button>' +
-          '<button class="ee-btn secondary" id="upPrevQuick" title="Save this one, then stop asking for the rest of this walkthrough">&#x26A1; Quick save (skip previews)</button>' +
+        '<div class="modal-footer p86-upload-actions">' +
+          // Both of these are about a CAPTURE LOOP, so both appear only when
+          // one is running: "finish" has nothing to finish and "skip the rest"
+          // has no rest when this is the only photo. Cancel is the × above.
+          '<button class="ee-btn secondary" id="upPrevQuick" style="display:none;" title="Save this one, then stop asking for the rest of this walkthrough">&#x26A1; Quick save</button>' +
+          '<button class="ee-btn secondary" id="upPrevDone" style="display:none;" title="Save this photo and stop the walkthrough capture loop">Save &amp; finish</button>' +
           '<button class="primary" id="upPrevSave">Save</button>' +
         '</div>' +
       '</div>';
@@ -6222,6 +6249,8 @@
     // Done button — visible only when walkthrough capture is active.
     // Saves THIS photo AND clears the keep-camera-open flag so the
     // chain doesn't re-trigger the file input after this save.
+    var quickBtn = modal.querySelector('#upPrevQuick');
+    if (quickBtn && _walkthroughKeepOpen) quickBtn.style.display = '';
     var doneBtn = modal.querySelector('#upPrevDone');
     if (doneBtn) {
       if (_walkthroughKeepOpen) doneBtn.style.display = '';
@@ -6273,7 +6302,7 @@
       '<span class="p86-walkthrough-label">Sticky tags:</span>' +
       _walkthroughTags.map(function(t) {
         return '<button class="p86-chip-tag" data-mk-remove-walkthrough="' + escapeAttr(t) + '" style="--h:' + hueFor(t) + ';" title="Click to remove">' +
-          '#' + escapeHTML(t) + ' &times;' +
+          escapeHTML(t) + ' &times;' +
         '</button>';
       }).join('') +
       '<button class="p86-chip" id="projWalkthroughClear" title="Clear all sticky tags">Clear</button>';

@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.60';
+const APP_VERSION = '1.61';
 
 const releases = [
+  {
+    version: '1.61',
+    date: '2026-09-26',
+    name: 'Tags keep their capitals',
+    summary: 'A tag is now written the way you type it, chips have stopped pretending to be hashtags, and the photo preview asks its questions without three lines of filename above them.',
+    changes: [
+      { type: 'fixed', text: 'A tag added from a project was forced into lower case, so Punch List could never be written — every photo on a walkthrough came out shouting. It now keeps the capitals you type, which is what the rest of the app already did. Office and office are still the same tag: you cannot add it twice, and it keeps one colour.' },
+      { type: 'improved', text: 'Chips no longer draw a # in front of the word. A chip already looks like a chip — on a photo, in the tag strip, in the picker and in the admin tag list.' },
+      { type: 'improved', text: 'The photo preview is shorter. The heading was the camera filename — thirty-two digits over two lines that told you nothing the photo underneath does not — and is now just Add photo; a file you named yourself still shows its name. Cancel is the × in the corner rather than a fourth button, and Quick save appears only during a walkthrough, where there is a rest of the batch to skip. On a phone the photo is capped so the caption and the tags are on screen without scrolling.' },
+    ],
+  },
   {
     version: '1.60',
     date: '2026-09-26',

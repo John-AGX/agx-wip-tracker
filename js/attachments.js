@@ -589,7 +589,7 @@
       var tags = Array.isArray(a.tags) ? a.tags.slice() : [];
       var chipsHTML = tags.map(function(t) {
         return '<span class="p86-pv-tag-chip" style="--h:' + (window.p86Projects && window.p86Projects.mountTagEditor ? hueForLocal(t) : 200) + ';">' +
-          '#' + escapeHTMLLocal(t) +
+          escapeHTMLLocal(t) +
           '<button type="button" class="p86-pv-tag-chip-rm" data-rm-tag="' + escapeAttr(t) + '" title="Remove">&times;</button>' +
         '</span>';
       }).join('');
@@ -705,7 +705,7 @@
       function paint() {
         var chipsHTML = selected.map(function(t) {
           return '<span class="p86-pv-tag-modal-chip" style="--h:' + hueForLocal(t) + ';">' +
-            '#' + escapeHTMLLocal(t) +
+            escapeHTMLLocal(t) +
             '<button type="button" class="p86-pv-tag-modal-chip-rm" data-rm-modal-chip="' + escapeAttr(t) + '">&times;</button>' +
           '</span>';
         }).join('');
@@ -748,7 +748,7 @@
           var rawCreate = query.trim().slice(0, 32);
           html += '<button type="button" class="p86-pv-tag-modal-row p86-pv-tag-modal-create" data-create-tag="' + escapeAttr(rawCreate) + '">' +
             '<span class="p86-pv-tag-modal-create-plus">&#x2295;</span>' +
-            '<span>Create <strong>#' + escapeHTMLLocal(rawCreate) + '</strong></span>' +
+            '<span>Create <strong>' + escapeHTMLLocal(rawCreate) + '</strong></span>' +
           '</button>';
         }
         if (!vis.length && !canCreate()) {
@@ -756,7 +756,7 @@
         } else {
           html += vis.map(function(t) {
             return '<button type="button" class="p86-pv-tag-modal-row" data-pick-tag="' + escapeAttr(t) + '" style="--h:' + hueForLocal(t) + ';">' +
-              '<span class="p86-pv-tag-modal-row-tag">#' + escapeHTMLLocal(t) + '</span>' +
+              '<span class="p86-pv-tag-modal-row-tag">' + escapeHTMLLocal(t) + '</span>' +
             '</button>';
           }).join('');
         }

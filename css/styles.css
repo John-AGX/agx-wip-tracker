@@ -7966,6 +7966,16 @@
   background: #1a1a2e;
   margin-bottom: 6px;
 }
+/* On a phone, 280px of photo pushed the caption and the tags — the whole
+   point of this screen — below the fold. The photo is confirmation of what
+   was just shot, not the subject of the screen. */
+@media (max-width: 640px) {
+  .p86-upload-preview-img { max-height: 34vh; }
+}
+/* One row of actions, wrapping only if it truly must, and never leaving the
+   primary one stranded on a line of its own. */
+.p86-upload-actions { flex-wrap: wrap; }
+.p86-upload-actions .ee-btn, .p86-upload-actions .primary { white-space: nowrap; }
 .p86-upload-preview-doc {
   width: 100%; height: 140px;
   display: flex; align-items: center; justify-content: center;
