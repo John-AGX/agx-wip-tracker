@@ -702,16 +702,23 @@ describe('the tenant gate binds at the dispatcher, not at the call site', () => 
     //   1. it is SMALL — the gate is the boundary, not the list;
     //   2. every name answers to something — a name in a gate is a claim that
     //      a tool exists behind it, and the first draft of this set carried
-    //      three (`web_fetch`, `navigate_to`, `open_entity`) that did not;
+    //      three (`web_fetch`, `navigate_to`, `open_entity`) that did not.
+    //      `web_fetch` has since become REAL — it is a registered Anthropic
+    //      server tool now, so it is back in the list on merit, not by
+    //      accident. The other two are still phantoms and must stay out;
     //   3. each one is either not tenant data or is keyed on the caller's own
     //      user id, and the reason is written down beside it in the source.
     const names = [...ORGLESS_ALLOWED_TOOLS];
     expect(names.length).toBeLessThanOrEqual(6);
-    expect(names.sort()).toEqual(['navigate', 'search_my_kb', 'self_diagnose', 'web_search']);
+    // web_fetch is exempt for the same reason web_search is: Anthropic performs
+    // the fetch, so no statement of ours runs and there is no tenant row to read.
+    expect(names.sort()).toEqual(['navigate', 'search_my_kb', 'self_diagnose', 'web_fetch', 'web_search']);
     // Every EXEMPT name that is reachable through /exec-tool must be a name
     // that endpoint actually allows; the rest are chat-only tools.
     const bogus = names.filter((n) => !ALLOWED_AUTO_TIER_TOOLS.has(n) &&
-      !['web_search', 'navigate', 'self_diagnose'].includes(n));
+      // web_fetch sits beside web_search: an Anthropic-side server tool is never
+      // in the auto-tier set because no executor of ours is ever reached for it.
+      !['web_search', 'web_fetch', 'navigate', 'self_diagnose'].includes(n));
     expect(bogus).toEqual([]);
   });
 

@@ -441,13 +441,16 @@ describe('R1 — the published tool population', () => {
   // 112 -> 114: approve_pending_write and quick_write (fast approval). Both
   // writes, auto-tier like scribe_write: one applies a staged draft through
   // applyPayloadForUser, the other drafts one through execEmitPayloadFile.
-  test('the population size is committed (114 published names)', () => {
-    expect(ALL_TOOL_NAMES.length).toBe(114);
+  test('the population size is committed (115 published names)', () => {
+    // 114 → 115 when web_fetch was enabled alongside web_search.
+    expect(ALL_TOOL_NAMES.length).toBe(115);
   });
 
-  test('the DRIVEN / WAIVED split is committed (58 driven, 56 not dispatched by execAgentTool)', () => {
+  test('the DRIVEN / WAIVED split is committed (58 driven, 57 not dispatched by execAgentTool)', () => {
     expect({ driven: DISPATCHED.length, waived: NOT_DISPATCHED.length })
-      .toEqual({ driven: 58, waived: 56 });
+      // waived 56 → 57: web_fetch is never dispatched by execAgentTool because
+      // Anthropic executes it, so it lands on the waived side by construction.
+      .toEqual({ driven: 58, waived: 57 });
   });
 
   // ── THE WAIVER PROPERTY, WHICH FAILS BY NAME RATHER THAN BY ARITHMETIC ───
@@ -470,7 +473,10 @@ describe('R1 — the published tool population', () => {
   });
 
   test('every waived name is write-shaped or executor-less, and is listed', () => {
-    const EXECUTORLESS = ['navigate', 'web_search'];
+    // web_fetch joins navigate/web_search here: it is an ANTHROPIC-SIDE server
+    // tool, so no executor of ours ever runs for it and there is no tenant door
+    // to check. Same class as web_search, not a new one.
+    const EXECUTORLESS = ['navigate', 'web_search', 'web_fetch'];
     const WRITE_SHAPED = /^(propose_|set_|create_|delete_|add_|merge_|rename_|split_|change_|link_|attach_|assign_|wire_|update_|emit_|scribe_|approve_|quick_|escalate_|start_|ask_|request_)/;
     const unexplained = NOT_DISPATCHED
       .filter((n) => !WRITE_SHAPED.test(n) && EXECUTORLESS.indexOf(n) === -1);
@@ -534,7 +540,8 @@ describe('R1 — the published tool population', () => {
   const ROUTED = new Set(ROUTED_LITERALS.concat(
     CONTINUE_SRC.indexOf('ClientDirectoryTools.some') !== -1 ? CLIENT_DIRECTORY_NAMES : []));
 
-  const EXECUTORLESS = ['navigate', 'web_search'];
+  // See the note in the waiver test above — web_fetch is Anthropic-side.
+  const EXECUTORLESS = ['navigate', 'web_search', 'web_fetch'];
   // LAZY, because NOT_DISPATCHED is filled by beforeAll and a describe body
   // runs first. Computing these eagerly measured an empty array and reported
   // 0/0 — a split that says nothing is a split that cannot fail.
@@ -549,7 +556,7 @@ describe('R1 — the published tool population', () => {
 
   test('the approval-tier split is DERIVED and committed', () => {
     expect({ served: served().length, fallthrough: fallthrough().length, executorless: EXECUTORLESS.length })
-      .toEqual({ served: 17, fallthrough: 37, executorless: 2 });
+      .toEqual({ served: 17, fallthrough: 37, executorless: 3 });
     expect(served().length + fallthrough().length + EXECUTORLESS.length).toBe(NOT_DISPATCHED.length);
   });
 
