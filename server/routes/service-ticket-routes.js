@@ -59,6 +59,11 @@ const ticketCo = require('../services/service-ticket-change-order');
 const convert = require('../services/service-ticket-convert');
 // Phase 3: the time and materials on a work order billed after the work.
 const fieldCapture = require('../services/service-ticket-field-capture');
+// Phase 4: the money. `billing` is the rules; `billingRoutes` both registers
+// the five office doors at the end of this file and lends the detail read its
+// sheetFor, so the panel and GET /:id/billing cannot drift into two answers.
+const billing = require('../services/service-ticket-billing');
+const billingRoutes = require('./service-ticket-billing-routes');
 
 const router = express.Router();
 
@@ -1324,7 +1329,15 @@ router.get('/:id', requireAuth, async (req, res) => {
     //                 first, with the office totals. Only on a work order billed
     //                 after the work (null otherwise), and never on a crew link:
     //                 this is the authed office read.
-    const [sitePhotos, reviewRead, flags, changeOrders, officeSeen, fieldLog] = await Promise.all([
+    //   billing     — Phase 4: the billing sheet — the rate, the per-line costs
+    //                 and markups, the totals, everything standing between this
+    //                 ticket and a bill, and what it became once billed. Only on
+    //                 a ticket that bills at all (bill_as is not 'none'), and
+    //                 office-only for the same reason field_log is. It rides the
+    //                 detail read so the panel opens filled rather than blank and
+    //                 then populated; GET /:id/billing answers the same shape for
+    //                 the panel's own refreshes.
+    const [sitePhotos, reviewRead, flags, changeOrders, officeSeen, fieldLog, billingSheet] = await Promise.all([
       (async () => workOrder.ticketSitePhotos(pool, orgId, ticket.id, { withNames: true }))().catch((e) => {
         console.warn('[service-tickets] site photos read failed', e && e.message);
         return [];
@@ -1357,6 +1370,10 @@ router.get('/:id', requireAuth, async (req, res) => {
         console.warn('[service-tickets] field log read failed', e && e.message);
         return fieldCapture.fieldCaptureOn(ticket) ? { labor: [], materials: [], summary: fieldCapture.officeSummary([], []), failed: true } : null;
       }),
+      (async () => (billing.billingOn(ticket) ? billingRoutes.sheetFor(pool, ticket) : null))().catch((e) => {
+        console.warn('[service-tickets] billing read failed', e && e.message);
+        return null;
+      }),
     ]);
 
     res.json({
@@ -1383,6 +1400,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       change_orders: Array.isArray(changeOrders) ? changeOrders : [],
       office_seen: officeSeen === true,
       field_log: fieldLog || null,
+      billing: billingSheet || null,
     });
   } catch (e) {
     console.error('[service-tickets] read failed', e);
@@ -2358,7 +2376,7 @@ router.get('/:id/events', requireAuth, async (req, res) => {
 // copying them. The access rule is the one thing in this area that must never
 // exist twice. Every billing path is two segments deep (/:id/billing/…), so
 // none of them can be swallowed by the '/:id' shapes above.
-require('./service-ticket-billing-routes').registerBillingRoutes(router, {
+billingRoutes.registerBillingRoutes(router, {
   loadOwnedTicket,
   ticketAccessOk,
 });

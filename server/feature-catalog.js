@@ -526,9 +526,25 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.65';
+const APP_VERSION = '1.66';
 
 const releases = [
+  {
+    version: '1.66',
+    date: '2026-09-26',
+    name: 'Billing a work order',
+    summary: 'A work order that has been approved can now be priced and turned into a draft change order or a draft invoice, from the work order itself.',
+    changes: [
+      { type: 'new', text: 'There is a Billing panel on an approved work order, under the time and materials. It lists every accepted line \u2014 the hours as the office settled them, the materials as the crew reported them \u2014 with a cost, a markup and a price against each, and the totals underneath. It is office-only: nothing on it has ever been visible on a crew link and nothing on it is now.' },
+      { type: 'new', text: 'One labour rate for the whole work order, offered from the market you set it up in. Take the market\u2019s rate and it is COPIED onto the work order, so a rate you change next month cannot quietly re-price a job you already looked at \u2014 and if the two stop matching, the panel says so and offers you the new one rather than switching by itself.' },
+      { type: 'new', text: 'Materials are costed by you. The crew records what it used, never what it cost, so the panel puts an empty box next to each one \u2014 with the receipt photos beside it, and, when the materials catalogue recognises the description, a button saying what you last paid. It is a button and not a pre-filled number on purpose: a box somebody filled for you is the one your eye slides over.' },
+      { type: 'new', text: 'Markup sits on each line, with one number behind them all. A line using the work order\u2019s default shows it in grey; type over it and it goes solid, so \u201cnobody has touched this\u201d and \u201csomebody chose this\u201d never look the same \u2014 including when the number chosen is zero.' },
+      { type: 'new', text: 'Billing makes a DRAFT and nothing more. A work order on a job becomes a draft change order on that job; one raised from a lead becomes a draft invoice, because there is no contract to change. Nothing is sent, nothing is approved and no client hears anything \u2014 you open the draft and read it.' },
+      { type: 'new', text: 'A service ticket cannot be billed above its contract price. That is a refusal, not a warning: there is no tick-box and no way through, and the panel says what the road past it is \u2014 extra work is a change order. It can be billed for LESS, which is a real thing when a job is part done.' },
+      { type: 'new', text: 'A call you are not going to charge for can be written off, with a reason. That is different from a work order raised before billing existed, which still bills nothing and appears in no billing view.' },
+      { type: 'improved', text: 'Everything standing between a work order and a bill is listed at once \u2014 a rate not set, a material with no cost, a line still waiting on you, work not yet approved \u2014 rather than one at a time as you fix them. Approval still comes before billing, and the billing screen is now where that is enforced for money.' },
+    ],
+  },
   {
     version: '1.65',
     date: '2026-09-26',

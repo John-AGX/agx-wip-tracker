@@ -656,6 +656,34 @@
       return post('/api/service-tickets/' + encodeURIComponent(id) + '/' + path + '/' +
         encodeURIComponent(lineId) + '/decide', payload || {});
     },
+    // Phase 4: billing. Every one of these answers the WHOLE sheet back —
+    // lines, totals, blockers and what the ticket became — so a screen never
+    // has to guess what its own write did.
+    //   billing        -> { rate:{value,source,market_default}, default_markup_pct,
+    //                       lines[], totals:{cost,markup,price}, contract, blockers[], billed }
+    //   setBilling     { labor_rate } | { use_market_rate: true } | { default_markup_pct }
+    //   setBillingLine { unit_cost?, cost_source?, markup_pct? } — a labour line
+    //                  takes markup only; labour prices off the ticket's one rate.
+    //   bill           raises the DRAFT: a change order on the job, or an
+    //                  invoice when the ticket hangs off a lead. `amount` is
+    //                  read only on a contract ticket, and never above its price.
+    billing: function(id) {
+      return get('/api/service-tickets/' + encodeURIComponent(id) + '/billing');
+    },
+    setBilling: function(id, payload) {
+      return put('/api/service-tickets/' + encodeURIComponent(id) + '/billing', payload || {});
+    },
+    setBillingLine: function(id, kind, lineId, payload) {
+      var path = kind === 'material' ? 'materials-used' : 'labor';
+      return put('/api/service-tickets/' + encodeURIComponent(id) + '/billing/' + path + '/' +
+        encodeURIComponent(lineId), payload || {});
+    },
+    bill: function(id, payload) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/billing/bill', payload || {});
+    },
+    writeOffBilling: function(id, reason) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/billing/write-off', { reason: reason });
+    },
     update: function(id, payload) {
       return patch('/api/service-tickets/' + encodeURIComponent(id), payload || {});
     },
