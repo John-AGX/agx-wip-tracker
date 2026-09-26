@@ -149,6 +149,21 @@
   var MAX_OPS = 24;         // cap rendered rows in the strip (rest summarized)
   var MAX_REVEALS = 40;     // cap ANIMATED rows; the rest paint instantly
   var POLL_MS = 5000;       // how often to sweep for server-side applies
+  // …and how often while a write is known to be in flight. The chat tells us
+  // the exact moment a write tool fires, so the window where something is
+  // expected is known precisely rather than guessed at — which is why this
+  // can be short without becoming a background hammer. NUDGE_MS matches
+  // DRAFT_SETTLE_MS below: past that point a diff-less draft is reportable on
+  // its own terms and there is nothing left to hurry.
+  var FAST_POLL_MS = 1000;
+  // Bounded by a COUNT, not a deadline. A wall-clock bound (Date.now() < until)
+  // reads as equivalent and is not: under fake timers the clock does not
+  // advance with the timers, so the deadline never passes and the chain
+  // reschedules forever — which hung the permutation suite. A counter drains
+  // deterministically no matter what owns the clock.
+  var NUDGE_SWEEPS = 20;          // 20 × 1s ≈ DRAFT_SETTLE_MS
+  var _nudgeLeft = 0;
+  var _nudgeTimer = null;
 
   // Dedupe key is payloadId + ':' + state, NOT payloadId — a payload
   // legitimately passes through proposed → applying → applied and each
@@ -1799,6 +1814,30 @@
    * check", and a swallowed catch cannot tell it apart. `force` runs the sweep
    * even in a hidden tab, which is exactly the case that backstop is for. */
   var _pollInFlight = null;
+  /* "A write is in flight — look more often for a while." Called by the chat
+   * the instant a write tool fires (js/ai-panel.js), which is the only place
+   * that knows before the row exists.
+   *
+   * Deliberately NOT forced: a hidden tab still declines to sweep, because a
+   * sweep for nobody is the thing the hidden gate exists to prevent, and the
+   * window simply expires unused. Deliberately does NOT ingest anything
+   * itself either — it only changes cadence, so dedupe, the draft settle rule
+   * and the ledger all stay exactly where they are. Re-arming is idempotent;
+   * two writes in a row just extend the window. */
+  function nudge() {
+    _nudgeLeft = NUDGE_SWEEPS;           // a second write re-arms, never stacks
+    pollApplies();                       // look now, not in a second
+    if (_nudgeTimer) return;             // one chain only
+    (function tick() {
+      if (_nudgeLeft <= 0) { _nudgeTimer = null; return; }
+      _nudgeTimer = setTimeout(function () {
+        _nudgeLeft--;
+        pollApplies();
+        tick();                          // drains to zero and STOPS
+      }, FAST_POLL_MS);
+    })();
+  }
+
   async function pollApplies(force) {
     if (document.hidden && !force) return false;
     // NOT an epoch problem, and deliberately not solved with one: the 5s
@@ -1900,6 +1939,12 @@
       // Wrapped, not passed bare: pollApplies' first argument is `force`, and
       // a timer implementation that hands its callback anything truthy would
       // start sweeping a hidden tab every 5 seconds.
+      //
+      // STAYS setInterval. A self-rescheduling setTimeout would have been the
+      // tidier way to vary the cadence, and it hung the test suite: a chain
+      // that always schedules its own successor never terminates under
+      // jest.runAllTimers(). The extra sweeps live in nudge() instead, as a
+      // chain that stops at a deadline — same effect, and it ends.
       setInterval(function () { pollApplies(); }, POLL_MS);
     } catch (_) { setTimeout(initPoll, 6000); }
   }
@@ -1944,6 +1989,9 @@
     dismiss: dismiss,
     _diffEntry: diffEntry,
     _metaFromRow: metaFromRow,
+    /* Public, not underscored: the chat calls this the moment a write tool
+     * fires so the sweep tightens while something is expected. */
+    nudge: nudge,
     /* One sweep, on demand. The interval owns the live loop; this is the seam
      * the composing backstop and the tests drive. */
     _pollOnce: pollApplies,

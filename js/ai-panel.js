@@ -3853,9 +3853,34 @@ function p86Ask(message, opts) {
           // label and an assistant-badge glow — so the Live Writer placeholder
           // was a second announcement of one moment, in the loudest possible
           // chrome. The after-the-fact diff still reports the write itself.
+          //
+          // What the moment IS worth: telling the Live Writer to sweep more
+          // often. A client-approved write is already instant, but a
+          // server-side or auto-applied one fires no client event and is found
+          // only by the 5s poller. This is the one place that knows a write is
+          // coming BEFORE its row exists, so the poller stops guessing.
+          try {
+            var _wt = payload.tool_started.name;
+            if ((_wt === 'scribe_write' || _wt === 'emit_payload_file') &&
+                window.p86LiveWriter && window.p86LiveWriter.nudge) {
+              window.p86LiveWriter.nudge();
+            }
+          } catch (_e) {}
           scrollToBottom();
         } else if (payload.tool_applied) {
           crewEmit('tool_done', { name: payload.tool_applied.name });
+          // Re-arm the fast sweep HERE too, not only at tool_started. A Scribe
+          // write regularly runs longer than the nudge window, so a window
+          // opened at the start can expire before the row it was opened for
+          // ever lands — and the sweep would drop back to 5s at exactly the
+          // wrong moment. At this point the row genuinely exists.
+          try {
+            var _wd = payload.tool_applied.name;
+            if ((_wd === 'scribe_write' || _wd === 'emit_payload_file') &&
+                window.p86LiveWriter && window.p86LiveWriter.nudge) {
+              window.p86LiveWriter.nudge();
+            }
+          } catch (_e) {}
           // Payload DSL — emit_payload_file lands here with meta
           // carrying the full file_content. Render a dedicated file
           // artifact in the message stream AND refresh the sidebar

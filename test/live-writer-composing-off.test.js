@@ -93,6 +93,48 @@ describe('the replacement indicator is actually wired', () => {
   });
 });
 
+describe('the fast-sweep nudge terminates', () => {
+  const ENGINE = read('js/live-writer.js');
+  const PANEL = read('js/ai-panel.js');
+
+  // This hung the suite TWICE while being written, both times for the same
+  // reason in different clothes: a timer chain that always schedules its
+  // successor is an infinite timer under jest.runAllTimers().
+  test('the MAIN poll loop is still setInterval, not a self-rescheduling chain', () => {
+    expect(ENGINE).toMatch(/setInterval\(function \(\) \{ pollApplies\(\); \}, POLL_MS\)/);
+  });
+
+  test('the nudge chain is bounded by a COUNT, not by the wall clock', () => {
+    // A Date.now() deadline reads as equivalent and is not: fake timers do not
+    // advance the clock with the timers, so the deadline never passes.
+    const fn = ENGINE.slice(ENGINE.indexOf('function nudge()'),
+                            ENGINE.indexOf('async function pollApplies'));
+    expect(fn).toMatch(/_nudgeLeft <= 0/);
+    expect(fn).toMatch(/_nudgeLeft--/);
+    expect(fn).not.toMatch(/Date\.now\(\)/);
+  });
+
+  test('a second write re-arms the chain instead of stacking a second one', () => {
+    const fn = ENGINE.slice(ENGINE.indexOf('function nudge()'),
+                            ENGINE.indexOf('async function pollApplies'));
+    expect(fn).toMatch(/if \(_nudgeTimer\) return;/);
+  });
+
+  test('the nudge is unforced, so a hidden tab still declines to sweep', () => {
+    const fn = ENGINE.slice(ENGINE.indexOf('function nudge()'),
+                            ENGINE.indexOf('async function pollApplies'));
+    expect(fn).toMatch(/pollApplies\(\)/);
+    expect(fn).not.toMatch(/pollApplies\(true\)/);
+  });
+
+  test('the chat arms it at BOTH ends of a write', () => {
+    // A Scribe write regularly outlives the window, so arming only at
+    // tool_started drops back to 5s at exactly the wrong moment.
+    expect(PANEL).toMatch(/tool_started[\s\S]{0,900}p86LiveWriter\.nudge\(\)/);
+    expect(PANEL).toMatch(/tool_applied[\s\S]{0,700}p86LiveWriter\.nudge\(\)/);
+  });
+});
+
 describe('surface C owns its own stylesheet', () => {
   const ENGINE = read('js/live-writer.js');
 
