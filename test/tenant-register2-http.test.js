@@ -506,11 +506,20 @@ describe('REGISTER 2 — the route population', () => {
     //      test/work-order-field-capture.test.js, which also pins that the
     //      stored photo is tagged 'receipt' and so never reaches the crew
     //      read, the site photos or any url the crew can see.
-    expect(R.routes).toBe(628);
+    //      628 -> 633: the five BILLING doors (Phase 4), all on the main
+    //      service-ticket router so they inherit its loadOwnedTicket and
+    //      ticketAccessOk rather than copying the access rule:
+    //      GET/PUT /:id/billing, PUT /:id/billing/:kind/:lineId,
+    //      POST /:id/billing/bill and POST /:id/billing/write-off. Every one
+    //      is office-only and carries a price, a cost or a markup; there is
+    //      deliberately NO share-link door among them. All five are writes or
+    //      need a path parameter, so all five are waived here and driven by
+    //      test/work-order-billing.test.js.
+    expect(R.routes).toBe(633);
     expect(R.routers).toBe(79);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (142 driven, 486 counted)', () => {
+  test('the DRIVEN / COUNTED-WAIVED split is committed (142 driven, 491 counted)', () => {
     // 466 -> 476: the ten Work Orders (1.30) routes above, every one waived.
     // 476 -> 477: POST /api/clients/merge, a write (see the note above).
     // 139 -> 141: the two Work Orders (1.33) reads above. Both are GETs with
@@ -521,7 +530,9 @@ describe('REGISTER 2 — the route population', () => {
     // 141 -> 142: GET /api/weather/leads (see above) — a param-less GET, so the
     // driven side moves and the waived side does not.
     // 485 -> 486: the receipt door, a write (see the note above).
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 142, waived: 486 });
+    // 486 -> 491: the five billing doors. GET /:id/billing takes a path
+    // parameter, so even the read is waived and the driven side does not move.
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 142, waived: 491 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

@@ -386,6 +386,11 @@ function officeLine(kind, row) {
     decided_at: r.decided_at == null ? null : r.decided_at,
     created_at: r.created_at,
   };
+  // Phase 4 money, office side only. It is NOT in publicLine above, and a
+  // crew-facing test exists to keep it out. A line carries markup whichever
+  // kind it is; only a material carries a cost, because labour prices off
+  // the one rate on the ticket.
+  out.markup_pct = numberOr(r.markup_pct, null);
   if (kind === 'labor') {
     out.work_date = dayOf(r.work_date);
     out.crew_size = numberOr(r.crew_size, null);
@@ -398,6 +403,8 @@ function officeLine(kind, row) {
     // Person-hours: the labour a bill is made of. Office only.
     out.person_hours = crew != null && hours != null ? Math.round(crew * hours * 100) / 100 : null;
   } else {
+    out.unit_cost = numberOr(r.unit_cost, null);
+    out.cost_source = r.cost_source == null ? null : String(r.cost_source);
     out.description = r.description == null ? '' : String(r.description);
     out.quantity = numberOr(r.quantity, null);
     out.unit = r.unit == null ? null : String(r.unit);

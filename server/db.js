@@ -5268,6 +5268,93 @@ async function initSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS uq_service_ticket_materials_used_client_ref
       ON service_ticket_materials_used(ticket_id, client_ref) WHERE client_ref IS NOT NULL;
 
+    -- ── PHASE 4: BILLING ───────────────────────────────────────────────
+    -- Phase 3 recorded WHAT was done — hours, crew size, materials used —
+    -- and deliberately carried no money at all. This is the money, and it
+    -- lives on the office side of the same rows: publicLine() in
+    -- services/service-ticket-field-capture.js projects a crew answer BY
+    -- INCLUSION, so none of the columns below can reach a crew link unless
+    -- somebody adds the key to that whitelist, and a test exists to stop it.
+    --
+    -- THE RATE IS ONE NUMBER PER TICKET (John, 2026-09-26). A labour line
+    -- records crew_size and hours; it does not record who worked, so a rate
+    -- card by trade would be picked at billing time out of thin air. One
+    -- rate on the ticket, seeded from the market's labor_rate_default, is
+    -- the number the office actually knows.
+    --
+    -- ⚠ markets.labor_rate_default has been INERT since it shipped, with a
+    -- written warning against reading it by accident. This is the decision
+    -- that warning asked for, and it covers THIS PATH ONLY: a work order's
+    -- billing seeds its rate from it. The estimating path still does not
+    -- read it, and target_margin_pct / overhead_pct / default_markup_pct
+    -- remain inert everywhere.
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS labor_rate         NUMERIC(10,2);
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS labor_rate_source  TEXT;   -- market | typed
+    -- The markup behind every line that does not carry its own. Per-LINE
+    -- markup is the model (John chose the estimate editor's shape), and this
+    -- is the fallback the lines cascade to, exactly as an estimate line
+    -- falls back to its section. Seeded at nothing, not at a number: AGX's
+    -- posture is that markup is dialled in after costs are confirmed.
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS default_markup_pct NUMERIC(6,3);
+
+    -- WHAT THE TICKET BECAME. A billed work order points at the draft it
+    -- raised, and the pointer is ON DELETE SET NULL on purpose: deleting the
+    -- draft change order or invoice releases the ticket to be billed again,
+    -- so a mistake is undone by deleting the wrong document rather than by a
+    -- second 'unbill' door that could drift from it. billing_status stays
+    -- 'billed' with a null link, and the bill door reads the LINK, not the
+    -- word, when it decides whether to refuse a second bill.
+    --
+    -- written_off is the state the bill_as comment promised: a real call that
+    -- will not be charged, which is NOT the same as bill_as 'none' (a ticket
+    -- that predates billing and appears in no billing view at all).
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS billing_status TEXT NOT NULL DEFAULT 'unbilled';
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS billed_at      TIMESTAMPTZ;
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS billed_by      INTEGER REFERENCES users(id) ON DELETE SET NULL;
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS billed_change_order_id TEXT REFERENCES job_change_orders(id) ON DELETE SET NULL;
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS billed_invoice_id      TEXT REFERENCES invoices(id)          ON DELETE SET NULL;
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS write_off_reason       TEXT;
+    DO $service_tickets_billing_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_tickets_billing_chk') THEN
+        ALTER TABLE service_tickets ADD CONSTRAINT service_tickets_billing_chk
+          CHECK (billing_status IN ('unbilled', 'billed', 'written_off')
+             AND (labor_rate IS NULL OR labor_rate >= 0)
+             AND (labor_rate_source IS NULL OR labor_rate_source IN ('market', 'typed'))
+             AND (default_markup_pct IS NULL OR (default_markup_pct >= 0 AND default_markup_pct <= 1000)));
+      END IF;
+    END $service_tickets_billing_chk$;
+    -- The billing views list by what is waiting to be billed.
+    CREATE INDEX IF NOT EXISTS idx_service_tickets_org_billing
+      ON service_tickets(organization_id, billing_status, status)
+      WHERE archived_at IS NULL AND bill_as <> 'none';
+
+    -- Per-line money. A labour line prices off the TICKET's rate — there is
+    -- no per-line rate, because there is one rate — so all it needs is its
+    -- own markup. A material line needs a cost as well: the crew records
+    -- what it used, never what it cost, and the receipt photo on the line is
+    -- what the office reads the price off.
+    ALTER TABLE service_ticket_labor          ADD COLUMN IF NOT EXISTS markup_pct NUMERIC(6,3);
+    ALTER TABLE service_ticket_materials_used ADD COLUMN IF NOT EXISTS markup_pct NUMERIC(6,3);
+    ALTER TABLE service_ticket_materials_used ADD COLUMN IF NOT EXISTS unit_cost   NUMERIC(12,2);
+    -- Where the cost came from, so a pre-filled catalogue price is never
+    -- mistaken for one somebody read off a receipt. Same idea as
+    -- service_tickets.contract_source.
+    ALTER TABLE service_ticket_materials_used ADD COLUMN IF NOT EXISTS cost_source TEXT;  -- typed | catalog
+    DO $service_ticket_labor_money_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_ticket_labor_money_chk') THEN
+        ALTER TABLE service_ticket_labor ADD CONSTRAINT service_ticket_labor_money_chk
+          CHECK (markup_pct IS NULL OR (markup_pct >= 0 AND markup_pct <= 1000));
+      END IF;
+    END $service_ticket_labor_money_chk$;
+    DO $service_ticket_materials_money_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_ticket_materials_money_chk') THEN
+        ALTER TABLE service_ticket_materials_used ADD CONSTRAINT service_ticket_materials_money_chk
+          CHECK ((markup_pct IS NULL OR (markup_pct >= 0 AND markup_pct <= 1000))
+             AND (unit_cost IS NULL OR unit_cost >= 0)
+             AND (cost_source IS NULL OR cost_source IN ('typed', 'catalog')));
+      END IF;
+    END $service_ticket_materials_money_chk$;
+
     -- B5: the Work Orders page sorts and filters by due date across the org.
     CREATE INDEX IF NOT EXISTS idx_service_tickets_org_due
       ON service_tickets(organization_id, due_date) WHERE archived_at IS NULL;

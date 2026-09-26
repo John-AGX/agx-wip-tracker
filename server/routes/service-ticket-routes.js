@@ -198,6 +198,14 @@ const TICKET_COLS = [
   // NOT in MY_BUILDING_ROW_KEYS, and the crew-facing tests keep it that way.
   'bill_as', 'ticket_kind', 'client_id', 'estimate_id', 'contract_amount',
   'contract_source', 'kind_changed_at', 'previous_ticket_number',
+  // Phase 4: the money. The rate this work order bills labour at, the markup
+  // behind every line that carries none of its own, and what the ticket
+  // became once it was billed. Office only, the same as contract_amount
+  // above: none of these is in svc.PUBLIC_TICKET_KEYS or MY_BUILDING_ROW_KEYS,
+  // and the crew-facing tests assert those key sets exactly.
+  'labor_rate', 'labor_rate_source', 'default_markup_pct',
+  'billing_status', 'billed_at', 'billed_by',
+  'billed_change_order_id', 'billed_invoice_id', 'write_off_reason',
 ].join(', ');
 
 // What a work order may carry to someone whose only claim on it is that it is
@@ -2343,6 +2351,16 @@ router.get('/:id/events', requireAuth, async (req, res) => {
     console.error('[service-tickets] events failed', e);
     res.status(500).json({ error: 'Failed to load the timeline' });
   }
+});
+
+// BILLING (Phase 4) is registered here rather than in its own router so that
+// it inherits THIS file's loadOwnedTicket and ticketAccessOk instead of
+// copying them. The access rule is the one thing in this area that must never
+// exist twice. Every billing path is two segments deep (/:id/billing/…), so
+// none of them can be swallowed by the '/:id' shapes above.
+require('./service-ticket-billing-routes').registerBillingRoutes(router, {
+  loadOwnedTicket,
+  ticketAccessOk,
 });
 
 // The crew-safe whitelist GET /my-buildings shapes every row through, so a

@@ -313,7 +313,37 @@ function translate(sql) {
   // place, sqlite refuses to prepare and the statement throws, which would
   // make every route that reads-then-writes under a lock untestable here —
   // and those are exactly the routes where the tenant predicate goes missing.
-  s = s.replace(/\s+FOR\s+UPDATE(\s+(?:NOWAIT|SKIP\s+LOCKED))?\b/gi, '');
+  // …and the same for the three weaker modes. `FOR KEY SHARE` in particular
+  // is not decoration: services/service-ticket-change-order.js and the
+  // billing door both take it on `jobs` FIRST, deliberately, to stop a lock
+  // cycle with DELETE /api/jobs/:id. Only `FOR UPDATE` was stripped here, so
+  // the moment a test drove one of those transactions the statement failed to
+  // PREPARE — which reads as "the door is broken" rather than "the shim does
+  // not know this clause".
+  s = s.replace(
+    /\s+FOR\s+(?:UPDATE|NO\s+KEY\s+UPDATE|KEY\s+SHARE|SHARE)(\s+(?:NOWAIT|SKIP\s+LOCKED))?\b/gi,
+    ''
+  );
+
+  // Postgres' regex-match operators, `x ~ 'pat'` and `x !~ 'pat'`, become a
+  // real regex call — createPgSqlite registers regexp_like below. NOT stubbed
+  // out: the three number sequences in services/job-financials.js
+  // (nextCoNumber, nextPoNumber, nextInvoiceNumber) use `~` to pick out the
+  // rows that are actually numbered, and a rule that reduced the predicate to
+  // TRUE would feed a malformed number into parseInt and hand back a sequence
+  // that looks right in the fixture and collides in production.
+  //
+  // Deliberately narrow: a bare column, a qualified column or a parameter on
+  // the left, and a single-quoted literal on the right. `~` is also arithmetic
+  // (bitwise NOT) and appears inside string literals, so a greedy rule here
+  // would corrupt statements this shim is supposed to leave alone. Anything
+  // wider than this shape reaches sqlite untranslated and fails LOUDLY at
+  // prepare, which is the right failure — silence is what this file exists to
+  // refuse.
+  s = s.replace(
+    /((?:[a-z_][a-z0-9_]*\.)?[a-z_][a-z0-9_]*|\$\d+)\s*(!?)~\s*('(?:[^']|'')*')/gi,
+    (_m, expr, bang, pat) => (bang ? 'NOT ' : '') + 'regexp_like(' + expr + ', ' + pat + ')'
+  );
 
   // $1 $2 ... -> ?1 ?2 ... — sqlite's NUMBERED parameters, not anonymous ones,
   // so a statement that uses the same parameter twice (several of these do)
@@ -357,6 +387,16 @@ function encodeParam(v) {
 
 function createPgSqlite(schemaSql, opts) {
   const db = new DatabaseSync(':memory:');
+  // What `x ~ 'pat'` is translated to. Postgres regexes here are the plain
+  // anchored ones the number sequences use, which JavaScript reads the same
+  // way; a pattern the two engines would disagree about has no business in a
+  // query this shim is asked to run. A bad pattern throws rather than
+  // answering false — a regex that silently never matches is how a numbering
+  // query starts handing back CO-1 forever.
+  db.function('regexp_like', (value, pattern) => {
+    if (value == null || pattern == null) return null;
+    return new RegExp(String(pattern)).test(String(value)) ? 1 : 0;
+  });
   db.exec(schemaSql);
   const extraJson = new Set((opts && opts.jsonColumns) || []);
   const dateCols = new Set((opts && opts.dateColumns) || []);

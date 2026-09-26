@@ -192,7 +192,31 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**578** occurrences of `organization_id IS NULL` across `server/`.
+**581** occurrences of `organization_id IS NULL` across `server/`.
+
+578 → 581: billing a work order (Phase 4). Three arms, and each one COPIES a
+predicate that already exists rather than inventing a looser one:
+
+* `services/service-ticket-billing.js` `marketRate()` reads the parent JOB to find
+  which market the ticket inherits. Same arm, same words, as
+  `assertJobInOrg` in `services/job-financials.js` — a legacy job with a NULL
+  stamp still belongs to a market, and a work order on it still has to bill.
+  The LEAD half of the same function carries no arm, because `leads` has no
+  legacy NULL-org rows.
+* `routes/service-ticket-billing-routes.js` takes `SELECT 1 FROM jobs … FOR KEY SHARE`
+  before it touches the ticket, to keep the lock order that stops a cycle
+  with `DELETE /api/jobs/:id`. Its predicate MUST match `assertJobInOrg`'s
+  exactly: a row that call would accept but this one skips is a row locked
+  by nothing, which is the deadlock this is here to prevent. The copy is
+  load-bearing, not incidental.
+* `catalogCost()` offers a material's price from the `materials` catalogue. The
+  arm is what the rest of the app reads that table with
+  (`routes/assembly-routes.js`, `routes/ai-routes.js`): the NULL-org rows there are
+  SHARED reference data, not an un-stamped tenant's, and this read is
+  otherwise scoped to the caller's org — another tenant's purchase price is
+  refused, and `test/work-order-billing.test.js` drives both directions.
+
+When this item closes, all three retire with the reads they copied.
 
 575 → 578: the Subs directory stopped reading `job_subs.contract_amt` (a
 column nothing writes any more, so every sub showed $0 against real purchase
