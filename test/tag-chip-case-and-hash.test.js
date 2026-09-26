@@ -122,16 +122,67 @@ describe('the actions row is as short as the moment allows', () => {
     expect(modal).not.toMatch(/data-close>Cancel</);
   });
 
-  test('Quick save and Save & finish are both hidden until a walkthrough is running', () => {
-    for (const id of ['upPrevQuick', 'upPrevDone']) {
+  test('Save & finish and the skip-the-rest box are hidden until a walkthrough runs', () => {
+    for (const id of ['upPrevDone', 'upPrevAgainWrap']) {
       const at = modal.indexOf('id="' + id + '"');
       expect([id, at >= 0]).toEqual([id, true]);
-      expect([id, modal.slice(at, at + 90)]).toEqual([id, expect.stringContaining('style="display:none;"')]);
+      expect([id, modal.slice(at, at + 100)]).toEqual([id, expect.stringContaining('style="display:none;"')]);
     }
-    expect(PROJECTS).toMatch(/if \(quickBtn && _walkthroughKeepOpen\) quickBtn\.style\.display = '';/);
+    expect(PROJECTS).toMatch(/if \(againWrap && _walkthroughKeepOpen\) againWrap\.style\.display = '';/);
   });
 
   test('Save is always there', () => {
     expect(modal).toMatch(/class="primary" id="upPrevSave">Save</);
+  });
+
+  // "move the buttons under the photo" + "can you consolidate any of the
+  // buttons aswell?" — John, 2026-09-26. Quick save was a third button that
+  // did what Save does and set a preference; the preference moved into the
+  // body as a checkbox, and Markup moved onto the photo.
+  test('two buttons in the footer, never three', () => {
+    const footer = modal.slice(modal.indexOf('modal-footer p86-upload-actions'));
+    expect((footer.match(/<button /g) || []).length).toBe(2);
+    expect(PROJECTS).not.toMatch(/upPrevQuick/);
+  });
+
+  test('Markup is a chip on the photo, not a row under it', () => {
+    const shot = modal.slice(modal.indexOf('p86-upload-shot'), modal.indexOf('id="upPrevCaption"'));
+    expect(shot).toMatch(/class="p86-upload-markup" id="upPrevAnnotate"/);
+    expect(shot).toMatch(/id="upPrevAnnoCount"/);
+    // …and a document has nothing to draw on, so it gets no chip — which
+    // means the wiring has to tolerate the button being absent.
+    expect(PROJECTS).toMatch(/var annoBtn = modal\.querySelector\('#upPrevAnnotate'\);\r?\n\s*if \(annoBtn\) annoBtn\.addEventListener/);
+  });
+});
+
+// The footer moves BELOW the body on this screen only. Every other modal in
+// the app leans on .modal-footer { order: -1 } to keep Save above a long
+// form, so this has to be a scoped override, never a change to that rule.
+describe('the actions sit under the photo, and only here', () => {
+  const CSS = fs.readFileSync(path.join(__dirname, '..', 'css', 'styles.css'), 'utf8').replace(/\r\n/g, '\n');
+
+  test('the app-wide rule still puts actions above the body', () => {
+    const at = CSS.indexOf('.modal-footer {');
+    expect(at).toBeGreaterThan(0);
+    expect(CSS.slice(at, CSS.indexOf('}', at))).toMatch(/order:\s*-1;/);
+  });
+
+  test('the upload preview overrides it for itself', () => {
+    const at = CSS.indexOf('.p86-upload-modal .modal-footer {');
+    expect(at).toBeGreaterThan(0);
+    const scoped = CSS.slice(at, CSS.indexOf('}', at));
+    expect(scoped).toMatch(/order:\s*0;/);
+    // Sticky, or the reason for the app-wide rule bites here too: a tall
+    // photo would scroll Save off the bottom of the dialog.
+    expect(scoped).toMatch(/position:\s*sticky;/);
+    expect(scoped).toMatch(/bottom:\s*0;/);
+    // …and opaque, or the photo shows through the buttons as it passes.
+    expect(scoped).toMatch(/background:\s*var\(--surface\);/);
+  });
+
+  test('the markup chip is positioned on the photo', () => {
+    const shot = CSS.slice(CSS.indexOf('.p86-upload-shot {'), CSS.indexOf('.p86-upload-again {'));
+    expect(shot).toMatch(/\.p86-upload-shot \{[^}]*position:\s*relative/);
+    expect(shot).toMatch(/\.p86-upload-markup, \.p86-upload-annocount \{[^}]*position:\s*absolute/);
   });
 });

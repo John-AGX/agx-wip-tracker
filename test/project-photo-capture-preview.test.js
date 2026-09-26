@@ -94,15 +94,18 @@ describe('every way a photo arrives decides through that one rule', () => {
 describe('the block holds what it is wanted for', () => {
   const modal = SRC.slice(SRC.indexOf('function openUploadPreview'), SRC.indexOf('function openUploadPreview') + 6000);
 
-  test('a caption, a microphone, tags and Annotate before saving', () => {
+  test('a caption, a microphone, tags and markup on the photo', () => {
     expect(modal).toMatch(/id="upPrevCaption"/);
     expect(modal).toMatch(/id="upPrevMic"/);
     expect(modal).toMatch(/id="upPrevTagsEditor"/);
     expect(modal).toMatch(/id="upPrevAnnotate"/);
   });
 
-  test('and a way out of it that does not cost the photo', () => {
-    expect(modal).toMatch(/id="upPrevQuick"/);
+  test('and a way to stop being asked that does not cost the photo', () => {
+    // Was a third button (#upPrevQuick); it is a checkbox now, and Save
+    // reads it — the same 'quick' branch of previewAndUpload either way.
+    expect(modal).toMatch(/id="upPrevAgain"/);
     expect(modal).toMatch(/id="upPrevSave"/);
+    expect(SRC).toMatch(/close\(againBox && againBox\.checked \? 'quick' : 'save'/);
   });
 });

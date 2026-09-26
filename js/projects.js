@@ -6135,14 +6135,18 @@
     modal.id = 'projUploadPreview';
     modal.className = 'modal active';
     modal.innerHTML =
-      '<div class="modal-content" style="max-width:580px;">' +
+      '<div class="modal-content p86-upload-modal" style="max-width:580px;">' +
         '<div class="modal-header">' +
           '<span>' + escapeHTML(previewHeading(file, isImage)) + '</span>' +
           '<button class="p86-modal-close" data-close>&times;</button>' +
         '</div>' +
         '<div class="p86-proj-create-body">' +
           (isImage
-            ? '<img src="' + escapeAttr(blobUrl) + '" alt="" class="p86-upload-preview-img" />'
+            ? '<div class="p86-upload-shot">' +
+                '<img src="' + escapeAttr(blobUrl) + '" alt="" class="p86-upload-preview-img" />' +
+                '<button type="button" class="p86-upload-markup" id="upPrevAnnotate" title="Draw on this photo before it saves">&#x270E; Markup</button>' +
+                '<span id="upPrevAnnoCount" class="p86-upload-annocount"></span>' +
+              '</div>'
             : '<div class="p86-upload-preview-doc">' + escapeHTML((file.name.split(".").pop() || "FILE").toUpperCase()) + '</div>') +
           '<div class="p86-field">' +
             '<span>Caption</span>' +
@@ -6157,17 +6161,20 @@
             '<span>Tags <small style="color:var(--text-dim,#888);font-weight:400;text-transform:none;letter-spacing:0;">carry to the next photo</small></span>' +
             '<div id="upPrevTagsEditor" class="p86-tag-editor"></div>' +
           '</div>' +
-          '<div class="p86-field">' +
-            '<button type="button" class="ee-btn secondary" id="upPrevAnnotate">&#x270E; Annotate before saving</button>' +
-            '<span id="upPrevAnnoCount" style="font-size:11px;color:var(--text-dim,#888);margin-left:8px;"></span>' +
-          '</div>' +
+          // Quick save was a third button that did what Save does, plus set a
+          // preference. A preference is not an action: it belongs with the
+          // fields, and Save reads it. Shown only inside a walkthrough, where
+          // there is a "rest" to stop asking about.
+          '<label class="p86-check-row p86-upload-again" id="upPrevAgainWrap" style="display:none;">' +
+            '<input type="checkbox" id="upPrevAgain" />' +
+            '<span>Save the rest of this walkthrough without asking</span>' +
+          '</label>' +
         '</div>' +
+        // Two buttons at most, UNDER the photo they act on (css/styles.css
+        // .p86-upload-modal). "Finish" has nothing to finish outside a
+        // walkthrough, so it only shows in one; Cancel is the × above.
         '<div class="modal-footer p86-upload-actions">' +
-          // Both of these are about a CAPTURE LOOP, so both appear only when
-          // one is running: "finish" has nothing to finish and "skip the rest"
-          // has no rest when this is the only photo. Cancel is the × above.
-          '<button class="ee-btn secondary" id="upPrevQuick" style="display:none;" title="Save this one, then stop asking for the rest of this walkthrough">&#x26A1; Quick save</button>' +
-          '<button class="ee-btn secondary" id="upPrevDone" style="display:none;" title="Save this photo and stop the walkthrough capture loop">Save &amp; finish</button>' +
+          '<button class="ee-btn secondary" id="upPrevDone" style="display:none;" title="Save this photo and stop the camera coming back">Save &amp; finish</button>' +
           '<button class="primary" id="upPrevSave">Save</button>' +
         '</div>' +
       '</div>';
@@ -6200,7 +6207,8 @@
       b.addEventListener('click', function() { close('cancel'); });
     });
 
-    modal.querySelector('#upPrevAnnotate').addEventListener('click', function() {
+    var annoBtn = modal.querySelector('#upPrevAnnotate');
+    if (annoBtn) annoBtn.addEventListener('click', function() {
       // Open the markup viewer with the blob URL as the image source.
       // No attachment id yet — the viewer's PATCH path handles that
       // gracefully and hands the strokes back via onDone().
@@ -6225,21 +6233,31 @@
             var countEl = modal.querySelector('#upPrevAnnoCount');
             if (countEl) {
               countEl.textContent = pendingAnnotations.length
-                ? pendingAnnotations.length + ' annotation' + (pendingAnnotations.length === 1 ? '' : 's') + ' ready'
+                ? pendingAnnotations.length + ' mark' + (pendingAnnotations.length === 1 ? '' : 's')
                 : '';
+              countEl.style.display = pendingAnnotations.length ? 'block' : 'none';
             }
           }
         }
       });
     });
 
+    var againBox = modal.querySelector('#upPrevAgain');
+    var againWrap = modal.querySelector('#upPrevAgainWrap');
+    if (againWrap && _walkthroughKeepOpen) againWrap.style.display = '';
+
     modal.querySelector('#upPrevSave').addEventListener('click', function() {
       var caption = (modal.querySelector('#upPrevCaption').value || '').trim();
       // Sticky-tag update: remember whatever's in the editor as the
-      // new default for subsequent photos in this session.
+      // new default for subsequent photos in this session. This now happens
+      // on the quick path too — the old Quick save BUTTON deliberately left
+      // the sticky tags alone, but this is Save, and what you typed sticking
+      // is what Save has always meant.
       _walkthroughTags = pendingTags.slice();
       paintWalkthroughTagStrip();
-      close('save', {
+      // Ticked, this is the old Quick save exactly: same payload, and the
+      // rest of the walkthrough saves without asking again.
+      close(againBox && againBox.checked ? 'quick' : 'save', {
         caption: caption || null,
         tags: pendingTags.slice(),
         annotations: pendingAnnotations.slice()
@@ -6249,8 +6267,6 @@
     // Done button — visible only when walkthrough capture is active.
     // Saves THIS photo AND clears the keep-camera-open flag so the
     // chain doesn't re-trigger the file input after this save.
-    var quickBtn = modal.querySelector('#upPrevQuick');
-    if (quickBtn && _walkthroughKeepOpen) quickBtn.style.display = '';
     var doneBtn = modal.querySelector('#upPrevDone');
     if (doneBtn) {
       if (_walkthroughKeepOpen) doneBtn.style.display = '';
@@ -6268,22 +6284,6 @@
       });
     }
 
-    modal.querySelector('#upPrevQuick').addEventListener('click', function() {
-      // Don't update _walkthroughTags here — quick save uses whatever's
-      // already sticky from prior previews. If the user wanted these
-      // tags to stick they'd use Save.
-      // But DO forward the tags / caption / annotations the user
-      // already typed in this preview — previewAndUpload picks them
-      // up so a typed-tag-then-Quick-Save doesn't silently lose
-      // the just-entered values. (The earlier "no payload" path
-      // dropped them entirely.)
-      var caption = (modal.querySelector('#upPrevCaption').value || '').trim();
-      close('quick', {
-        caption: caption || null,
-        tags: pendingTags.slice(),
-        annotations: pendingAnnotations.slice()
-      });
-    });
   }
 
   // Re-paint the sticky-tag strip above the upload area whenever

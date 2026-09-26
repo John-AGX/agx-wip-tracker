@@ -8024,6 +8024,46 @@
    primary one stranded on a line of its own. */
 .p86-upload-actions { flex-wrap: wrap; }
 .p86-upload-actions .ee-btn, .p86-upload-actions .primary { white-space: nowrap; }
+
+/* THE ACTIONS SIT UNDER THE PHOTO on this one screen (John, 2026-09-26).
+   Every other modal in the app puts them above the body — .modal-content is
+   a flex column and .modal-footer takes order: -1 — because a long form would
+   otherwise bury Save below the fold. Here the body is a photo and two short
+   fields, and the buttons belong under the thing they are about. They are
+   STICKY, so the reason for the app-wide rule still doesn't bite: scroll the
+   photo and Save stays on screen. Scoped by class; the global rule is
+   untouched. */
+.p86-upload-modal .modal-footer {
+  order: 0;
+  position: sticky;
+  bottom: 0;
+  background: var(--surface);
+  margin: 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+}
+
+/* Markup rides on the photo instead of a full-width button under it. */
+.p86-upload-shot { position: relative; display: block; line-height: 0; }
+.p86-upload-shot .p86-upload-preview-img { display: block; margin-bottom: 0; }
+.p86-upload-markup, .p86-upload-annocount {
+  position: absolute; bottom: 8px;
+  padding: 7px 11px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; line-height: 1;
+  color: #fff; background: rgba(0, 0, 0, 0.62);
+}
+.p86-upload-markup {
+  right: 8px; cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+}
+.p86-upload-markup:hover { background: rgba(0, 0, 0, 0.8); }
+.p86-upload-annocount { left: 8px; display: none; border: 0; }
+
+/* Not an action — a preference Save reads. It sits with the fields.
+   Rides on .p86-check-row, which already undoes the global label{} rule
+   (uppercase, 10px, bold) the way every other checkbox row in the app does. */
+.p86-upload-again { align-items: center; color: var(--text-dim, #888); margin-top: -2px; }
 .p86-upload-preview-doc {
   width: 100%; height: 140px;
   display: flex; align-items: center; justify-content: center;

@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.61';
+const APP_VERSION = '1.62';
 
 const releases = [
+  {
+    version: '1.62',
+    date: '2026-09-26',
+    name: 'The buttons are under the photo',
+    summary: 'On the block that comes up after you take a photo, the buttons have moved under the photo they act on, and there are two of them instead of four.',
+    changes: [
+      { type: 'improved', text: 'Save and Save & finish now sit UNDER the photo rather than above it. Every other dialog in the app keeps its buttons at the top so a long form cannot bury them, but this one is a photo and two short questions, and the buttons belong under the thing they are about. They stay stuck to the bottom as you scroll, so a tall photo never pushes Save off the screen.' },
+      { type: 'improved', text: 'Quick save has stopped being a button. It was a third button that did exactly what Save does and also set a preference, so it is a tick-box now, with the caption and the tags: Save the rest of this walkthrough without asking. Tick it and press Save and nothing else changes. It only appears while a walkthrough is running, because only then is there a rest.' },
+      { type: 'improved', text: 'Annotate has moved onto the photo as a Markup chip in its corner, instead of a full-width button underneath, and the count of marks you have made sits in the opposite corner. Outside a walkthrough the whole block is now one photo, a caption, its tags and one Save.' },
+    ],
+  },
   {
     version: '1.61',
     date: '2026-09-26',
