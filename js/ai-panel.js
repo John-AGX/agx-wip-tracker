@@ -3847,19 +3847,12 @@ function p86Ask(message, opts) {
           crewEmit('tool', { name: payload.tool_started.name });
           var label = TOOL_VERBS[payload.tool_started.name] || (payload.tool_started.name + '…');
           brainYoga.override(label, true);
-          // Live Writer: a write tool kicking off is a REAL moment — the
-          // handoff — so show it. Pass the tool name: scribe_write hands off
-          // to the Scribe (a background draft, usually under a minute), while
-          // emit_payload_file is 86 writing directly with no Scribe involved
-          // at all. One label for both would be false half the time. The
-          // poller clears this the moment the row actually appears.
-          try {
-            var _tn = payload.tool_started.name;
-            if ((_tn === 'scribe_write' || _tn === 'emit_payload_file') &&
-                window.p86LiveWriter && window.p86LiveWriter.startComposing) {
-              window.p86LiveWriter.startComposing('drafting your change', { tool: _tn });
-            }
-          } catch (_e) {}
+          // A write tool kicking off IS a real moment, but it no longer earns a
+          // card of its own. The crewEmit('tool_started') directly above already
+          // publishes it on 'p86:crew', which js/crew-chip.js turns into a header
+          // label and an assistant-badge glow — so the Live Writer placeholder
+          // was a second announcement of one moment, in the loudest possible
+          // chrome. The after-the-fact diff still reports the write itself.
           scrollToBottom();
         } else if (payload.tool_applied) {
           crewEmit('tool_done', { name: payload.tool_applied.name });

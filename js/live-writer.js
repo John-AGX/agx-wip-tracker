@@ -1034,6 +1034,20 @@
      * supersedesOnScreen() inside the ledger, and whether a write landed by
      * didWriteLand(); this is a statement about surface B and nothing else. */
     if (!report || report.kind === 'silent') return null;   // paint nothing, claim nothing
+    /* The mid-write placeholder ("Handed to the Scribe — drafting") is off.
+     * It announced a moment js/crew-chip.js already announces in the header
+     * off the SAME tool_started event, so it was a second shout about one
+     * thing — and unlike every other card here it armed no collapse timer, so
+     * it sat at full size, bottom-right, for up to three minutes.
+     *
+     * The guard lives HERE, at the one reporting boundary, rather than only at
+     * the caller: reportToStrip is documented above as the single door surface
+     * B reports through, so a future caller cannot reintroduce the card by
+     * accident. Returning null is the engine's own honest-decline protocol —
+     * broadcast() reads an explicit null as "this surface DECLINED" — so the
+     * write ledger and every other kind (ops, pane, notice) are untouched.
+     * Flip COMPOSING_ENABLED to true to get it back. */
+    if (report.kind === 'composing' && !COMPOSING_ENABLED) return null;
     /* `if (report.kind !== 'pane') dismissPane();` used to sit here as its own
      * inline rule, and it only ever covered the half of the problem this
      * surface can see: a pane left standing while COWORK reported the next
@@ -1247,8 +1261,33 @@
   // composingEpoch is gone: "is the placeholder still what the strip shows?"
   // is now asked of _stripReport, which the ledger has to know anyway. Two
   // variables tracking one fact is two variables that can disagree.
+  /* The mid-write placeholder. The ENGINE still defaults it ON and still owns
+   * every invariant six regression rounds bought — the card must not be
+   * collapsed by the previous card's timer, must survive an unrelated
+   * dismissal, must not be rebuilt 180s after a hand dismissal, and so on.
+   * Those properties are asserted by ~18 tests across live-writer-honesty /
+   * -permutation, and they stay true and stay covered.
+   *
+   * PRODUCTION turns it off, from index.html, because js/crew-chip.js already
+   * announces the same moment in the header and the assistant badge now glows
+   * green while a write is in flight — the card was a second shout, in the
+   * loudest chrome, that armed no collapse timer and so could sit at full size
+   * for three minutes.
+   *
+   * Read from a global set BEFORE this file loads rather than hard-coded, so
+   * the switch lives with the deployment and the test suite keeps exercising
+   * the real behaviour instead of a disabled stub. Flip it in index.html. */
+  var COMPOSING_ENABLED = (typeof window !== 'undefined' &&
+                           window.P86_LIVE_WRITER_COMPOSING !== undefined)
+    ? !!window.P86_LIVE_WRITER_COMPOSING
+    : true;
   var composingTimer = null;
   function startComposing(label, opts) {
+    // Returning before the timer is the point: the 180s backstop existed ONLY
+    // to retract the placeholder. With no placeholder there is nothing to
+    // retract, and leaving it armed would fire a "nothing landed" notice for a
+    // card the user never saw.
+    if (!COMPOSING_ENABLED) return;
     opts = opts || {};
     var viaScribe = opts.tool !== 'emit_payload_file';
     var report = M.describe({}, { composing: { label: label, viaScribe: viaScribe } });
@@ -1523,6 +1562,15 @@
    * rows. Paints only — it never re-renders, so it cannot race the hydrate
    * or clobber an unsaved local edit. */
   function flashEditorRows(estimateId) {
+    // Surface C owns its own CSS. Until this call, the shared stylesheet was
+    // installed ONLY by ensureRoot / ensurePane (surface B mounting) and by
+    // cowork.js — so the green row glow animated only because the notification
+    // had already appeared and paid for the stylesheet. Reducing B would have
+    // silently stopped the glow, which is the one part of this feature the
+    // owner actually asked to keep. ensureStyle() is idempotent (one
+    // getElementById after the first call), so the cost of being correct here
+    // is nil.
+    ensureStyle();
     var p = _pendingFlash;
     if (!p) return 0;
     if (estimateId && p.estimateId && String(estimateId) !== String(p.estimateId)) return 0;

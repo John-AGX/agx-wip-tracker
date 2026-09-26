@@ -3613,7 +3613,7 @@
     <script src="js/messaging.js?v=8"></script>
     <script src="js/email-hub.js?v=27"></script>
     <script src="js/agent-tasks.js?v=14"></script>
-    <script src="js/crew-chip.js?v=2"></script>
+    <script src="js/crew-chip.js?v=3"></script>
     <script src="js/file-explorer.js?v=18"></script>
     <script src="js/my-files.js?v=28"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
@@ -3751,7 +3751,7 @@
     <script src="js/rich-text.js?v=1"></script>
     <script src="js/estimates.js?v=69"></script>
     <script src="js/proposal.js?v=27"></script>
-    <script src="js/estimate-editor.js?v=115"></script>
+    <script src="js/estimate-editor.js?v=116"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
@@ -3773,12 +3773,23 @@
     <!-- The Live Writer ENGINE — ingest + dedupe + the one differ + the one
          estimate row model, plus surface B (the docked notification). Every
          other surface registers against it. It DRAWS; the model above decides. -->
-    <script src="js/live-writer.js?v=20"></script>
+    <!-- The mid-write "drafting your change" card is OFF in production. The
+         header chip (js/crew-chip.js) already announces that exact moment off
+         the same tool_started event, and the assistant badge now glows green
+         while a write is in flight — so the card was a second announcement, in
+         the loudest chrome, and unlike every other card it armed no collapse
+         timer and could sit at full size for three minutes.
+         The ENGINE still defaults it on and its ~18 regression tests still
+         exercise it; this line is the deployment's choice. Delete it to
+         restore the card. MUST stay above the script tag: the flag is read at
+         module load. -->
+    <script>window.P86_LIVE_WRITER_COMPOSING = false;</script>
+    <script src="js/live-writer.js?v=21"></script>
     <!-- Surface A — the Cowork page. Consumes the engine, so it must load
          AFTER it (live-writer is idempotent-by-existence: a re-load is a
          no-op, so registration has to go through registerSurface). -->
     <script src="js/cowork.js?v=11"></script>
-    <script src="js/ai-panel.js?v=183"></script>
+    <script src="js/ai-panel.js?v=184"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads

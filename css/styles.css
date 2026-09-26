@@ -747,6 +747,54 @@
         .p86-ask86-badge:hover .p86-icon {
             animation-duration: 1.4s;
         }
+        /* WRITING — the quiet replacement for the Live Writer's mid-write
+           popup. Same breathing glow the badge already does, but faster and in
+           the add-green the row flash uses (rgba(29,158,117) === the
+           p86lwFlashAdd ring), so "86 is writing" reads as ONE event across the
+           header chip, this badge and the glowing row. Class is toggled on
+           <body> by js/crew-chip.js off the same p86:crew event the chip uses.
+
+           Specificity is deliberate: [0,3,1] beats both the base rule [0,2,0]
+           and :hover [0,3,0], so hovering mid-write does not silently revert
+           the colour — the trap this file has been bitten by before. */
+        body.p86-ai-writing .p86-ask86-badge .p86-icon {
+            animation-name: p86-ask86-glow-writing;
+            animation-duration: 1.1s;
+        }
+        @keyframes p86-ask86-glow-writing {
+            0%, 100% {
+                filter: drop-shadow(0 0 3px rgba(29, 158, 117, 0.55))
+                        drop-shadow(0 0 6px rgba(29, 158, 117, 0.25));
+            }
+            50% {
+                filter: drop-shadow(0 0 8px rgba(29, 158, 117, 1))
+                        drop-shadow(0 0 20px rgba(29, 158, 117, 0.62));
+            }
+        }
+        /* Light-mode twin, dialed back so it does not blow out the page —
+           the same substitution p86-ask86-back-glow-light makes above. */
+        body.light-mode.p86-ai-writing .p86-ask86-badge .p86-icon {
+            animation-name: p86-ask86-glow-writing-light;
+        }
+        @keyframes p86-ask86-glow-writing-light {
+            0%, 100% {
+                filter: drop-shadow(0 0 2px rgba(29, 158, 117, 0.40))
+                        drop-shadow(0 0 5px rgba(29, 158, 117, 0.18));
+            }
+            50% {
+                filter: drop-shadow(0 0 6px rgba(29, 158, 117, 0.75))
+                        drop-shadow(0 0 14px rgba(29, 158, 117, 0.38));
+            }
+        }
+        /* Reduced-motion: hold a steady green rather than pulsing, exactly as
+           the floating badge already does for its own glow. */
+        @media (prefers-reduced-motion: reduce) {
+            body.p86-ai-writing .p86-ask86-badge .p86-icon {
+                animation: none;
+                filter: drop-shadow(0 0 6px rgba(29, 158, 117, 0.78))
+                        drop-shadow(0 0 14px rgba(29, 158, 117, 0.42));
+            }
+        }
         @keyframes p86-ask86-glow {
             0%, 100% {
                 filter: drop-shadow(0 0 3px rgba(79, 140, 255, 0.55))

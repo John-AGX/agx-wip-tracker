@@ -4716,6 +4716,32 @@
   // Called by app.js AFTER a server hydrate has swapped appData.estimates.
   // No-ops unless an agent write is actually pending, so a routine reload
   // never yanks the view out from under someone who is typing.
+  /* The repaint below is deferred while the caret is inside the editor, and
+   * that guard is right — renderLineItems() rebuilds #ee-lines-container
+   * wholesale and would eat the row being typed into. But "deferred" used to
+   * mean "wait for the next hydrate", which can be minutes away or never come,
+   * while the Live Writer's pending row flash expires after 60 seconds. Net
+   * effect: the person MOST likely to be watching a live write — the one with
+   * the estimate editor open and their hands on it — was the one guaranteed
+   * not to see the green rows.
+   *
+   * So poll briefly for the caret to leave and then run the repaint we already
+   * decided was owed. Bounded, because a person who types continuously for a
+   * minute has moved on and repainting under them later is worse than a
+   * missed flash; the window is kept under the flash's own TTL so this never
+   * fires a repaint whose decoration has already rotted. */
+  var _typingRetry = null;
+  var _typingRetryUntil = 0;
+  function scheduleTypingRetry() {
+    if (_typingRetry) return;                 // one timer, never one per hydrate
+    if (!_typingRetryUntil) _typingRetryUntil = Date.now() + 45000;   // < the 60s flash TTL
+    _typingRetry = setTimeout(function () {
+      _typingRetry = null;
+      if (!_serverWritePending || Date.now() > _typingRetryUntil) { _typingRetryUntil = 0; return; }
+      try { window.p86EstimateEditorRefresh(); } catch (e) { _typingRetryUntil = 0; }
+    }, 1200);
+  }
+
   window.p86EstimateEditorRefresh = function() {
     if (!_serverWritePending) return false;
     if (!_currentId || !getEstimate()) { _serverWritePending = false; return false; }
@@ -4725,7 +4751,11 @@
     // the next open) repaints instead; clearing it here would trade one
     // flicker for a permanently stale editor. Safe to defer now that the
     // scope editor resolves its alternate live and can no longer be orphaned.
-    if (window.p86Refresh && window.p86Refresh.isTypingIn('#estimate-editor-view')) return false;
+    if (window.p86Refresh && window.p86Refresh.isTypingIn('#estimate-editor-view')) {
+      scheduleTypingRetry();   // come back when the caret leaves, not "someday"
+      return false;
+    }
+    _typingRetryUntil = 0;
     _serverWritePending = false;
     try {
       renderHeaderChips();

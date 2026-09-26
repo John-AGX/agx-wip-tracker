@@ -25,7 +25,10 @@
     if (!name) return null;
     if (name === 'web_search' || name === 'web_fetch') return 'Searching the web…';
     if (name === 'escalate_to_86') return 'Pulling 86 in…';
-    if (name === 'scribe_write' || name === 'emit_payload_file') return 'Scribe is drafting…';
+    // Not always the Scribe: emit_payload_file is 86 writing directly. This chip
+    // is now the ONLY announcement of the moment (the Live Writer placeholder
+    // card that used to duplicate it is off), so it says the true general thing.
+    if (name === 'scribe_write' || name === 'emit_payload_file') return 'Writing your change…';
     if (name === 'start_background_task') return 'Handing to the crew…';
     if (name === 'bash' || name === 'code_execution' || name === 'write' || name === 'edit') return 'Crunching numbers…';
     if (/^read_|^search_|^find_|^list_|^view_/.test(name)) return 'Checking the books…';
@@ -82,6 +85,16 @@
     setChip(a.label, a.color, false);
   }
 
+  /* The quiet replacement for the Live Writer's mid-write popup: a class on
+   * <body> that the assistant badge styles itself from (css/styles.css). A
+   * class rather than a direct style write so the badge owns its own look and
+   * prefers-reduced-motion is honoured in CSS, where the rest of this app's
+   * motion rules already live. Idempotent — classList handles repeats. */
+  function setWriting(on) {
+    try { document.body.classList.toggle('p86-ai-writing', !!on); } catch (e) {}
+  }
+  function isWriteTool(n) { return n === 'scribe_write' || n === 'emit_payload_file'; }
+
   window.addEventListener('p86:crew', function (e) {
     var d = (e && e.detail) || {};
     if (_idleTimer) { clearTimeout(_idleTimer); _idleTimer = null; }
@@ -98,17 +111,22 @@
       case 'tool': {
         var lbl = toolLabel(d.name);
         if (d.name === 'escalate_to_86') { _escalated = true; setChip(lbl, ACTORS.job.color, true); }
-        else if (d.name === 'scribe_write' || d.name === 'emit_payload_file') setChip(lbl, ACTORS.scribe.color, true);
+        else if (isWriteTool(d.name)) { setWriting(true); setChip(lbl, ACTORS.scribe.color, true); }
         else setChip(lbl, _escalated ? ACTORS.job.color : host.color, true);
         break;
       }
       case 'tool_done':
+        if (isWriteTool(d.name)) setWriting(false);
         if (d.name === 'escalate_to_86') { _escalated = false; setChip(host.label + ' is thinking…', host.color, true); }
         break;
       case 'replying':
         setChip((_escalated ? ACTORS.job.label : host.label) + ' is replying…', _escalated ? ACTORS.job.color : host.color, true);
         break;
       case 'turn_end':
+        // Backstop. tool_done clears the glow the moment the write finishes,
+        // but a turn that dies mid-tool never sends one — and a badge that
+        // glows forever is worse than one that never glowed.
+        setWriting(false);
         setChip('✓ ' + host.label, host.color, false);
         _idleTimer = setTimeout(idle, 2200);
         break;
