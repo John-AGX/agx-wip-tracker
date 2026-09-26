@@ -89,7 +89,11 @@ function shapeRow(r) {
     linked_node_id: r.linked_node_id,
     is_locked: !!r.is_locked,
     created_at: r.created_at,
-    updated_at: r.updated_at
+    updated_at: r.updated_at,
+    // The Buildertrend link, for the provenance mark (js/bt-badge.js).
+    // Undefined rather than null when a door did not SELECT the column, so
+    // that door renders no badge instead of asserting "Project 86 only".
+    bt_co_id: r.bt_co_id
   };
 }
 
@@ -102,7 +106,7 @@ router.get('/jobs/:jobId/change-orders', requireAuth, async (req, res) => {
     if (!inOrg) return res.json({ change_orders: [] });
     const { rows } = await pool.query(
       `SELECT id, job_id, owner_id, status, co_number, data, approved_at,
-              approved_by, linked_node_id, is_locked, created_at, updated_at
+              approved_by, linked_node_id, is_locked, created_at, updated_at, bt_co_id
        FROM job_change_orders
        WHERE job_id = $1
        ORDER BY updated_at DESC`,
@@ -162,7 +166,7 @@ router.get('/change-orders', requireAuth, async (req, res) => {
     const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 300));
     const { rows } = await pool.query(
       `SELECT co.id, co.job_id, co.owner_id, co.status, co.co_number, co.data,
-              co.approved_at, co.approved_by, co.linked_node_id, co.is_locked,
+              co.approved_at, co.approved_by, co.linked_node_id, co.is_locked, co.bt_co_id,
               co.created_at, co.updated_at,
               j.data->>'jobNumber' AS job_number,
               j.data->>'title'     AS job_title
@@ -191,7 +195,7 @@ router.get('/change-orders/:id', requireAuth, async (req, res) => {
     // caller's org reads as 404 (no cross-tenant read by guessed id).
     const { rows } = await pool.query(
       `SELECT co.id, co.job_id, co.owner_id, co.status, co.co_number, co.data,
-              co.approved_at, co.approved_by, co.linked_node_id, co.is_locked,
+              co.approved_at, co.approved_by, co.linked_node_id, co.is_locked, co.bt_co_id,
               co.created_at, co.updated_at
          FROM job_change_orders co
          JOIN jobs j ON j.id = co.job_id
@@ -265,7 +269,7 @@ router.post('/jobs/:jobId/change-orders', requireAuth, requireCapability('ESTIMA
        VALUES ($1, $2, $3, 'draft', $4, $5,
                (SELECT organization_id FROM jobs WHERE id = $2))
        RETURNING id, job_id, owner_id, status, co_number, data, approved_at,
-                 approved_by, linked_node_id, is_locked, created_at, updated_at`,
+                 approved_by, linked_node_id, is_locked, created_at, updated_at, bt_co_id`,
       [id, jobId, req.user.id, coNumber, JSON.stringify(data)]
     );
     res.json({ change_order: shapeRow(rows[0]) });
@@ -341,7 +345,7 @@ router.put('/change-orders/:id', requireAuth, requireCapability('ESTIMATES_EDIT'
            END
        WHERE id = $2
        RETURNING id, job_id, owner_id, status, co_number, data, approved_at,
-                 approved_by, linked_node_id, is_locked, created_at, updated_at`,
+                 approved_by, linked_node_id, is_locked, created_at, updated_at, bt_co_id`,
       [JSON.stringify(data), id]
     );
     res.json({ change_order: shapeRow(rows[0]) });
@@ -465,7 +469,7 @@ router.post('/change-orders/:id/status', requireAuth, async (req, res) => {
              updated_at = NOW()
          WHERE id = $4
          RETURNING id, job_id, owner_id, status, co_number, data, approved_at,
-                   approved_by, linked_node_id, is_locked, created_at, updated_at`,
+                   approved_by, linked_node_id, is_locked, created_at, updated_at, bt_co_id`,
         [next, approvedAt, approvedBy, id, lockState]
       );
       await client.query('COMMIT');
@@ -579,7 +583,7 @@ router.post('/change-orders/:id/allocations', requireAuth, requireCapability('ES
               updated_at = CASE WHEN data IS DISTINCT FROM $1::jsonb THEN NOW() ELSE updated_at END
         WHERE id = $2
         RETURNING id, job_id, owner_id, status, co_number, data, approved_at,
-                  approved_by, linked_node_id, is_locked, created_at, updated_at`,
+                  approved_by, linked_node_id, is_locked, created_at, updated_at, bt_co_id`,
       [JSON.stringify(data), id]
     );
     res.json({ change_order: shapeRow(rows[0]) });
@@ -660,7 +664,7 @@ router.post('/change-orders/:id/cost-source', requireAuth, requireCapability('ES
               updated_at = CASE WHEN data IS DISTINCT FROM $1::jsonb THEN NOW() ELSE updated_at END
         WHERE id = $2
         RETURNING id, job_id, owner_id, status, co_number, data, approved_at,
-                  approved_by, linked_node_id, is_locked, created_at, updated_at`,
+                  approved_by, linked_node_id, is_locked, created_at, updated_at, bt_co_id`,
       [JSON.stringify(data), id]
     );
     const row = rows[0];
@@ -742,7 +746,7 @@ router.post('/change-orders/:id/append-assembly', requireAuth, requireCapability
       const up = await client.query(
         `UPDATE job_change_orders SET data = $1::jsonb, updated_at = NOW()
           WHERE id = $2 RETURNING id, job_id, status, co_number, data, approved_at,
-                                  approved_by, linked_node_id, is_locked, created_at, updated_at`,
+                                  approved_by, linked_node_id, is_locked, created_at, updated_at, bt_co_id`,
         [JSON.stringify(data), id]);
       await client.query('COMMIT');
       fresh = up.rows[0];
@@ -801,7 +805,7 @@ router.post('/change-orders/:id/link-node', requireAuth, requireCapability('ESTI
        SET linked_node_id = $1, updated_at = NOW()
        WHERE id = $2
        RETURNING id, job_id, owner_id, status, co_number, data, approved_at,
-                 approved_by, linked_node_id, is_locked, created_at, updated_at`,
+                 approved_by, linked_node_id, is_locked, created_at, updated_at, bt_co_id`,
       [nodeId, id]
     );
     res.json({ change_order: shapeRow(upd.rows[0]) });

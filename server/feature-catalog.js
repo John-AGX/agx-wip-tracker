@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.62';
+const APP_VERSION = '1.63';
 
 const releases = [
+  {
+    version: '1.63',
+    date: '2026-09-26',
+    name: 'Change orders and purchase orders say where they live too',
+    summary: 'The Buildertrend mark now sits on change orders and purchase orders as well \u2014 on the job, and on the company-wide lists.',
+    changes: [
+      { type: 'new', text: 'A change order now carries the same mark as a job or a lead: Buildertrend\u2019s icon when it came from Buildertrend, the Project 86 cube when it is ours alone. It shows on the change orders list and on the change orders inside a job.' },
+      { type: 'new', text: 'Purchase orders now show the mark inside a job as well. The company-wide purchase orders list already had it; the list on the job itself did not, so the same purchase order looked different depending on where you opened it.' },
+      { type: 'fixed', text: 'The mark is now loaded before every list that draws it. Leads and the job hub were loading first, and on a slow or cached page that would have left their records with no mark at all \u2014 which reads as \u201cnot in Buildertrend\u201d rather than as \u201cnot loaded yet\u201d.' },
+    ],
+  },
   {
     version: '1.62',
     date: '2026-09-26',

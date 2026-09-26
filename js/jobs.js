@@ -28,14 +28,14 @@ function p86Ask(message, opts) {
 // print an internal bookkeeping word on documents that leave the company.
 // So this renders only where it is called — the jobs list and the job page,
 // both internal — and job-label.js is untouched.
-// Which system this job lives in — Buildertrend's own mark, our cube, or
+// Which system a record lives in — Buildertrend's own mark, our cube, or
 // both. Unlike btOpenBadge below this is not Buildertrend's OPINION of the
 // job, it is where the record IS, so it is safe on any internal surface.
 // Still internal-only for the same reason: js/job-label.js stays untouched,
 // so nothing here can reach a purchase order, a signed change order or a
 // crew text.
-function btWhereBadge(job) {
-    return window.p86BtBadge ? window.p86BtBadge.render(job) : '';
+function btWhereBadge(rec) {
+    return window.p86BtBadge ? window.p86BtBadge.render(rec) : '';
 }
 
 function btOpenBadge(job) {
@@ -963,7 +963,7 @@ function renderJobsMain() {
                 var rowsHTML = rows.map(function(c) {
                     var total = coTotal(c);
                     return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.04));" data-co-open="' + escapeHTML(c.id) + '" title="Click to open">' +
-                        '<td style="white-space:nowrap;padding:8px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(c.co_number || 'CO') + '</strong></td>' +
+                        '<td style="white-space:nowrap;padding:8px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(c.co_number || 'CO') + '</strong>' + btWhereBadge(c) + '</td>' +
                         '<td style="padding:8px 10px;font-size:12.5px;color:var(--text,#fff);">' + escapeHTML(c.title || '(untitled)') + fromWorkOrderLine(c) + '</td>' +
                         '<td style="white-space:nowrap;padding:8px 10px;">' + statusBadge(c.status || 'draft') + '</td>' +
                         '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:inherit;font-size:13px;color:var(--green,#34d399);font-weight:600;">' + formatCurrency(total) + '</td>' +
@@ -1369,7 +1369,7 @@ function renderJobsMain() {
                     var billed = poRowBilled(p);
                     var outstanding = total - billed;
                     return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.04));" data-po-open="' + escapeHTML(p.id) + '" title="Click to open">' +
-                        '<td style="white-space:nowrap;padding:8px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(p.po_number || 'PO') + '</strong></td>' +
+                        '<td style="white-space:nowrap;padding:8px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(p.po_number || 'PO') + '</strong>' + btWhereBadge(p) + '</td>' +
                         '<td style="padding:8px 10px;font-size:12.5px;color:var(--text-dim,#aaa);">' + escapeHTML(p.sub_name || '—') + '</td>' +
                         '<td style="padding:8px 10px;font-size:12.5px;color:var(--text,#fff);">' + escapeHTML(p.title || '(untitled)') + '</td>' +
                         '<td style="white-space:nowrap;padding:8px 10px;">' + poStatusBadge(p.status) + '</td>' +

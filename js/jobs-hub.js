@@ -643,7 +643,7 @@ function p86Ask(message, opts) {
           '</tr></thead><tbody>' +
           rows.map(function (r) {
             return '<tr data-job-id="' + esc(r.job_id) + '" data-co-id="' + esc(r.id) + '">' +
-              '<td data-col="co"><strong>' + esc(r.co_number || '') + '</strong></td>' +
+              '<td data-col="co"><strong>' + esc(r.co_number || '') + '</strong>' + (window.p86BtBadge ? window.p86BtBadge.render(r) : '') + '</td>' +
               '<td data-col="job">' + esc(jobLabelFromRow(r)) + '</td>' +
               '<td data-col="title">' + esc(r.title || '(untitled)') + '</td>' +
               '<td data-col="status">' + statusBadge(r.status, CO_STATUS_LABEL) + '</td>' +
