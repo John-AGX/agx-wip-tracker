@@ -138,12 +138,14 @@ describe('the fast-sweep nudge terminates', () => {
 describe('surface C owns its own stylesheet', () => {
   const ENGINE = read('js/live-writer.js');
 
-  test('flashEditorRows installs the CSS itself', () => {
+  test('the paint function installs the CSS itself', () => {
     // Until this, ensureStyle() was reached only via ensureRoot / ensurePane
     // (surface B mounting) and cowork.js — so the green row glow animated only
     // because the notification had already paid for the stylesheet. Reducing B
     // without this silently kills the glow, which is the part being kept.
-    const fn = ENGINE.indexOf('function flashEditorRows');
+    // (Named flashViewerRows since the viewer registry generalised it off the
+    // estimate editor; flashEditorRows is now a thin compat wrapper.)
+    const fn = ENGINE.indexOf('function flashViewerRows');
     const ensure = ENGINE.indexOf('ensureStyle();', fn);
     const firstReturn = ENGINE.indexOf('return 0;', fn);
     expect(fn).toBeGreaterThan(-1);

@@ -1502,33 +1502,105 @@
   // post-hydrate refresh, against the repainted rows.
   var _pendingFlash = null;
 
-  /* The estimate the editor has open RIGHT NOW, or null when it is closed or
-   * hidden. Both the claim and the paint go through this — nothing else in
-   * this file is allowed to guess at the editor's state. */
-  function openEditorEstimateId() {
-    var view = document.getElementById('estimate-editor-view');
-    if (!view || view.offsetParent === null) return null;
-    try {
-      return (window.p86EstimateEditorCurrentId && window.p86EstimateEditorCurrentId()) || null;
-    } catch (_) { return null; }
+  /* ── the viewer registry ──────────────────────────────────────────────
+   * "Is the user looking at the record this write touched?" used to be one
+   * hardcoded question about one editor: getElementById('estimate-editor-view')
+   * plus a global only the estimate editor defines. Every other page a write
+   * can land on — change orders, jobs, leads, POs, tickets — was therefore
+   * unable to show the write ON the record, whatever it rendered.
+   *
+   * A viewer answers three things about itself and nothing about the engine:
+   *   entityType  the changeset entity_type it displays ('estimate', …)
+   *   currentId() the id it has open RIGHT NOW, or null when closed or hidden
+   *   root()      the element to scope row lookups to, or null when unmounted
+   *
+   * root() matters as much as currentId(): a bare document.querySelector would
+   * happily match a [data-line-id] row in some other mounted surface and flash
+   * a row the user is not looking at.
+   *
+   * ONE VIEWER PER entityType, last registration wins, so a re-registering
+   * editor cannot stack duplicates that each claim the same write. */
+  var _viewers = [];
+  function registerViewer(spec) {
+    if (!spec || !spec.entityType || typeof spec.currentId !== 'function') return;
+    var et = String(spec.entityType);
+    _viewers = _viewers.filter(function (v) { return v.entityType !== et; });
+    _viewers.push({
+      entityType: et,
+      currentId: spec.currentId,
+      root: typeof spec.root === 'function' ? spec.root : function () { return null; }
+    });
   }
 
-  /* Which changeset entry (if any) is the estimate on screen?
+  /* The viewer showing `entityType` right now, with the id it has open. A
+   * viewer that throws is treated as closed — a broken editor must not be able
+   * to take the claim away from the strip. */
+  function openViewer(entityType) {
+    for (var i = 0; i < _viewers.length; i++) {
+      var v = _viewers[i];
+      if (v.entityType !== entityType) continue;
+      var id = null;
+      try { id = v.currentId(); } catch (_) { id = null; }
+      if (id == null || String(id) === '') return null;
+      return { viewer: v, id: id };
+    }
+    return null;
+  }
+
+  /* Which changeset entry (if any) is on screen, and in which viewer?
    *
    * Deliberately NOT meta.entityId: that is only populated when the changeset
    * has exactly ONE entry (ingest, `first`). A write that touches the open
    * estimate AND something else — the common "update the estimate and stamp
    * the lead" shape — has meta.entityId === null, so the old claim silently
    * refused the very case where the user is most obviously watching. */
-  function editorTargetEntry(entry) {
-    var open = openEditorEstimateId();
-    if (!open) return null;
+  function viewerTargetEntry(entry) {
     var cs = (entry && entry.changeset) || [];
     for (var i = 0; i < cs.length; i++) {
       var e = cs[i];
-      if (e && e.entity_type === 'estimate' && e.id != null && String(e.id) === String(open)) return e;
+      if (!e || e.id == null || !e.entity_type) continue;
+      var open = openViewer(e.entity_type);
+      if (open && String(open.id) === String(e.id)) return { cs: e, viewer: open.viewer };
     }
     return null;
+  }
+
+  /* The estimate editor, expressed as a viewer. This is the ONLY viewer the
+   * engine registers for itself, because it is the only one whose contract the
+   * engine already depended on. Every other editor registers its own. */
+  registerViewer({
+    entityType: 'estimate',
+    currentId: function () {
+      var view = document.getElementById('estimate-editor-view');
+      if (!view || view.offsetParent === null) return null;
+      try {
+        return (window.p86EstimateEditorCurrentId && window.p86EstimateEditorCurrentId()) || null;
+      } catch (_) { return null; }
+    },
+    root: function () { return document.getElementById('estimate-editor-view'); }
+  });
+
+
+  /* The one place that answers "can this write be shown on the record the user
+   * is looking at?" — used by BOTH claims() and render(), so the two can never
+   * disagree about whether there was anything to show. Returns null, or
+   * { cs, viewer, ops } with at least one paintable op. */
+  function paintableOps(entry) {
+    var t = viewerTargetEntry(entry);
+    if (!t) return null;
+    // diffEntry is THE differ — the same function every other surface goes
+    // through. It is re-run for this ONE entry rather than indexed out of
+    // entry.groups because diffChangeset FILTERS empty groups, so group i and
+    // changeset i are not the same record.
+    var ops = diffEntry(t.cs).ops.filter(function (o) {
+      // A delete has no row left to paint. It is reported by the strip (which
+      // steps down to the op list precisely because C took the document), so
+      // it is left out of the count here rather than silently dropped inside
+      // the paint loop.
+      return o.lineId && o.kind !== 'delete';
+    });
+    if (!ops.length) return null;
+    return { cs: t.cs, viewer: t.viewer, ops: ops };
   }
 
   registerSurface({
@@ -1538,26 +1610,28 @@
     claims: function (entry) {
       var m = entry.meta;
       if (m.state !== 'applied' || m.isDraft) return false;
-      return !!editorTargetEntry(entry);
+      // CLAIM ONLY WHAT CAN BE PAINTED. Finding the open record is not enough:
+      // diffEntry produces row-addressable ops (o.lineId) only for estimates —
+      // every other entity type goes through diffFields, which has no lineId
+      // at all. A viewer that claims a field-only write would take the
+      // document from the strip (B's copy steps down when C claims) and then
+      // paint nothing, so the write would be reported by nobody.
+      //
+      // This is the "claim ≠ paint" gap the engine's own note warns about. It
+      // was unreachable while C was hardcoded to estimates and became reachable
+      // the moment any entity type could register a viewer.
+      return !!paintableOps(entry);
     },
     render: function (entry) {
-      var cs = editorTargetEntry(entry);
-      if (!cs) return;
-      // diffEntry is THE differ — the same function every other surface goes
-      // through. It is re-run for this ONE entry rather than indexed out of
-      // entry.groups because diffChangeset FILTERS empty groups, so group i
-      // and changeset i are not the same record.
-      var ops = diffEntry(cs).ops.filter(function (o) {
-        // A delete has no row left to paint. It is reported by the strip
-        // (which steps down to the op list precisely because C took the
-        // document), so it is left out of the count here rather than
-        // silently dropped inside the paint loop.
-        return o.lineId && o.kind !== 'delete';
-      });
-      if (!ops.length) return;
+      // Same helper claims() asked, so the two cannot disagree about whether
+      // there was anything to show.
+      var r = paintableOps(entry);
+      if (!r) return;
+      var cs = r.cs, ops = r.ops;
       // Two writes can land between one hydrate — merge instead of letting
       // the second silently discard the first's rows.
       var same = _pendingFlash && String(_pendingFlash.estimateId) === String(cs.id) &&
+                 _pendingFlash.entityType === cs.entity_type &&
                  (Date.now() - _pendingFlash.at) < 60000;
       if (same) {
         var byKey = Object.create(null);
@@ -1568,7 +1642,11 @@
         // A DIFFERENT estimate's flash replaces this one: claim, so any
         // stagger loop still running for the old one stops scheduling.
         FLASH.claim();
-        _pendingFlash = { estimateId: cs.id, ops: ops, at: Date.now() };
+        // estimateId keeps its name: it is the id of whatever record the
+        // viewer has open, and renaming it would churn the stagger loop, the
+        // editor's call site and three tests for nothing. entityType is what
+        // makes it addressable by any viewer rather than only the estimate.
+        _pendingFlash = { entityType: cs.entity_type, estimateId: cs.id, ops: ops, at: Date.now() };
       }
     }
   });
@@ -1576,7 +1654,7 @@
   /* Called by the estimate editor AFTER it has repainted from fresh server
    * rows. Paints only — it never re-renders, so it cannot race the hydrate
    * or clobber an unsaved local edit. */
-  function flashEditorRows(estimateId) {
+  function flashViewerRows(entityType, entityId) {
     // Surface C owns its own CSS. Until this call, the shared stylesheet was
     // installed ONLY by ensureRoot / ensurePane (surface B mounting) and by
     // cowork.js — so the green row glow animated only because the notification
@@ -1588,13 +1666,19 @@
     ensureStyle();
     var p = _pendingFlash;
     if (!p) return 0;
-    if (estimateId && p.estimateId && String(estimateId) !== String(p.estimateId)) return 0;
+    var et = entityType || p.entityType || 'estimate';
+    // A viewer must not paint another viewer's pending flash. Before the
+    // registry there was only one viewer, so this could not be asked.
+    if (p.entityType && et !== p.entityType) return 0;
+    if (entityId && p.estimateId && String(entityId) !== String(p.estimateId)) return 0;
     if (Date.now() - p.at > 60000) { _pendingFlash = null; return 0; }
     _pendingFlash = null;
-    // Scoped to the editor. A bare document.querySelector would happily match
-    // a [data-line-id] row in some other mounted surface and flash a row the
-    // user is not looking at.
-    var view = document.getElementById('estimate-editor-view');
+    // Scoped to the VIEWER's own root. A bare document.querySelector would
+    // happily match a [data-line-id] row in some other mounted surface and
+    // flash a row the user is not looking at — which is why root() is part of
+    // the viewer contract rather than something the engine guesses.
+    var openNow = openViewer(et);
+    var view = openNow && openNow.viewer.root();
     if (!view) return 0;
     var ep = FLASH.claim();
     var painted = 0, i = 0;
@@ -1625,12 +1709,21 @@
       // on, and long enough that the editor may have re-rendered underneath.
       if (i >= MAX_REVEALS) { while (i < p.ops.length) paint(p.ops[i++]); return; }
       if (i >= p.ops.length) return;
-      if (String(openEditorEstimateId()) !== String(p.estimateId)) return;
+      // The viewer closing or swapping records is signalled by no claim
+      // anywhere, so folding this into the epoch owner would lose it.
+      var still = openViewer(et);
+      if (!still || String(still.id) !== String(p.estimateId)) return;
       paint(p.ops[i++]);
       FLASH.after(ep, STAGGER_MS, step);
     })();
     return p.ops.length;
   }
+
+  /* The estimate editor's existing call site, unchanged. Kept as a named
+   * export rather than asking that editor to learn a new signature: the whole
+   * point of the registry is that adding viewers costs nothing at the sites
+   * that already work. */
+  function flashEditorRows(estimateId) { return flashViewerRows('estimate', estimateId); }
 
   // ── event wiring ─────────────────────────────────────────────────────────
   // Client-initiated applies (Approve click / low-risk auto-apply).
@@ -1983,6 +2076,12 @@
     writes: WRITES,
     /* Fired by the estimate editor's post-hydrate refresh (surface C). */
     flashEditorRows: flashEditorRows,
+    /* An editor declares itself able to show a write ON the record:
+     *   registerViewer({ entityType, currentId(), root() })
+     * then calls flashViewerRows(entityType, id) AFTER its own repaint — not
+     * off p86:payload-applied, which fires against the pre-write DOM. */
+    registerViewer: registerViewer,
+    flashViewerRows: flashViewerRows,
     /* The handoff placeholder. */
     startComposing: startComposing,
     clearComposing: clearComposing,
