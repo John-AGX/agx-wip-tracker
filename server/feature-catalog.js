@@ -526,9 +526,18 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.64';
+const APP_VERSION = '1.65';
 
 const releases = [
+  {
+    version: '1.65',
+    date: '2026-09-26',
+    name: 'The Bills card on a job now carries the mark too',
+    summary: 'One bills table was left without it, so the same bill looked different on the job Overview than it did on the Invoices tab.',
+    changes: [
+      { type: 'fixed', text: 'The Bills card on a job’s Overview showed no Buildertrend mark, while the Invoices tab right beside it showed one on every row \u2014 the same bills, read from the same place. A missing mark means “not in Buildertrend”, so that card was not just missing something, it was giving the wrong answer. All three places a bill appears now agree.' },
+    ],
+  },
   {
     version: '1.64',
     date: '2026-09-26',

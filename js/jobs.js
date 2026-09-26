@@ -3979,7 +3979,7 @@ function renderJobsMain() {
                     var due = b.due_date ? String(b.due_date).slice(0, 10) : '';
                     var overdue = b.due_date && b.status !== 'paid' && b.status !== 'void' && new Date(b.due_date).getTime() < Date.now();
                     return '<tr class="overview-row" data-bill-id="' + escapeHTML(String(b.id)) + '" style="cursor:pointer;border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.04));" title="Click to open bill">' +
-                        '<td style="white-space:nowrap;padding:6px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(b.bill_number || '—') + '</strong></td>' +
+                        '<td style="white-space:nowrap;padding:6px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(b.bill_number || '—') + '</strong>' + btWhereBadge(b) + '</td>' +
                         '<td style="padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(vendor || '—') + '</td>' +
                         '<td style="padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(b.po_number || '—') + '</td>' +
                         '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:inherit;font-size:13px;font-weight:600;color:var(--accent);">' + formatCurrency(parseFloat(b.amount) || 0) + '</td>' +

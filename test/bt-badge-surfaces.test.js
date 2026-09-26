@@ -35,6 +35,8 @@ const SURFACES = [
     "esc(r.po_number || '') + '</strong>' + (window.p86BtBadge ? window.p86BtBadge.render(r) : '')"],
   ['js/leads.js', 'the leads list',
     "'</strong>' + (window.p86BtBadge ? window.p86BtBadge.render(l) : '')"],
+  ['js/jobs.js', "the Bills table on a job's Overview",
+    "escapeHTML(b.bill_number || '—') + '</strong>' + btWhereBadge(b)"],
   ['js/jobs-hub.js', 'the bills list',
     "esc(r.bill_number || '—') + '</strong>' + (window.p86BtBadge ? window.p86BtBadge.render(r) : '')"],
   ['js/jobs.js', "a job's Invoices tab, which is the vendor-bill ledger",
@@ -133,5 +135,21 @@ describe('a bill carries its Buildertrend link to the browser', () => {
     const m = src.match(/const SELECT_COLS = `([^`]*)`/);
     expect(m).not.toBeNull();
     expect(m[1]).toContain('b.bt_bill_id');
+  });
+});
+
+describe('one bill looks the same wherever it is opened', () => {
+  // job_vendor_bills is read by THREE tables: the hub Bills list, the Bills
+  // card on a job's Overview, and the job's Invoices tab. The Overview one
+  // was missed on the first pass, so it rendered 18 rows with no mark at all
+  // right beside a tab where the same 18 bills were marked. A blank mark
+  // MEANS "not in Buildertrend", so that table was not merely
+  // incomplete, it was answering the question wrongly.
+  test('all three bill tables render the badge', () => {
+    const jobs = read('js/jobs.js');
+    const hub = read('js/jobs-hub.js');
+    expect(hub).toContain("esc(r.bill_number || '—') + '</strong>' + (window.p86BtBadge");
+    // Two DISTINCT call sites in jobs.js: the Overview card and the tab.
+    expect(jobs.split('btWhereBadge(b)').length - 1).toBe(2);
   });
 });
