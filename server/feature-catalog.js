@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.63';
+const APP_VERSION = '1.64';
 
 const releases = [
+  {
+    version: '1.64',
+    date: '2026-09-26',
+    name: 'Bills and invoices say where they live too',
+    summary: 'The Buildertrend mark now reaches vendor bills and the invoices ledger \u2014 and on invoices it is careful not to claim more than it knows.',
+    changes: [
+      { type: 'new', text: 'Vendor bills now carry the mark, both on the Bills list and on the Invoices tab inside a job \u2014 the two read the same ledger. A bill that came from Buildertrend shows their icon; one raised here shows the Project 86 cube.' },
+      { type: 'new', text: 'Client invoices carry it as well, with a different sentence behind it. Invoices are the one record type not synced with Buildertrend at all \u2014 nothing matches them up \u2014 so rather than claiming an invoice is not over there, the mark says invoices are not synced. Buildertrend does its own client invoicing, so the usual wording would have been a guess.' },
+      { type: 'improved', text: 'Hovering the Project 86 cube now tells you which of the two it means: \u201cthis is not in Buildertrend\u201d where records really are matched up, and \u201cthese are not synced\u201d where nothing has ever looked.' },
+    ],
+  },
   {
     version: '1.63',
     date: '2026-09-26',

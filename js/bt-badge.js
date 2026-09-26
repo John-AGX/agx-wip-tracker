@@ -87,6 +87,28 @@
 
   // The sentence behind the mark. Says what is true AND what follows from it —
   // "in Buildertrend" alone does not tell you who wins when the two disagree.
+  // WHAT `local` IS ALLOWED TO CLAIM.
+  //
+  // For a job, lead, estimate, change order, purchase order or bill, the sync
+  // actively MATCHES against Buildertrend, so a record with no id really has
+  // no counterpart there — "this is not in Buildertrend" is a fact.
+  //
+  // For a record type nothing syncs, it is not. AR invoices are the case that
+  // forced this: the `invoices` table has no bt_* column and there is no
+  // invoice matcher in services/clickr/, so nobody has ever looked. And
+  // Buildertrend is the client-facing side of the operating model, so it very
+  // likely DOES hold an invoice for the same job. Painting the plain `local`
+  // sentence there would assert something we cannot support.
+  //
+  // Pass `unsyncedKind` on those surfaces and the mark says why it is blank
+  // instead. The day a matcher exists and stamps an id, the record shows
+  // Buildertrend's mark like everything else, with no change to the caller.
+  function localTitle(unsyncedKind) {
+    if (!unsyncedKind) return TITLE.local;
+    return 'Project 86 only — ' + unsyncedKind + ' are not synced with ' +
+           'Buildertrend, so nothing here has been matched against it.';
+  }
+
   var TITLE = {
     local:  'Project 86 only — this is not in Buildertrend.',
     synced: 'In Buildertrend — it came from there, and a sync can overwrite it here.',
@@ -116,6 +138,8 @@
    *
    * opts.size   px (default 15, tuned to sit on a 13px table row)
    * opts.state  force a state, for a legend or a preview
+   * opts.unsyncedKind  the plural name of a record type nothing syncs
+   *   ('Invoices'). Changes only what the `local` mark SAYS — see localTitle.
    * opts.hideLocal  true → render nothing for a Project 86-only record.
    *   Use where almost everything is local and the badge would be noise; leave
    *   it OFF on any list where both kinds appear, because a missing badge and
@@ -140,8 +164,9 @@
     } else {
       inner = btImg(size);
     }
+    var title = st === 'local' ? localTitle(opts.unsyncedKind) : TITLE[st];
     return '<span class="p86-bt-badge is-' + st + '" role="img" ' +
-             'aria-label="' + LABEL[st] + '" title="' + TITLE[st] + '">' + inner + '</span>';
+             'aria-label="' + LABEL[st] + '" title="' + title + '">' + inner + '</span>';
   }
 
   var CSS =
@@ -188,6 +213,7 @@
 
   window.p86BtBadge = {
     state: state,
+    localTitle: localTitle,
     render: render,
     legend: legend,
     btId: firstBtId,

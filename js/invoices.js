@@ -155,7 +155,7 @@
       var who = (i.billTo && i.billTo.name) || window.p86JobLabel(i.job_number, i.job_title, { fallback: '' }) || (window.entityDisplayName && window.entityDisplayName('client', i.client_id)) || '—';
       var overdue = num(i.balance) > 0.005 && isPastDue(i.due_date) && i.status !== 'paid' && i.status !== 'void';
       return '<tr class="p86inv-row" data-open="' + esc(i.id) + '">' +
-        '<td style="padding:9px 12px;white-space:nowrap;"><strong style="color:var(--text,#fff);font-size:13px;">' + esc(i.invoice_number || '—') + '</strong></td>' +
+        '<td style="padding:9px 12px;white-space:nowrap;"><strong style="color:var(--text,#fff);font-size:13px;">' + esc(i.invoice_number || '—') + '</strong>' + (window.p86BtBadge ? window.p86BtBadge.render(i, { unsyncedKind: 'Invoices' }) : '') + '</td>' +
         '<td style="padding:9px 12px;font-size:12.5px;color:var(--text,#fff);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(who) + '</td>' +
         '<td style="padding:9px 12px;font-size:12px;color:var(--text-dim,#8b93a7);white-space:nowrap;">' + esc(fmtDate(i.issue_date)) + '</td>' +
         '<td style="padding:9px 12px;font-size:12px;color:' + (overdue ? 'var(--red,#f87171)' : 'var(--text-dim,#8b93a7)') + ';white-space:nowrap;">' + esc(fmtDate(i.due_date)) + (overdue ? ' ⚠' : '') + '</td>' +

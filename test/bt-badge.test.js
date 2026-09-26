@@ -160,3 +160,36 @@ describe('the Buildertrend asset itself', () => {
     expect(seen[seen.length - 1]).toBe('IEND');
   });
 });
+
+describe('what the Project 86 mark is allowed to claim', () => {
+  test('on a synced record type it states the fact: not in Buildertrend', () => {
+    expect(B.render({})).toContain('this is not in Buildertrend');
+  });
+
+  test('on a record type nothing syncs it says WHY it is blank instead', () => {
+    // AR invoices have no bt_* column and no matcher, and Buildertrend is
+    // the client-facing side — it very likely holds an invoice for the same
+    // job. Claiming "this is not in Buildertrend" there would be a guess.
+    const h = B.render({}, { unsyncedKind: 'Invoices' });
+    expect(h).toContain('Invoices are not synced with Buildertrend');
+    expect(h).not.toContain('this is not in Buildertrend');
+  });
+
+  test('the softened sentence never leaks onto a record that IS linked', () => {
+    const h = B.render({ bt_id: '5' }, { unsyncedKind: 'Invoices' });
+    expect(h).toContain('In Buildertrend');
+    expect(h).not.toContain('not synced');
+  });
+
+  test('it still draws the same cube — only the words change', () => {
+    const plain = B.render({}), soft = B.render({}, { unsyncedKind: 'Invoices' });
+    expect(soft).toContain('is-local');
+    expect(soft.replace(/title="[^"]*"/, '')).toBe(plain.replace(/title="[^"]*"/, ''));
+  });
+
+  test('every bill id shape is recognised', () => {
+    expect(B.state({ bt_bill_id: '77123' })).toBe('synced');
+    expect(B.state({ btBillId: '77123' })).toBe('synced');
+    expect(B.state({ bt_bill_id: null })).toBe('local');
+  });
+});

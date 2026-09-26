@@ -35,6 +35,12 @@ const SURFACES = [
     "esc(r.po_number || '') + '</strong>' + (window.p86BtBadge ? window.p86BtBadge.render(r) : '')"],
   ['js/leads.js', 'the leads list',
     "'</strong>' + (window.p86BtBadge ? window.p86BtBadge.render(l) : '')"],
+  ['js/jobs-hub.js', 'the bills list',
+    "esc(r.bill_number || '—') + '</strong>' + (window.p86BtBadge ? window.p86BtBadge.render(r) : '')"],
+  ['js/jobs.js', "a job's Invoices tab, which is the vendor-bill ledger",
+    "(escapeHTML(b.bill_number) || '—') + '</strong>' + btWhereBadge(b)"],
+  ['js/invoices.js', 'the AR invoices list',
+    "esc(i.invoice_number || '—') + '</strong>' + (window.p86BtBadge ? window.p86BtBadge.render(i, { unsyncedKind: 'Invoices' }) : '')"],
   ['js/estimates.js', 'the estimates list',
     "escapeHTML(est.title || '(untitled)') + '</strong>' + (window.p86BtBadge ? window.p86BtBadge.render(est) : '')"],
 ];
@@ -48,7 +54,7 @@ describe('every list that shows one of these records shows the mark', () => {
     const html = read('index.html');
     const at = (f) => html.indexOf('js/' + f + '.js?v=');
     expect(at('bt-badge')).toBeGreaterThan(-1);
-    for (const f of ['jobs', 'jobs-hub', 'leads', 'estimates']) {
+    for (const f of ['jobs', 'jobs-hub', 'leads', 'estimates', 'invoices']) {
       expect(at(f)).toBeGreaterThan(at('bt-badge'));
     }
   });
@@ -101,5 +107,31 @@ describe('a change order carries its Buildertrend link to the browser', () => {
     const lists = src.match(/approved_by, linked_node_id, is_locked, created_at, updated_at[^`\n]*/g) || [];
     expect(lists.length).toBeGreaterThan(0);
     for (const l of lists) expect(l).toContain('bt_co_id');
+  });
+});
+
+describe('a bill carries its Buildertrend link to the browser', () => {
+  const shapeRow = compile(
+    [extractFunction(read('server/routes/bill-routes.js'), 'shapeRow')],
+    [], [], 'shapeRow'
+  );
+
+  test('bt_bill_id comes through', () => {
+    expect(shapeRow({ id: 'b1', data: {}, bt_bill_id: '88' }).bt_bill_id).toBe('88');
+  });
+
+  test('a door that did not SELECT the column yields undefined, not null', () => {
+    expect(shapeRow({ id: 'b1', data: {} }).bt_bill_id).toBeUndefined();
+  });
+
+  test('the data blob cannot forge the link — the column wins', () => {
+    expect(shapeRow({ id: 'b1', data: { bt_bill_id: 'forged' }, bt_bill_id: 'real' }).bt_bill_id).toBe('real');
+  });
+
+  test('the shared column list every bill query uses selects it', () => {
+    const src = read('server/routes/bill-routes.js');
+    const m = src.match(/const SELECT_COLS = `([^`]*)`/);
+    expect(m).not.toBeNull();
+    expect(m[1]).toContain('b.bt_bill_id');
   });
 });

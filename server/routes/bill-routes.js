@@ -70,7 +70,11 @@ function shapeRow(r) {
     approved_at: r.approved_at,
     approved_by: r.approved_by,
     created_at: r.created_at,
-    updated_at: r.updated_at
+    updated_at: r.updated_at,
+    // The Buildertrend link, for the provenance mark (js/bt-badge.js).
+    // Undefined rather than null when a door did not SELECT the column, so
+    // that door renders no badge instead of asserting "Project 86 only".
+    bt_bill_id: r.bt_bill_id
   };
 }
 
@@ -101,7 +105,8 @@ async function nextBillNumber(orgId) {
 }
 
 const SELECT_COLS = `b.id, b.job_id, b.owner_id, b.po_id, b.sub_id, b.status, b.bill_number,
-  b.amount, b.bill_date, b.due_date, b.data, b.approved_at, b.approved_by, b.created_at, b.updated_at`;
+  b.amount, b.bill_date, b.due_date, b.data, b.approved_at, b.approved_by, b.created_at, b.updated_at,
+  b.bt_bill_id`;
 
 // ── per-job list ────────────────────────────────────────────────────
 router.get('/jobs/:jobId/bills', requireAuth, async (req, res) => {

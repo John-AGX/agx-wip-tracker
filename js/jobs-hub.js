@@ -822,7 +822,7 @@ function p86Ask(message, opts) {
           rows.map(function (r) {
             var overdue = r.due_date && r.status !== 'paid' && r.status !== 'void' && new Date(r.due_date).getTime() < Date.now();
             return '<tr data-job-id="' + esc(r.job_id) + '" data-bill-id="' + esc(r.id) + '">' +
-              '<td data-col="bill"><strong>' + esc(r.bill_number || '—') + '</strong></td>' +
+              '<td data-col="bill"><strong>' + esc(r.bill_number || '—') + '</strong>' + (window.p86BtBadge ? window.p86BtBadge.render(r) : '') + '</td>' +
               '<td data-col="job">' + esc(jobLabelFromRow(r)) + '</td>' +
               '<td data-col="vendor">' + esc(billVendor(r) || '—') + '</td>' +
               '<td data-col="po">' + esc(r.po_number || '—') + '</td>' +

@@ -1678,7 +1678,7 @@ function renderJobsMain() {
                     row.setAttribute('data-bill-id', String(b.id));
                     row.style.cursor = 'pointer';
                     row.innerHTML =
-                        '<td><strong>' + (escapeHTML(b.bill_number) || '—') + '</strong></td>' +
+                        '<td><strong>' + (escapeHTML(b.bill_number) || '—') + '</strong>' + btWhereBadge(b) + '</td>' +
                         '<td>' + (escapeHTML(vendor) || '—') + '</td>' +
                         '<td>' + escapeHTML(desc) + poNote + '</td>' +
                         '<td style="text-align:right;font-family:inherit;">' + formatCurrency(amt) + '</td>' +
