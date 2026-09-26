@@ -3756,7 +3756,7 @@
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
          carries the window.p86Api.changeOrders wrapper). -->
-    <script src="js/change-order-editor.js?v=37"></script>
+    <script src="js/change-order-editor.js?v=38"></script>
     <script src="js/materials-drawer.js?v=15"></script>
     <script src="js/estimate-doc-layouts.js?v=1"></script>
     <script src="js/estimate-preview.js?v=19"></script>
@@ -3784,7 +3784,7 @@
          restore the card. MUST stay above the script tag: the flag is read at
          module load. -->
     <script>window.P86_LIVE_WRITER_COMPOSING = false;</script>
-    <script src="js/live-writer.js?v=23"></script>
+    <script src="js/live-writer.js?v=24"></script>
     <!-- Surface A — the Cowork page. Consumes the engine, so it must load
          AFTER it (live-writer is idempotent-by-existence: a re-load is a
          no-op, so registration has to go through registerSurface). -->

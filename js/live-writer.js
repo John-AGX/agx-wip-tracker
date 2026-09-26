@@ -299,6 +299,22 @@
     var name = entityName(et, entry && entry.id, before, after);
 
     if (et === 'estimate') return diffEstimate(name, before, after);
+    // A change order carries the SAME line shape as an estimate — id,
+    // description, qty, unitCost, unitSell, markup — and getLines already
+    // reads both storage shapes (snap.data.lines and snap.lines), which is
+    // where a CO keeps them. So its lines are row-addressable with the differ
+    // that already exists; nothing about diffEstimate is estimate-specific
+    // beyond its name.
+    //
+    // FALL BACK rather than replace: a CO write is just as often a field
+    // change (status, number, approval) that the line differ cannot see at
+    // all. Routing change_order wholesale to diffEstimate would return zero
+    // ops for those and the write would be reported by nobody — the same
+    // claim-with-nothing-to-show failure the viewer registry guards against.
+    if (et === 'change_order') {
+      var lineDiff = diffEstimate(name, before, after);
+      if (lineDiff && lineDiff.ops && lineDiff.ops.length) return lineDiff;
+    }
     return diffFields(et, name, before, after);
   }
 

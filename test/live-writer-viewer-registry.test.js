@@ -66,13 +66,37 @@ afterEach(() => {
 });
 
 describe('claim only what can be painted', () => {
-  test('a viewer whose entity type yields NO row-addressable ops does not claim', () => {
-    // change_order goes through diffFields — field ops, no lineId. The record
-    // is open and the viewer is registered, and it still must not claim.
+  test('a change order with LINE changes claims — its lines are row-addressable', () => {
+    // A CO keeps lines in the same shape an estimate does, and getLines reads
+    // both storage shapes, so the existing line differ works on it.
     mountViewer('change_order', 'co_1');
     const entry = LW.ingest(csFor('change_order', 'co_1'), { payloadId: 'v1', state: 'applied' });
+    expect(entry.claimedBy).toContain('editor-flash');
+  });
+
+  test('a FIELD-only change order does NOT claim, even with the editor open', () => {
+    // The sharp case: the viewer is registered, the record is open, and the
+    // write is real — but it changed a status, not a line, so there is no row
+    // to land on. Claiming here would take the document from the strip and
+    // then paint nothing, and the write would be reported by nobody.
+    mountViewer('change_order', 'co_f');
+    const entry = LW.ingest([{
+      entity_type: 'change_order', id: 'co_f',
+      before: { id: 'co_f', status: 'draft',    lines: [L('l1', 'Framing', 10, 100)] },
+      after:  { id: 'co_f', status: 'approved', lines: [L('l1', 'Framing', 10, 100)] }
+    }], { payloadId: 'v1b', state: 'applied' });
     expect(entry.claimedBy).not.toContain('editor-flash');
-    // …and the write is still reported, by the strip.
+    // …and it IS still reported, by the strip, as a field change.
+    expect(document.getElementById('p86-live-writer')).not.toBeNull();
+  });
+
+  test('an entity type with no row concept at all does not claim', () => {
+    mountViewer('lead', 'lead_1');
+    const entry = LW.ingest([{
+      entity_type: 'lead', id: 'lead_1',
+      before: { id: 'lead_1', status: 'new' }, after: { id: 'lead_1', status: 'quoted' }
+    }], { payloadId: 'v1c', state: 'applied' });
+    expect(entry.claimedBy).not.toContain('editor-flash');
     expect(document.getElementById('p86-live-writer')).not.toBeNull();
   });
 

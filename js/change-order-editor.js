@@ -723,7 +723,67 @@ function p86Ask(message, opts) {
   // ──────────────────────────────────────────────────────────────────
   // Mount + paint
   // ──────────────────────────────────────────────────────────────────
+  /* ── Live Writer: show an agent's write ON the change order ─────────────
+   * The estimate editor has done this since the Live Writer shipped and this
+   * editor could not, for a reason that had nothing to do with change orders:
+   * "which record is open?" was a question only the estimate could answer, so
+   * surface C was hardcoded to it. The viewer registry made the question
+   * askable by anyone; this is the change order's answer.
+   *
+   * Registered from mount() rather than at module load ON PURPOSE — index.html
+   * loads this file BEFORE js/live-writer.js, so window.p86LiveWriter does not
+   * exist yet down here. mount() is also the honest moment: a viewer that
+   * claims a write is promising to show it, and there is nothing to show until
+   * the editor is on screen. registerViewer replaces by entityType, so calling
+   * it on every open is idempotent rather than stacking. */
+  function coEditorOpenId() {
+    if (!document.getElementById('co-editor-overlay')) return null;   // closed
+    return (_state.co && _state.co.id != null) ? _state.co.id : null;
+  }
+  window.p86ChangeOrderEditorCurrentId = coEditorOpenId;
+
+  function registerLiveWriterViewer() {
+    var LW = window.p86LiveWriter;
+    if (!LW || typeof LW.registerViewer !== 'function') return;
+    LW.registerViewer({
+      entityType: 'change_order',
+      currentId: coEditorOpenId,
+      // The line table, not the overlay: rows are what get flashed, and a
+      // wider root would let a [data-line-id] elsewhere in the shell match.
+      root: function () { return document.getElementById('p86CoLineTable'); }
+    });
+  }
+
+  /* Unlike the estimate editor there is no post-hydrate fan-out to wait for —
+   * nothing else in the app refreshes _state.co. So this re-fetches the row
+   * itself, repaints, and only THEN flashes. That order is the whole point: a
+   * flash fired off p86:payload-applied decorates the pre-write DOM, where an
+   * added line has no row at all and the imminent repaint would wipe whatever
+   * was decorated. */
+  document.addEventListener('p86:payload-applied', function (ev) {
+    try {
+      var open = coEditorOpenId();
+      if (open == null) return;
+      var cs = (ev && ev.detail && ev.detail.apply_changeset) || [];
+      var hit = cs.some(function (e) {
+        return e && e.entity_type === 'change_order' && e.id != null && String(e.id) === String(open);
+      });
+      if (!hit) return;
+      if (!window.p86Api || !window.p86Api.changeOrders) return;
+      window.p86Api.changeOrders.get(open).then(function (r) {
+        var co = r && r.change_order;
+        // Closed, or swapped to another CO, while the fetch was in flight.
+        if (!co || String(coEditorOpenId()) !== String(open)) return;
+        _state.co = co;
+        paintLines();
+        var LW = window.p86LiveWriter;
+        if (LW && typeof LW.flashViewerRows === 'function') LW.flashViewerRows('change_order', open);
+      }).catch(function () { /* the strip already reported the write */ });
+    } catch (e) { /* a notification must never break the editor */ }
+  });
+
   function mount() {
+    registerLiveWriterViewer();
     var prior = document.getElementById('co-editor-overlay');
     if (prior) prior.remove();
     var overlay = document.createElement('div');
