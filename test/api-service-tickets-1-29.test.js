@@ -74,7 +74,15 @@ function mutant(anchor, replacement) {
   fs.writeFileSync(copy, SRC);
   const src = fs.readFileSync(copy, 'utf8').replace(/\r\n/g, '\n');
   const n = src.split(anchor).length - 1;
-  if (n !== 1) throw new Error('anchor not found');
+  // Say WHICH failure it is. 'anchor not found' covered both cases, and when
+  // js/api.js renamed a variable inside an anchored line (fd414c51) the
+  // message sent the reader looking for a deleted guard that was still there.
+  if (n !== 1) {
+    throw new Error(
+      (n === 0 ? 'anchor no longer matches js/api.js' : 'anchor matches ' + n + ' places, so the mutation is ambiguous') +
+      ' — re-read the source and repoint it; the guard itself may be fine:\n' + anchor
+    );
+  }
   const out = src.replace(anchor, replacement);
   // A mutant that no longer parses would go "red" for the wrong reason.
   // eslint-disable-next-line no-new-func
@@ -343,9 +351,14 @@ describe('attachments.upload forwards opts.signal to fetch', () => {
   });
 
   test('MUTANT: the geolocation path dropping opts goes red', async () => {
-    const src = mutant(
-      '        delete extra.geo;\n        return uploadFile(path, file, extra, opts);\n      });',
-      '        delete extra.geo;\n        return uploadFile(path, file, extra);\n      });');
+    // Anchored on the ARGUMENT alone, not the whole call. The first version
+    // quoted 'uploadFile(path, file, extra, opts)' and fd414c51 — which added
+    // image compression and so passes 'prepared' instead of 'file' — broke it
+    // without touching the guard. The narrow anchor now breaks only when the
+    // argument list really changes, which is when this mutant genuinely needs
+    // re-reading. It is unique in js/api.js; if it stops being so, mutant()
+    // says as much rather than silently mutating the wrong call.
+    const src = mutant(', extra, opts);', ', extra);');
     await mustFail(() => checkSignalGeo(src));
   });
 });
