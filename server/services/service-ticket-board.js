@@ -90,11 +90,24 @@ const VIEWS = Object.freeze({
   flagged: Object.freeze({ flags: 'open' }),
   suggestions: Object.freeze({ suggestions: 'pending' }),
   closed: Object.freeze({ status_group: 'closed' }),
+  // Phase 4. to_bill is the work that has been done and approved and is
+  // sitting there earning nothing — the list somebody works through on a
+  // Friday. It carries no MONEY: the amount a work order is worth comes out
+  // of the markup cascade in services/service-ticket-billing.js, and putting
+  // a second copy of that arithmetic in SQL to decorate a list is exactly how
+  // two totals start disagreeing. The board says WHICH tickets; the ticket
+  // says what it is worth.
+  to_bill: Object.freeze({ billing: 'to_bill' }),
+  billed: Object.freeze({ billing: 'billed' }),
   all: Object.freeze({}),
 });
 
 const COUNTED_VIEWS = Object.freeze([
   'open', 'my_approvals', 'overdue', 'due_week', 'mine', 'unassigned', 'no_link', 'flagged', 'suggestions',
+  // to_bill is counted because its pill wears the number — that is the point
+  // of it. 'billed' is not: it only ever grows, so a count on it is a running
+  // total nobody acts on, and every counted view costs a FILTER on every row.
+  'to_bill',
 ]);
 
 // The status pills' counts (body.status_counts), in the pills' order.
@@ -114,6 +127,7 @@ const PRIMITIVES = Object.freeze({
   suggestions: Object.freeze(['pending']),
   priority: PRIORITIES,
   parent: Object.freeze(['job', 'lead']),
+  billing: Object.freeze(['to_bill', 'billed', 'written_off']),
 });
 
 const PRIORITY_RANK = "CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END";
@@ -146,6 +160,12 @@ const BOARD_ROW_KEYS = Object.freeze([
   'job_number', 'job_title', 'lead_title', 'task_total', 'task_done',
   'pending_suggestions', 'links_total', 'links_live', 'links_opened',
   'last_crew_at', 'open_flags', 'office_seen_at', 'new_from_crew', 'is_overdue',
+  // Phase 4, and STATE ONLY, which is why these three are here and no fourth
+  // is: how the ticket bills, whether it has been, and whether a document
+  // came out of it. No rate, no cost, no markup, no total and no
+  // contract_amount — "nothing priced" above still holds, and
+  // test/work-order-billing.test.js asserts this list carries no money key.
+  'bill_as', 'billing_status', 'has_billing_doc',
 ]);
 const COUNT_KEYS = Object.freeze(['task_total', 'task_done', 'pending_suggestions', 'links_total', 'links_live', 'links_opened', 'open_flags']);
 
@@ -322,6 +342,27 @@ function primitiveSql(name, value, env, b) {
       if (value === 'job') return '(t.job_id IS NOT NULL)';
       if (value === 'lead') return '(t.job_id IS NULL AND t.lead_id IS NOT NULL)';
       throw new Error('service-ticket-board: unknown parent ' + value);
+    // Phase 4. A ticket raised before billing existed (bill_as 'none') is in
+    // NONE of these: it is not waiting to be billed, it was not billed, and
+    // it was not written off — it simply does not bill, and a list of work
+    // earning nothing must not be padded with tickets that never could.
+    //
+    // to_bill also requires the ticket to be APPROVED. Anything earlier is
+    // waiting on the crew or on a reviewer, not on whoever does the billing,
+    // and a to-do list that includes work nobody can act on yet stops being
+    // read. The statuses match BILLABLE_STATUSES in
+    // services/service-ticket-billing.js; they are written out here rather
+    // than imported because this file builds SQL and takes no dependency on
+    // the billing service, and test/work-order-billing.test.js pins that the
+    // two lists agree.
+    case 'billing':
+      if (value === 'to_bill') {
+        return "(t.bill_as <> 'none' AND t.billing_status = 'unbilled'" +
+               " AND t.status IN ('approved', 'closed'))";
+      }
+      if (value === 'billed') return "(t.bill_as <> 'none' AND t.billing_status = 'billed')";
+      if (value === 'written_off') return "(t.bill_as <> 'none' AND t.billing_status = 'written_off')";
+      throw new Error('service-ticket-board: unknown billing ' + value);
     default:
       throw new Error('service-ticket-board: unknown primitive ' + name);
   }
@@ -367,6 +408,16 @@ function rowsStatement(o) {
             (SELECT MAX(e.created_at) FROM service_ticket_events e WHERE e.ticket_id = t.id AND e.organization_id = t.organization_id AND e.actor_kind = 'share' AND e.kind <> 'share_opened') AS last_crew_at,
             (SELECT COUNT(*)::int FROM service_ticket_flags f WHERE f.ticket_id = t.id AND f.organization_id = t.organization_id AND f.status = 'open') AS open_flags,
             t.office_seen_at,
+            -- Phase 4: how this ticket bills and whether it has been, so a row
+            -- can say so. STATE ONLY. No rate, no cost, no markup, no total —
+            -- and contract_amount is deliberately not here either. What a work
+            -- order is worth comes out of the markup cascade in
+            -- services/service-ticket-billing.js, and a second copy of that
+            -- arithmetic in SQL to decorate a list is how two totals start
+            -- disagreeing. The board says WHICH tickets; the ticket says what
+            -- it is worth.
+            t.bill_as, t.billing_status,
+            (t.billed_change_order_id IS NOT NULL OR t.billed_invoice_id IS NOT NULL) AS has_billing_doc,
             (t.due_date IS NOT NULL AND t.due_date < ${b.p('today', env.today)} AND ${statusIn('crew')}) AS is_overdue
        FROM service_tickets t
        LEFT JOIN jobs jl ON jl.id = t.job_id AND jl.organization_id = t.organization_id

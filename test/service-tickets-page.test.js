@@ -415,6 +415,66 @@ describe('the page renders the list', () => {
     expect(p.host.textContent).not.toMatch(/Work Orders/);
   });
 
+  // ── Phase 4: the billing chip ─────────────────────────────────────
+  describe('the billing chip on a row', () => {
+    const chips = (p, id) => Array.from(p.rowOf(id).querySelectorAll('.p86-wob-chip'))
+      .map((c) => c.textContent.trim());
+
+    test('approved and unbilled says To bill; billed says Billed; written off says so', async () => {
+      const p = makePage({ tickets: [
+        ticket({ id: 'a', status: 'approved', bill_as: 'time_materials', billing_status: 'unbilled' }),
+        ticket({ id: 'b', status: 'closed', bill_as: 'contract', billing_status: 'billed', has_billing_doc: true }),
+        ticket({ id: 'c', status: 'approved', bill_as: 'time_materials', billing_status: 'written_off' }),
+      ] });
+      p.render();
+      await flush();
+      expect(chips(p, 'a')).toContain('To bill');
+      expect(chips(p, 'b')).toContain('Billed');
+      expect(chips(p, 'c')).toContain('Written off');
+    });
+
+    test('a ticket raised before billing existed says NOTHING about billing', async () => {
+      // bill_as 'none'. It is not waiting to be billed and never will be, and
+      // a chip saying so on every old ticket would be noise on every row.
+      const p = makePage({ tickets: [
+        ticket({ id: 'a', status: 'approved', bill_as: 'none', billing_status: 'unbilled' }),
+        ticket({ id: 'b', status: 'approved' }),   // the server sent no billing keys at all
+      ] });
+      p.render();
+      await flush();
+      for (const id of ['a', 'b']) {
+        expect([id, chips(p, id).join('|')]).toEqual([id, expect.not.stringContaining('bill')]);
+      }
+    });
+
+    test('and nothing before the work is approved \u2014 nobody can bill it yet', async () => {
+      const p = makePage({ tickets: [
+        ticket({ id: 'a', status: 'in_progress', bill_as: 'time_materials', billing_status: 'unbilled' }),
+        ticket({ id: 'b', status: 'work_complete', bill_as: 'time_materials', billing_status: 'unbilled' }),
+      ] });
+      p.render();
+      await flush();
+      expect(chips(p, 'a')).not.toContain('To bill');
+      expect(chips(p, 'b')).not.toContain('To bill');
+    });
+
+    test('NO MONEY reaches the row, whatever the server sends', async () => {
+      // The whitelist is the guard; this drives it. A price on this page is
+      // the thing the whole projection exists to prevent.
+      const p = makePage({ tickets: [ticket({
+        id: 'a', status: 'approved', bill_as: 'time_materials', billing_status: 'unbilled',
+        labor_rate: 95, default_markup_pct: 15, contract_amount: 8000,
+        billed_change_order_id: 'co_1', write_off_reason: 'secret',
+      })] });
+      p.render();
+      await flush();
+      const html = p.rowOf('a').outerHTML;
+      for (const leak of ['95', '8000', 'co_1', 'secret']) {
+        expect([leak, html.indexOf(leak) >= 0]).toEqual([leak, false]);
+      }
+    });
+  });
+
   test('the columns: parent label, status label, buildings, assignee, priority dot', async () => {
     const p = makePage({ tickets: [
       ticket({ id: 'a', task_total: 8, task_done: 3, assignee_name: 'Wendy Wide', priority: 'urgent', status: 'work_complete' }),
@@ -829,7 +889,10 @@ describe('saved views', () => {
     // is excluded from the board's enumeration here on purpose.
     expect(board.VIEWS.my_work).toBeUndefined();
     expect(Array.from(p.host.querySelectorAll('.p86-wob-views .p86-st-pill')).map((b) => b.getAttribute('data-view')))
-      .toEqual(['my_work', 'my_approvals', 'overdue', 'due_week', 'mine', 'unassigned', 'no_link', 'flagged', 'suggestions']);
+      .toEqual(['my_work', 'my_approvals', 'overdue', 'due_week', 'mine', 'unassigned', 'no_link', 'flagged', 'suggestions',
+        // Phase 4: the two billing views. to_bill wears a count (it is a
+        // to-do list); billed does not (it only grows).
+        'to_bill', 'billed']);
     // Every OTHER client view is a real server board view.
     expect(Array.from(p.host.querySelectorAll('.p86-wob-views .p86-st-pill'))
       .map((b) => b.getAttribute('data-view'))

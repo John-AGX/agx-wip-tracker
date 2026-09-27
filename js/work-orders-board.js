@@ -101,7 +101,13 @@
     { id: 'unassigned', label: 'Unassigned', tip: 'Not finished and nobody is assigned', empty: 'Every unfinished ticket has an assignee.' },
     { id: 'no_link', label: 'No link sent', tip: 'Open, scheduled or in progress with no working crew link', empty: 'Every ticket in the field has a working crew link.' },
     { id: 'flagged', label: 'Flagged', attention: true, tip: "A crew reported a problem the office hasn't resolved", empty: 'No open problems reported by crews.' },
-    { id: 'suggestions', label: 'Suggestions', tip: 'Crew suggestions waiting for the office', empty: 'No crew suggestions are waiting.' }
+    { id: 'suggestions', label: 'Suggestions', tip: 'Crew suggestions waiting for the office', empty: 'No crew suggestions are waiting.' },
+    // Phase 4. To bill is work that is DONE, APPROVED and earning nothing —
+    // the list somebody works through on a Friday — so it wears a count.
+    // Billed does not: it only grows, and a running total nobody acts on is
+    // not worth a FILTER on every row of the counts query.
+    { id: 'to_bill', label: 'To bill', attention: true, tip: 'Approved, bills for money, and has not been billed yet', empty: 'Nothing is waiting to be billed.' },
+    { id: 'billed', label: 'Billed', tip: 'Already turned into a draft change order or invoice', empty: 'Nothing has been billed yet.' }
   ];
   var PRIORITY_OPTIONS = [
     { id: 'all', label: 'All priorities' },
@@ -138,7 +144,12 @@
     'completed_at', 'closed_at', 'created_at', 'updated_at', 'street_address', 'city',
     'job_number', 'job_title', 'lead_title', 'task_total', 'task_done',
     'pending_suggestions', 'links_total', 'links_live', 'links_opened',
-    'last_crew_at', 'open_flags', 'office_seen_at', 'new_from_crew', 'is_overdue'
+    'last_crew_at', 'open_flags', 'office_seen_at', 'new_from_crew', 'is_overdue',
+    // Phase 4, and state only. Three words, no numbers: this page is a list a
+    // lot of people can open, and the whitelist above is what keeps a price
+    // off it even if one ever reaches the wire. There is no amount here
+    // because the amount lives on the work order, computed once.
+    'bill_as', 'billing_status', 'has_billing_doc'
   ];
   // What a My work row may carry: the exact projection
   // GET /api/service-tickets/my-buildings answers with, and nothing else.
@@ -491,7 +502,11 @@
   // The attention badges on a row: the crew link, suggestions and problems
   // waiting, New from crew, and when the crew last did something.
   function chipsHTML(r) {
-    if (CHIP_STATUSES.indexOf(r.status) < 0) return '';
+    // The field chips stop at Work complete; the BILLING chip starts at
+    // Approved, which is the other side of that same line. So the gate
+    // returns the billing chip rather than nothing — the two never overlap,
+    // and a row is never chipless when there is something to say.
+    if (CHIP_STATUSES.indexOf(r.status) < 0) return billingChipHTML(r);
     var chips = [];
     var total = Number(r.links_total) || 0;
     var live = Number(r.links_live) || 0;
@@ -507,7 +522,33 @@
     if (r.new_from_crew === true) chips.push('<span class="p86-wob-chip is-info">New from crew</span>');
     var ago = fmtAgo(r.last_crew_at);
     if (ago) chips.push('<span class="p86-wob-chip is-quiet">' + esc('Crew ' + ago) + '</span>');
-    return chips.join('');
+    return chips.join('') + billingChipHTML(r);
+  }
+
+  // Phase 4: whether this work order has been billed, as a word. It is drawn
+  // OUTSIDE chipsHTML's status gate on purpose — the other chips are about
+  // work in the field and stop being interesting once a ticket is approved,
+  // and "waiting to be billed" starts being interesting at exactly that
+  // moment. A ticket that bills nothing says nothing, which is the same
+  // silence it has always kept.
+  function billingChipHTML(r) {
+    if (!r.bill_as || r.bill_as === 'none') return '';
+    if (r.billing_status === 'written_off') {
+      return '<span class="p86-wob-chip is-quiet" title="A real call that will not be charged">Written off</span>';
+    }
+    if (r.billing_status === 'billed') {
+      return '<span class="p86-wob-chip is-info" title="' +
+        (r.has_billing_doc ? 'Turned into a draft change order or invoice' :
+         'Billed, but the draft it made has since been deleted \u2014 it can be billed again') +
+        '">Billed</span>';
+    }
+    // Unbilled, and only worth saying once the work is actually billable:
+    // before that it is waiting on the crew or a reviewer, not on anyone
+    // doing the billing. Matches the to_bill view's own rule.
+    if (r.status === 'approved' || r.status === 'closed') {
+      return '<span class="p86-wob-chip is-warn" title="Approved and not billed yet">To bill</span>';
+    }
+    return '';
   }
 
   // The five cells both row shapes draw the same way, in one copy: the

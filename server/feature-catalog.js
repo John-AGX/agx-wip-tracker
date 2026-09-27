@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.66';
+const APP_VERSION = '1.67';
 
 const releases = [
+  {
+    version: '1.67',
+    date: '2026-09-26',
+    name: 'The work that is done and earning nothing',
+    summary: 'Two new views on the Service Tickets page, and a word on every row, so a work order waiting to be billed is not something you have to remember.',
+    changes: [
+      { type: 'new', text: 'To bill: every work order that is approved, bills for money, and has not been billed yet \u2014 the list to work through on a Friday. It carries its count on the pill, the way Overdue and Flagged do, because it is a to-do list and the number is the point of it.' },
+      { type: 'new', text: 'Billed: what has already been turned into a draft change order or invoice. No count on this one \u2014 it only ever grows, and a running total nobody acts on is not worth the room.' },
+      { type: 'new', text: 'Every row on the page now carries a small To bill, Billed or Written off word, so you can see where a work order stands without changing view. A work order raised before billing existed says nothing at all, because it never will bill \u2014 the point of the list is work that is earning nothing, not every old ticket.' },
+      { type: 'improved', text: 'The views deliberately show no money. What a work order is worth is worked out in one place, on the work order itself, and putting a second copy of that sum behind a list is how two totals start disagreeing. The list tells you WHICH work orders; the work order tells you what it is worth.' },
+    ],
+  },
   {
     version: '1.66',
     date: '2026-09-26',

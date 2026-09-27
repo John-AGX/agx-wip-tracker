@@ -51,6 +51,10 @@ function row(over) {
     street_address: null, city: null, job_number: 'RV2001', job_title: 'Waterside 1', lead_title: null,
     task_total: 0, task_done: 0, pending_suggestions: 0, links_total: 1, links_live: 1, links_opened: 0,
     last_crew_at: null, open_flags: 0, office_seen_at: null, new_from_crew: false, is_overdue: false,
+    // Phase 4 state — three words, no numbers. The whitelist fills any
+    // missing key with null, so the fixture has to carry them or every
+    // key-set assertion below reads three phantom additions.
+    bill_as: 'none', billing_status: 'unbilled', has_billing_doc: false,
   }, over || {});
 }
 

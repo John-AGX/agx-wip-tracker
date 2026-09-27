@@ -892,3 +892,70 @@ describe('MUTANTS', () => {
     expect(row.total).not.toBe(row.qty * row.unit_sell);
   });
 });
+
+// ── 13. the billing views on the company-wide board ──────────────────────
+// "To bill" is the list somebody works through: done, approved, earning
+// nothing. It is a view on the existing board rather than a new page, so it
+// inherits the board's tenancy, its job-access rule and its whitelist — and
+// that whitelist is the thing to keep honest, because a money column added to
+// a LIST is a money column on a page that a lot of people can open.
+describe('the board\u2019s billing views', () => {
+  const board = require('../server/services/service-ticket-board');
+
+  test('to_bill and billed are views; to_bill is counted and billed is not', () => {
+    expect(board.VIEWS.to_bill).toEqual({ billing: 'to_bill' });
+    expect(board.VIEWS.billed).toEqual({ billing: 'billed' });
+    // to_bill wears its number because it is a to-do list. billed only ever
+    // grows, and every counted view costs a FILTER on every row.
+    expect(board.COUNTED_VIEWS).toContain('to_bill');
+    expect(board.COUNTED_VIEWS).not.toContain('billed');
+  });
+
+  test('the query parser accepts the billing primitive and refuses a made-up value', () => {
+    expect(board.PRIMITIVES.billing).toEqual(['to_bill', 'billed', 'written_off']);
+    expect(board.parseBoardQuery({ board: '1', view: 'to_bill' }).error).toBe(null);
+    expect(board.parseBoardQuery({ board: '1', billing: 'to_bill' }).error).toBe(null);
+    expect(board.parseBoardQuery({ board: '1', billing: 'everything' }).error).not.toBe(null);
+  });
+
+  // The comment in the board says these statuses match BILLABLE_STATUSES in
+  // the billing service. That is a claim about two files, so it is tested:
+  // a status added to one and not the other would put a ticket on the list
+  // that the bill door then refuses, or keep one off that is ready to go.
+  test('the statuses to_bill lists are exactly the ones the bill door accepts', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', 'server', 'services', 'service-ticket-board.js'), 'utf8');
+    const at = src.indexOf("if (value === 'to_bill')");
+    expect(at).toBeGreaterThan(0);
+    const clause = src.slice(at, src.indexOf('}', at));
+    const inSql = (clause.match(/'(\w+)'/g) || [])
+      .map((s) => s.slice(1, -1))
+      .filter((w) => bill.BILLABLE_STATUSES.concat(['approved', 'closed', 'draft', 'open', 'scheduled',
+        'in_progress', 'work_complete', 'cancelled']).indexOf(w) >= 0);
+    expect(inSql.sort()).toEqual(bill.BILLABLE_STATUSES.slice().sort());
+  });
+
+  test('a board row carries the billing STATE and no money whatever', () => {
+    for (const k of ['bill_as', 'billing_status', 'has_billing_doc']) {
+      expect([k, board.BOARD_ROW_KEYS.indexOf(k) >= 0]).toEqual([k, true]);
+    }
+    // The property, not a list: nothing on a board row may be a price.
+    const MONEY = ['labor_rate', 'labor_rate_source', 'default_markup_pct', 'contract_amount',
+      'markup_pct', 'unit_cost', 'cost', 'price', 'total', 'amount', 'rate', 'billed_change_order_id',
+      'billed_invoice_id', 'write_off_reason'];
+    for (const k of MONEY) {
+      expect([k, board.BOARD_ROW_KEYS.indexOf(k)]).toEqual([k, -1]);
+    }
+  });
+
+  test('a ticket that bills nothing is in NONE of the three billing filters', () => {
+    // bill_as 'none' predates billing. It is not waiting to be billed, was
+    // not billed and was not written off — a list of work earning nothing
+    // must not be padded with tickets that never could earn anything.
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', 'server', 'services', 'service-ticket-board.js'), 'utf8');
+    const at = src.indexOf("case 'billing':");
+    const block = src.slice(at, src.indexOf("default:", at));
+    expect((block.match(/bill_as <> 'none'/g) || []).length).toBe(3);
+  });
+});

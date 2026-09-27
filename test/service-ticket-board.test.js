@@ -269,7 +269,15 @@ describe('bind exactness: every statement references exactly what it binds', () 
         }
       }
     }
-    expect(statements).toBe(USERS.length * 11 * 5 * 2 * 3);
+    // DERIVED, not typed: the 11 that used to be here was the view count, and
+    // adding a view made this fail with two numbers and no hint which one was
+    // the truth. The loops above walk VIEWS and SORTS, so the expectation
+    // walks them too — and it still catches a statement that did not run,
+    // which is the thing this is actually for.
+    expect(statements).toBe(
+      USERS.length * Object.keys(board.VIEWS).length * Object.keys(board.SORTS).length * 2 * 3
+    );
+    expect(Object.keys(board.VIEWS)).toContain('to_bill');
   });
 
   test('the counts statement never binds the caller id the task counts use', async () => {
