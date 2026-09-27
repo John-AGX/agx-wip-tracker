@@ -859,8 +859,20 @@ function hJob(state, pc) {
     const list = [];
     eachEntry(pc, ops.phase_updates, 'phase_updates', (pu, i) => {
       const phase = findById(phases, pu.phase_id);
-      const dbName = phase && (typeof phase.name === 'string' || typeof phase.title === 'string')
-        ? oneLine(phase.name || phase.title) : '';
+      // A phase record keeps its name in `phase.phase`, not `name`/`title`.
+      // Every real writer stores it there — js/jobs.js setPhaseDollar and the
+      // add-scope dialog, js/estimates.js — so the old `name || title` lookup
+      // never matched a live record: dbName was always '', and this fell
+      // through to safeName(), which has no NAME_SQL entry for a phase (a
+      // phase has no table of its own) and so returns null. Every approval
+      // card therefore read "on a phase" instead of "on Framing".
+      //
+      // `phase` FIRST because it is the real field; name/title stay as
+      // fallbacks because the describer's own fixtures use them and a record
+      // shaped that way should still be named rather than silently unnamed.
+      const nameish = phase && [phase.phase, phase.name, phase.title]
+        .find((v) => typeof v === 'string' && v.trim() !== '');
+      const dbName = nameish ? oneLine(nameish) : '';
       const pname = dbName ? truncate(dbName, NAME_CAP) : safeName(state, 'phase', pu.phase_id);
       const changes = walkBag(state, pc, pu, BAGS.phase, `phase_updates[${i}]`, {
         beforeOf: phase ? (k) => ownOrBlank(phase, k === 'pct_complete' ? 'pctComplete' : k) : undefined,

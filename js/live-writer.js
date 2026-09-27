@@ -315,6 +315,18 @@
       var lineDiff = diffEstimate(name, before, after);
       if (lineDiff && lineDiff.ops && lineDiff.ops.length) return lineDiff;
     }
+    // A job's phases live in jobs.data.phases and the dispatcher snapshots the
+    // whole row, so the before/after is already there — it was just unreadable,
+    // because scalarFieldOps SKIPs `data`. Same fall-back rule as the change
+    // order: a job write is just as often a plain field change (status, dates,
+    // contract amount) that the phase differ cannot see, so try phases and let
+    // diffFields have it otherwise. NOT routed through diffEstimate, which
+    // hardcodes entity_type:'estimate' on its return and would mislabel the
+    // group as an estimate write.
+    if (et === 'job') {
+      var jobDiff = diffJob(name, before, after);
+      if (jobDiff) return jobDiff;
+    }
     return diffFields(et, name, before, after);
   }
 
@@ -422,6 +434,148 @@
       cmp(k.replace(/_/g, ' '), bv, av);
     });
     return out;
+  }
+
+  /* ── job phases ────────────────────────────────────────────────────────
+   * The highest-stakes agent write in the product — `phase_updates` is the
+   * only lever on % complete and therefore on revenue earned — rendered as
+   * NOTHING until this existed. A phase lives in jobs.data.phases, which the
+   * dispatcher snapshots in full on both sides, but scalarFieldOps SKIPs
+   * `data` wholesale and returns early on any nested object, so a phase-only
+   * write produced zero ops, diffChangeset filtered the empty group out, and
+   * the user was told "nothing in it comes out as a change this view can
+   * list" about a write that moved the job's money.
+   *
+   * dataFieldOps already walks arrays inside `data` by item id, but it cannot
+   * serve here: it emits no lineId (so nothing is paintable), and it names an
+   * item `item.name || item.title || item.id` — a phase has neither of the
+   * first two, so every row would be labelled with a raw 'p1758…'.
+   */
+  var PHASE_FIELD_LABEL = bare({
+    pctComplete: '% complete',
+    phaseBudget: 'budget',
+    asSoldPhaseBudget: 'as-sold budget',
+    asSoldRevenue: 'as-sold revenue',
+    coPhaseBudget: 'CO budget',
+    buildingId: 'building',
+    weight: 'weight'
+  });
+  // camelCase survives `replace(/_/g,' ')` untouched, which is why scalarFieldOps
+  // prints "pctComplete" verbatim. Split the humps.
+  function phaseFieldLabel(f) {
+    if (PHASE_FIELD_LABEL[f]) return PHASE_FIELD_LABEL[f];
+    return String(f).replace(/_/g, ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
+  }
+  function phaseLabel(p) {
+    if (!p) return 'scope';
+    var cands = [p.phase, p.name, p.title];
+    for (var i = 0; i < cands.length; i++) {
+      if (typeof cands[i] === 'string' && cands[i].trim() !== '') return cands[i].trim();
+    }
+    return 'scope';
+  }
+  /* The money one phase is worth. MIRRORS js/jobs.js phaseRevenue() exactly —
+   * a TRUTHY chain over three fields that hold one number. Faithfulness
+   * matters more than tidiness here: because the read stops at the first
+   * non-zero, a write that moves asSoldPhaseBudget while asSoldRevenue is
+   * still non-zero changes the stored bytes and moves NO money. Diffing those
+   * fields individually would print a line that is true and financially
+   * false. So money is reported ONCE, derived, and only when it actually
+   * moved. See [[reference-phase-money-mirror]] / the Oak Bridge split. */
+  var PHASE_MONEY = bare({ asSoldRevenue: 1, asSoldPhaseBudget: 1, phaseBudget: 1, coPhaseBudget: 1 });
+  function phaseRevenue(p) {
+    if (!p) return 0;
+    return num(p.asSoldRevenue) || num(p.asSoldPhaseBudget) || num(p.phaseBudget) || 0;
+  }
+
+  function diffJob(name, before, after) {
+    var bd = before && before.data, ad = after && after.data;
+    var bp = (bd && Array.isArray(bd.phases)) ? bd.phases : null;
+    var ap = (ad && Array.isArray(ad.phases)) ? ad.phases : null;
+    bp = bp || []; ap = ap || [];
+
+    var bById = Object.create(null), aById = Object.create(null);
+    bp.forEach(function (p) { if (p && p.id != null) bById[p.id] = p; });
+    ap.forEach(function (p) { if (p && p.id != null) aById[p.id] = p; });
+
+    var ops = [], impact = 0;
+
+    // gone
+    bp.forEach(function (p) {
+      if (!p || p.id == null || aById[p.id] || ops.length >= 24) return;
+      var rev = phaseRevenue(p);
+      impact -= rev;
+      ops.push({ kind: 'delete', label: phaseLabel(p), detail: '', amount: rev || null, lineId: p.id });
+    });
+    // new
+    ap.forEach(function (p) {
+      if (!p || p.id == null || bById[p.id] || ops.length >= 24) return;
+      var rev = phaseRevenue(p);
+      impact += rev;
+      ops.push({ kind: 'add', label: phaseLabel(p), detail: '', amount: rev || null, lineId: p.id });
+    });
+    // changed — ONE op per phase, not one per field. The flash merges on
+    // kind + lineId, so three field ops on one phase would collapse to one
+    // anyway and the other two would just inflate the strip's count.
+    ap.forEach(function (p) {
+      if (!p || p.id == null || ops.length >= 24) return;
+      var prev = bById[p.id];
+      if (!prev) return;
+      var bits = [], moneyTouched = false;
+      Object.keys(p).forEach(function (f) {
+        if (f === 'id') return;
+        var av = p[f], bv = prev[f];
+        if (av && typeof av === 'object') return;          // not walked
+        if (String(bv == null ? '' : bv) === String(av == null ? '' : av)) return;
+        if (PHASE_MONEY[f]) { moneyTouched = true; return; }  // reported once, derived
+        if (f === 'pctComplete') { bits.push('% complete ' + (num(bv) || 0) + '% → ' + (num(av) || 0) + '%'); return; }
+        if (bits.length < 4) bits.push(phaseFieldLabel(f) + ' ' + (bv == null || bv === '' ? '∅' : bv) + ' → ' + (av == null || av === '' ? '∅' : av));
+      });
+      var rb = phaseRevenue(prev), ra = phaseRevenue(p), amount = null;
+      if (rb !== ra) {
+        bits.unshift('revenue ' + usd(rb) + ' → ' + usd(ra));
+        amount = ra - rb;
+        impact += amount;
+      } else if (moneyTouched) {
+        // Honest about the mirror: bytes moved, money did not. Saying nothing
+        // would hide a real write; printing a field delta would imply money
+        // changed when the truthy chain means it did not.
+        bits.push('budget fields changed · revenue unchanged');
+      }
+      if (!bits.length) return;
+      ops.push({ kind: 'edit', label: phaseLabel(p), detail: bits.join(' · '), amount: amount, lineId: p.id });
+    });
+
+    /* A job's ordinary FIELDS are invisible for the same reason its phases
+     * were. The jobs table is `id + data JSONB` plus a few FK columns, so
+     * status / title / contractAmount all live inside `data` — and
+     * scalarFieldOps SKIPs `data` wholesale. So diffFields saw nothing on a
+     * plain job edit either. My own test caught this: it is the same defect
+     * one level out, and fixing only phases would have left it.
+     *
+     * Scalars inside `data`, one level, phases excluded (owned above) and
+     * lines excluded (an estimate concept). No lineId: a job field has no row
+     * on the page, so these are correctly reportable-but-not-paintable. */
+    var seenData = bare({ phases: 1, lines: 1 });
+    Object.keys(ad || {}).forEach(function (k) {
+      if (seenData[k] || ops.length >= 24) return;
+      var av = (ad || {})[k], bv = (bd || {})[k];
+      if (av && typeof av === 'object') return;            // deeper: not walked
+      if (String(bv == null ? '' : bv) === String(av == null ? '' : av)) return;
+      var money = /amount|budget|price|cost|total/i.test(k);
+      ops.push({
+        kind: 'edit',
+        label: phaseFieldLabel(k),
+        detail: (money ? usd(num(bv) || 0) + ' → ' + usd(num(av) || 0)
+                       : (bv == null || bv === '' ? '∅' : bv) + ' → ' + (av == null || av === '' ? '∅' : av)),
+        amount: null
+      });
+    });
+    // Real columns too (client_id, market_id, …), which scalarFieldOps CAN see.
+    ops = ops.concat(scalarFieldOps(before, after));
+
+    if (!ops.length) return null;
+    return { entity_type: 'job', name: name, ops: ops, impact: impact };
   }
 
   function lineMeta(l) {

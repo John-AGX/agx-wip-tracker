@@ -91,7 +91,13 @@ const CHANGESET = [
   { entity_type: 'job', id: JOB, before: { id: JOB, client_id: 'client_column_value', data: {
     client_id: 'client_blob_value',
     title: 'Harbor Point', status: 'active', contractAmount: 250000,
-    phases: [{ id: PHASE, name: 'Framing', pctComplete: 40, materials: 1000 }] } }, after: {} },
+    // `phase`, not `name`. THIS FIXTURE WAS THE BUG'S HIDING PLACE: it shipped
+    // `name: 'Framing'`, which no real writer produces (js/jobs.js and
+    // js/estimates.js all store the scope name in `phase`), so the assertions
+    // below passed against a shape production never sends while every live
+    // approval card read "on a phase" instead of "on Framing". A fixture that
+    // does not match production is not a fixture, it is a second bug.
+    phases: [{ id: PHASE, phase: 'Framing', pctComplete: 40, materials: 1000 }] } }, after: {} },
   { entity_type: 'client', id: CLIENT, before: { id: CLIENT, name: 'Acme HOA', phone: '(813) 555-0199',
     city: 'Tampa', notes: '' }, after: {} },
   { entity_type: 'lead', id: LEAD, before: { id: LEAD, title: 'Smith Residence', street_address: '12 Old Rd',
