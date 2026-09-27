@@ -266,6 +266,17 @@
   function entityName(et, id, before, after) {
     var s = after || before || {};
     if (et === 'estimate') return s.title || s.name || 'estimate';
+    // A job snapshot is the jobs ROW — { id, data:{ jobNumber, title, … } } —
+    // because the table is id + data JSONB. So s.title is always undefined on
+    // a job, the lookup fell through, and a strip header could read the bare
+    // word "job". Forward-facing surfaces name a job by number AND title.
+    var sd = (s.data && typeof s.data === 'object') ? s.data : null;
+    if (et === 'job' && sd) {
+      var jn = sd.jobNumber, jt = sd.title || sd.name;
+      if (jn && jt) return jn + ' · ' + jt;
+      if (jt) return jt;
+      if (jn) return String(jn);
+    }
     if (s.title) return s.title;
     if (s.name) return s.name;
     try {
@@ -1851,7 +1862,7 @@
     var view = openNow && openNow.viewer.root();
     if (!view) return 0;
     var ep = FLASH.claim();
-    var painted = 0, i = 0;
+    var painted = 0, i = 0, seenEls = [];
     function paint(o) {
       // The row's DOM address is the ENCODED id (js/dom-ref.js), not the
       // stored bytes — the raw value could carry a quote, or a CR the HTML
@@ -1859,7 +1870,20 @@
       // on nothing.
       var _enc = window.p86DomRef ? window.p86DomRef.enc(o.lineId) : String(o.lineId).replace(/"/g, '\\"');
       var el = view.querySelector('[data-line-id="' + _enc + '"]');
+      // A row can stand for SEVERAL records. The job page's scope row is one
+      // card per scope NAME aggregating that scope's phase record in every
+      // building, so it carries all of their ids in data-line-ids
+      // (space-separated) and `~=` matches any one of them. An id containing
+      // whitespace could never match a ~= token, which is why the stamping
+      // side refuses those rather than write an address that cannot resolve.
+      if (!el && !/\s/.test(_enc)) el = view.querySelector('[data-line-ids~="' + _enc + '"]');
       if (!el) return;
+      // Once per row per pass. "Set B1 to 100%" writes one record per scope in
+      // that building, and several of those can share one group row; re-firing
+      // the keyframe on each would read as a stutter rather than a single
+      // "this moved".
+      if (seenEls.indexOf(el) !== -1) return;
+      seenEls.push(el);
       var cls = 'p86lw-flash-' + (o.kind === 'add' ? 'add' : 'edit');
       el.classList.remove(cls);
       void el.offsetWidth;              // restart the keyframe

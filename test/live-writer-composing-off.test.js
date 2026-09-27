@@ -164,13 +164,21 @@ describe('a deferred flash is retried instead of rotting', () => {
   test('the retry window stays under the flash TTL', () => {
     // live-writer drops _pendingFlash after 60s. A retry window longer than
     // that would repaint with nothing left to decorate.
-    const m = ED.match(/_typingRetryUntil = Date\.now\(\) \+ (\d+)/);
-    expect(m).toBeTruthy();
-    expect(Number(m[1])).toBeLessThan(60000);
+    const tries = Number((ED.match(/TYPING_MAX_TRIES = (\d+)/) || [])[1]);
+    const every = Number((ED.match(/scheduleTypingRetry[\s\S]{0,700}\}, (\d+)\);/) || [])[1]);
+    expect(tries).toBeGreaterThan(0);
+    expect(every).toBeGreaterThan(0);
+    expect(tries * every).toBeLessThan(60000);
   });
 
-  test('the retry is bounded and single-flighted', () => {
-    expect(ED).toMatch(/if \(_typingRetry\) return;/);
-    expect(ED).toMatch(/Date\.now\(\) > _typingRetryUntil/);
+  test('the retry is bounded by a COUNT, not the wall clock', () => {
+    // A Date.now() deadline is NOT bounded under fake timers: the clock does
+    // not advance with the timers, so a caret that never leaves reschedules
+    // forever. That shipped once, in this very function.
+    const fn = ED.slice(ED.indexOf('function scheduleTypingRetry'),
+                        ED.indexOf('window.p86EstimateEditorRefresh = function'));
+    expect(fn).toMatch(/if \(_typingRetry\) return;/);          // single-flighted
+    expect(fn).toMatch(/_typingTries >= TYPING_MAX_TRIES/);      // bounded
+    expect(fn).not.toMatch(/Date\.now\(\)/);                     // not by clock
   });
 });

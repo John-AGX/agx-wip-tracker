@@ -4730,15 +4730,23 @@
    * minute has moved on and repainting under them later is worse than a
    * missed flash; the window is kept under the flash's own TTL so this never
    * fires a repaint whose decoration has already rotted. */
+  // Bounded by a COUNT, not by Date.now(). The first version of this used a
+  // wall-clock deadline, which is correct in a browser and NOT bounded under
+  // fake timers: the clock does not advance with the timers, so a caret that
+  // never leaves reschedules forever under jest.runAllTimers(). It never hung
+  // only because no test held the caret. ~37 × 1.2s ≈ 45s, under the 60s
+  // flash TTL, so the retry can never repaint with nothing left to decorate.
   var _typingRetry = null;
-  var _typingRetryUntil = 0;
+  var _typingTries = 0;
+  var TYPING_MAX_TRIES = 37;
   function scheduleTypingRetry() {
     if (_typingRetry) return;                 // one timer, never one per hydrate
-    if (!_typingRetryUntil) _typingRetryUntil = Date.now() + 45000;   // < the 60s flash TTL
+    if (_typingTries >= TYPING_MAX_TRIES) { _typingTries = 0; return; }
+    _typingTries++;
     _typingRetry = setTimeout(function () {
       _typingRetry = null;
-      if (!_serverWritePending || Date.now() > _typingRetryUntil) { _typingRetryUntil = 0; return; }
-      try { window.p86EstimateEditorRefresh(); } catch (e) { _typingRetryUntil = 0; }
+      if (!_serverWritePending) { _typingTries = 0; return; }
+      try { window.p86EstimateEditorRefresh(); } catch (e) { _typingTries = 0; }
     }, 1200);
   }
 
@@ -4755,7 +4763,7 @@
       scheduleTypingRetry();   // come back when the caret leaves, not "someday"
       return false;
     }
-    _typingRetryUntil = 0;
+    _typingTries = 0;
     _serverWritePending = false;
     try {
       renderHeaderChips();

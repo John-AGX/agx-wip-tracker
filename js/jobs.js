@@ -3633,21 +3633,92 @@ function renderJobsMain() {
         // Called by app.js AFTER a hydrate has swapped appData.jobs, and by
         // p86Refresh for the direct-REST money types. No-ops unless a write is
         // actually pending, so a routine reload never yanks the page around.
+        /* ── Live Writer: an agent's phase write glows on its scope row ──────
+         * The job page becomes a Live Writer viewer. An agent's phase_updates
+         * (the only lever on % complete, and so on revenue earned) now diffs to
+         * per-phase ops carrying the phase id, and each scope row carries the ids
+         * of every record it aggregates — so the row that moved lights up in the
+         * same green the estimate and change-order rows use.
+         *
+         * Claiming a write this page cannot show is harmless HERE, unlike the
+         * estimate: the strip's document pane is estimate-only, so for every job
+         * write the strip shows its op list regardless. So the visibility test is
+         * about honesty, not safety — do not claim what is not on screen. */
+        function jobDetailOpenId() {
+            // The classic overview's scope host. offsetParent is null when it or
+            // any ancestor is display:none — another sub-tab, the detail view
+            // hidden — so a job that is current but not on screen does not claim.
+            var host = document.getElementById('job-overview-phases');
+            if (!host || host.offsetParent === null) return null;
+            return (appState && appState.currentJobId) || null;
+        }
+        window.p86JobDetailCurrentId = jobDetailOpenId;
+
+        // Registered from renderJobDetail, not at load: index.html loads this
+        // file BEFORE js/live-writer.js. registerViewer replaces by entityType,
+        // so re-registering on every render is idempotent. The root is the
+        // classic overview host ONLY — the Site Plan inspector renders the same
+        // scope rows into #insp-phases, and nothing repaints that host on an
+        // agent write, so flashing there would light up pre-write numbers.
+        function registerJobLiveWriterViewer() {
+            var LW = window.p86LiveWriter;
+            if (!LW || typeof LW.registerViewer !== 'function') return;
+            LW.registerViewer({
+                entityType: 'job',
+                currentId: jobDetailOpenId,
+                root: function () { return document.getElementById('job-overview-phases'); }
+            });
+        }
+
+        /* The caret wins the repaint (renderJobDetail rebuilds editable fields),
+         * but "wait for the next hydrate" can mean minutes, while a pending row
+         * flash expires in 60s. So poll briefly for the caret to leave.
+         *
+         * Bounded by a COUNT, never by Date.now(): under fake timers the clock
+         * does not advance with the timers, so a deadline-bounded chain whose
+         * caret never leaves reschedules forever. ~37 × 1.2s ≈ 45s, under the
+         * flash TTL, so this never repaints with nothing left to decorate. */
+        var _jobTypingRetry = null, _jobTypingTries = 0;
+        var JOB_TYPING_MAX_TRIES = 37;
+        function scheduleJobTypingRetry() {
+            if (_jobTypingRetry) return;                       // one timer only
+            if (_jobTypingTries >= JOB_TYPING_MAX_TRIES) { _jobTypingTries = 0; return; }
+            _jobTypingTries++;
+            _jobTypingRetry = setTimeout(function () {
+                _jobTypingRetry = null;
+                if (!_jobWritePending) { _jobTypingTries = 0; return; }
+                try { window.p86JobDetailRefresh(); } catch (e) { _jobTypingTries = 0; }
+            }, 1200);
+        }
+
         window.p86JobDetailRefresh = function(jobId) {
             if (!_jobWritePending) return false;
             var id = jobId || (appState && appState.currentJobId);
             if (!id) { _jobWritePending = false; return false; }
-            // The caret wins. Keep the latch SET so the next hydrate repaints
-            // rather than dropping the refresh on the floor entirely.
-            if (window.p86Refresh && window.p86Refresh.isTypingIn('#jobs-job-detail-view')) return false;
+            // The caret wins. Keep the latch SET so the retry (or the next
+            // hydrate) repaints rather than dropping the refresh on the floor.
+            if (window.p86Refresh && window.p86Refresh.isTypingIn('#jobs-job-detail-view')) {
+                scheduleJobTypingRetry();
+                return false;
+            }
+            _jobTypingTries = 0;
             _jobWritePending = false;
-            try { renderJobDetail(id); return true; }
+            try {
+                renderJobDetail(id);
+                // AFTER the repaint, never off p86:payload-applied: the event
+                // fires against the pre-write DOM, where a new scope has no row
+                // and this very render would wipe whatever was decorated.
+                var LW = window.p86LiveWriter;
+                if (LW && typeof LW.flashViewerRows === 'function') LW.flashViewerRows('job', id);
+                return true;
+            }
             catch (e) { console.warn('[jobs] post-write detail refresh failed:', e); return false; }
         };
 
         function renderJobDetail(jobId) {
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
+            registerJobLiveWriterViewer();
 
             // Read-only enforcement: when the current user can't edit this job,
             // toggle a CSS class on the detail container that disables form
@@ -5479,7 +5550,18 @@ function renderJobsMain() {
                 if (pl.some(function (p) { return p.locked === true; })) chips += '<span class="p86-sc-chip lock">&#128274; Locked</span>';
                 if (pl.some(function (p) { return (p.coPhaseBudget || 0) > 0; })) chips += '<span class="p86-sc-chip co">CO</span>';
                 if ((pl[0].workScope || 'in-house') === 'sub') chips += '<span class="p86-sc-chip sub">Sub</span>';
-                return '<div class="p86-sc-row">' +
+                // Live Writer address. This row is ONE card per scope name but
+                // stands for that scope's phase record in EVERY building, and an
+                // agent's phase_updates addresses records, not names — so the row
+                // carries all of their ids, space-separated, for a `~=` match.
+                // Same encoder the lookup uses (p86DomRef.enc), or the two sides
+                // disagree about the address. enc() does not escape whitespace,
+                // and a token with a space in it can never match `~=`, so such an
+                // id is left off rather than written as an address that lies.
+                var _lineIds = pl.map(function (p) {
+                    return (window.p86DomRef && p.id != null) ? window.p86DomRef.enc(p.id) : '';
+                }).filter(function (t) { return t && !/\s/.test(t); }).join(' ');
+                return '<div class="p86-sc-row"' + (_lineIds ? ' data-line-ids="' + _lineIds + '"' : '') + '>' +
                     '<div class="p86-sc-top">' +
                         '<div class="p86-sc-nm"><div class="n">' + escapeHTML(phaseName) + '</div>' + (chips ? '<div class="p86-sc-chips">' + chips + '</div>' : '') + '</div>' +
                         '<button class="p86-sc-icon" title="Edit scope" onclick="editPhase(p86Dec(\'' + p86Enc(repId) + '\'))">&#x270F;&#xFE0F;</button>' +
