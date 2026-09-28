@@ -760,27 +760,36 @@ function p86Ask(message, opts) {
    * flash fired off p86:payload-applied decorates the pre-write DOM, where an
    * added line has no row at all and the imminent repaint would wipe whatever
    * was decorated. */
-  document.addEventListener('p86:payload-applied', function (ev) {
-    try {
-      var open = coEditorOpenId();
-      if (open == null) return;
-      var cs = (ev && ev.detail && ev.detail.apply_changeset) || [];
-      var hit = cs.some(function (e) {
-        return e && e.entity_type === 'change_order' && e.id != null && String(e.id) === String(open);
-      });
-      if (!hit) return;
-      if (!window.p86Api || !window.p86Api.changeOrders) return;
-      window.p86Api.changeOrders.get(open).then(function (r) {
-        var co = r && r.change_order;
-        // Closed, or swapped to another CO, while the fetch was in flight.
-        if (!co || String(coEditorOpenId()) !== String(open)) return;
-        _state.co = co;
-        paintLines();
-        var LW = window.p86LiveWriter;
-        if (LW && typeof LW.flashViewerRows === 'function') LW.flashViewerRows('change_order', open);
-      }).catch(function () { /* the strip already reported the write */ });
-    } catch (e) { /* a notification must never break the editor */ }
-  });
+  /* Guarded because this module is REQUIRED IN NODE: it exposes a `__test`
+   * seam (see the export at the bottom) that test/estimate-line-addressability
+   * .test.js loads directly, in the default `node` environment. An unguarded
+   * top-level document.addEventListener threw on require and took every test
+   * in that file's CO-editor block down with it — the failure reads as three
+   * broken assertions about line ids, which is nothing to do with the cause.
+   * js/estimate-editor.js:108 guards its own load-time DOM work the same way. */
+  if (typeof document !== 'undefined') {
+    document.addEventListener('p86:payload-applied', function (ev) {
+      try {
+        var open = coEditorOpenId();
+        if (open == null) return;
+        var cs = (ev && ev.detail && ev.detail.apply_changeset) || [];
+        var hit = cs.some(function (e) {
+          return e && e.entity_type === 'change_order' && e.id != null && String(e.id) === String(open);
+        });
+        if (!hit) return;
+        if (!window.p86Api || !window.p86Api.changeOrders) return;
+        window.p86Api.changeOrders.get(open).then(function (r) {
+          var co = r && r.change_order;
+          // Closed, or swapped to another CO, while the fetch was in flight.
+          if (!co || String(coEditorOpenId()) !== String(open)) return;
+          _state.co = co;
+          paintLines();
+          var LW = window.p86LiveWriter;
+          if (LW && typeof LW.flashViewerRows === 'function') LW.flashViewerRows('change_order', open);
+        }).catch(function () { /* the strip already reported the write */ });
+      } catch (e) { /* a notification must never break the editor */ }
+    });
+  }
 
   function mount() {
     registerLiveWriterViewer();

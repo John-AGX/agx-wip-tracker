@@ -526,9 +526,18 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.67';
+const APP_VERSION = '1.68';
 
 const releases = [
+  {
+    version: '1.68',
+    date: '2026-09-27',
+    name: 'Internal: the change-order editor loads outside a browser again',
+    summary: 'A safety net around change-order line numbering had stopped running. No change to what you see.',
+    changes: [
+      { type: 'fixed', text: 'A recent addition to the change-order editor \u2014 the highlight that shows you what the assistant just wrote \u2014 stopped part of our own automated checks from running, including the ones that make sure every change-order line keeps a unique internal address. Those checks guard against lines that look fine but cannot be edited or deleted. They are running again, and the highlight is unaffected.' },
+    ],
+  },
   {
     version: '1.67',
     date: '2026-09-26',
