@@ -429,6 +429,21 @@ for (const [name, rel] of Object.entries(MAP)) {
   // Slim Heroicons strokes (1.5 → 1.2) to match Phosphor's lighter weight.
   if (lib === 'heroicons') {
     svg = svg.replace(/stroke-width="1\.5"/g, 'stroke-width="1.2"');
+    // Hold the contract this file's own header promises: every icon keeps
+    // stroke="currentColor" so CSS tints it. Fourteen of the vendored
+    // Heroicons did not — at-symbol (the Email icon), sort-asc/desc,
+    // align-center/right, wrap-text, merge-cells, redo, tag, hashtag, swatch,
+    // backspace, popout, paint-brush — they carry stroke="#0F172A" and an
+    // explicit width/height, the signature of a Figma export rather than the
+    // library. Slate-900 on a dark surface is near-invisible, so each rendered
+    // as a dark smudge wherever it appeared, ignoring every CSS color rule.
+    //
+    // Normalised here rather than by hand-editing fourteen files, so the next
+    // icon exported the same way cannot reintroduce it. STROKE ONLY, on
+    // purpose: an outline icon's fill is "none", and turning a hardcoded fill
+    // into currentColor would paint the whole shape as a solid blob. A
+    // hardcoded fill is left alone and the icon-contract test flags it.
+    svg = svg.replace(/stroke="#[0-9A-Fa-f]{3,8}"/g, 'stroke="currentColor"');
   }
   // Collapse to a single line so the JS file stays compact.
   svg = svg.replace(/\s+/g, ' ').replace(/> </g, '><').trim();

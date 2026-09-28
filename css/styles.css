@@ -3847,49 +3847,102 @@
         .p86-mobile-more-ask-text { display: flex; flex-direction: column; line-height: 1.25; text-align: left; }
         .p86-mobile-more-ask-text strong { color: #fff; font-size: 15px; }
         .p86-mobile-more-ask-text small { color: rgba(255,255,255,0.6); font-size: 11px; }
-        /* Section label + tile grid. */
+        /* Section label + list card.
+           WAS a 3-up tile grid. A section with one item (Sales → Estimates,
+           Home → Summary) left two thirds of its row empty, which read as
+           broken, and 74px tiles fit ~11 destinations before scrolling. It is
+           now a grouped list: one card per section, one 52px row per
+           destination, so a single-item section is simply a short card.
+
+           The hooks the sheet's script and tests read are unchanged on
+           purpose: [data-more-grid] is still the container p86OpenMobileMore
+           hides when every item in it is role-gated away, and
+           .p86-mobile-more-tile is still each destination. */
         .p86-mobile-more-section {
+            flex: 0 0 auto;
             font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
             color: rgba(255, 255, 255, 0.42);
-            padding: 12px 4px 6px;
+            padding: 14px 6px 7px;
         }
         .p86-mobile-more-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 6px;
-        }
-        .p86-mobile-more-tile {
-            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px;
+            /* flex: 0 0 auto is load-bearing. The panel is a flex COLUMN with a
+               max-height, so by default its children SHRINK to fit rather than
+               letting the panel scroll — and the overflow:hidden below (needed
+               for the rounded corners and the divider clip) then cuts off
+               whatever shrank. Measured in a phone-width render before this
+               shipped: Estimates and Summary crushed to half a row, Workspace
+               showing 4 of its 8 items, Invoices and Assemblies gone. The old
+               tile grid had no overflow:hidden, so it merely overflowed. */
+            flex: 0 0 auto;
+            display: flex;
+            flex-direction: column;
             background: rgba(255, 255, 255, 0.04);
             border: 1px solid rgba(255, 255, 255, 0.07);
             border-radius: 12px;
-            color: rgba(255, 255, 255, 0.9);
-            font-size: 11px; font-weight: 600;
-            padding: 13px 6px;
-            min-height: 74px;
+            overflow: hidden;
+        }
+        .p86-mobile-more-tile {
+            display: flex; flex-direction: row; align-items: center; gap: 12px;
+            width: 100%;
+            min-height: 52px;
+            padding: 0 14px 0 10px;
+            background: transparent;
+            border: 0;
+            border-radius: 0;
+            color: rgba(255, 255, 255, 0.92);
+            font-size: 15px; font-weight: 500;
+            text-align: left;
             cursor: pointer;
             -webkit-tap-highlight-color: transparent;
-            text-align: center;
+            /* The divider ABOVE each row is a shadow, not a border-top. The
+               first VISIBLE row's line lands outside the card and is clipped by
+               overflow:hidden — whichever row that turns out to be. A
+               border-top with a :first-child exemption draws a stray line at
+               the top of any card whose first item is role-gated away, because
+               display:none leaves :first-child pointing at the hidden one. */
+            box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.07);
         }
         .p86-mobile-more-tile:active {
-            background: rgba(34, 211, 238, 0.12);
-            border-color: rgba(34, 211, 238, 0.4);
+            background: rgba(34, 211, 238, 0.10);
         }
-        .p86-mobile-more-tile > span:last-child { line-height: 1.15; }
         .p86-mobile-more-icon {
-            width: 24px; height: 24px;
+            flex: 0 0 32px;
+            width: 32px; height: 32px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             color: #22d3ee;
-            position: relative;
+            background: rgba(34, 211, 238, 0.10);
+            border-radius: 9px;
         }
-        .p86-mobile-more-icon svg { width: 24px; height: 24px; }
+        .p86-mobile-more-icon svg { width: 18px; height: 18px; }
+        .p86-mobile-more-label {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            line-height: 1.2;
+        }
+        /* The row's live value. Only Messages has a real count today —
+           js/messaging.js writes it by id — and the slot is deliberately not
+           faked for the rest: a confident wrong number on a dashboard is worse
+           than an empty space. */
         .p86-mobile-more-badge {
-            position: absolute; top: -5px; right: -9px;
+            flex: 0 0 auto;
+            min-width: 22px;
             background: #f87171; color: #fff;
-            font-size: 9px; font-weight: 700;
-            padding: 1px 5px; border-radius: 9px; line-height: 1.4;
+            font-size: 11px; font-weight: 700;
+            padding: 2px 7px; border-radius: 10px; line-height: 1.35;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+        }
+        /* Drawn in CSS so the item's textContent stays exactly its label. */
+        .p86-mobile-more-chev {
+            flex: 0 0 7px;
+            width: 7px; height: 7px;
+            margin: 0 2px 0 2px;
+            border-right: 2px solid rgba(255, 255, 255, 0.28);
+            border-top: 2px solid rgba(255, 255, 255, 0.28);
+            transform: rotate(45deg);
         }
         @keyframes p86mbDropFade {
             from { opacity: 0; } to { opacity: 1; }

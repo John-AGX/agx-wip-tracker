@@ -251,7 +251,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=328">
+    <link rel="stylesheet" href="css/styles.css?v=329">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=70">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -3827,7 +3827,7 @@
     <!-- Project 86 inline-SVG icon helper. Provides window.p86Icon(name, opts)
          — 24 icons from Phosphor (MIT) + Heroicons (MIT). See
          scripts/build-agx-icons.js to regenerate. -->
-    <script src="js/agx-icons.js?v=27"></script>
+    <script src="js/agx-icons.js?v=28"></script>
 
     <!-- Edit-gate helper — section + row gates that block accidental
          input edits. Must load AFTER agx-icons.js because attachSection
@@ -4134,47 +4134,47 @@
 
         <div class="p86-mobile-more-section" data-more-section>Sales</div>
         <div class="p86-mobile-more-grid" data-more-grid>
-          <button type="button" class="p86-mobile-more-tile" data-cap="ESTIMATES_VIEW" onclick="p86MoreGo('estimates',{estSub:'list',virtual:'estimates'})"><span class="p86-mobile-more-icon" data-p86-icon="estimates"></span><span>Estimates</span></button>
+          <button type="button" class="p86-mobile-more-tile" data-cap="ESTIMATES_VIEW" onclick="p86MoreGo('estimates',{estSub:'list',virtual:'estimates'})"><span class="p86-mobile-more-icon" data-p86-icon="estimates"></span><span class="p86-mobile-more-label">Estimates</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
         </div>
 
         <div class="p86-mobile-more-section" data-more-section>Home</div>
         <div class="p86-mobile-more-grid" data-more-grid>
-          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('summary')"><span class="p86-mobile-more-icon" data-p86-icon="chart-bar"></span><span>Summary</span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('summary')"><span class="p86-mobile-more-icon" data-p86-icon="chart-bar"></span><span class="p86-mobile-more-label">Summary</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
         </div>
 
         <div class="p86-mobile-more-section" data-more-section>Workspace</div>
         <div class="p86-mobile-more-grid" data-more-grid>
-          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('my-tasks')"><span class="p86-mobile-more-icon" data-p86-icon="check-circle"></span><span>My Tasks</span></button>
-          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('messages')"><span class="p86-mobile-more-icon" data-p86-icon="envelope"><span id="moreMessagesBadge" class="p86-mobile-more-badge" style="display:none;"></span></span><span>Messages</span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('my-tasks')"><span class="p86-mobile-more-icon" data-p86-icon="check-circle"></span><span class="p86-mobile-more-label">My Tasks</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('messages')"><span class="p86-mobile-more-icon" data-p86-icon="envelope"></span><span class="p86-mobile-more-label">Messages</span><span id="moreMessagesBadge" class="p86-mobile-more-badge" style="display:none;"></span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
           <!-- Cowork rides the More sheet, not a 6th bottom-nav slot: the
                5-slot rail is settled and 86 already owns the center. -->
-          <button type="button" class="p86-mobile-more-tile" data-cap="ESTIMATES_VIEW" onclick="p86MoreGo('cowork')"><span class="p86-mobile-more-icon" data-p86-icon="dna"></span><span>Cowork</span></button>
-          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('email-hub')"><span class="p86-mobile-more-icon" data-p86-icon="at-symbol"></span><span>Email</span></button>
-          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('projects')"><span class="p86-mobile-more-icon" data-p86-icon="photos"></span><span>Photos</span></button>
-          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('my-files')"><span class="p86-mobile-more-icon" data-p86-icon="folder"></span><span>My Files</span></button>
-          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('plans')"><span class="p86-mobile-more-icon" data-p86-icon="scale"></span><span>Plans</span></button>
-          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('field-tools')"><span class="p86-mobile-more-icon" data-p86-icon="wrench"></span><span>Field Tools</span></button>
+          <button type="button" class="p86-mobile-more-tile" data-cap="ESTIMATES_VIEW" onclick="p86MoreGo('cowork')"><span class="p86-mobile-more-icon" data-p86-icon="dna"></span><span class="p86-mobile-more-label">Cowork</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('email-hub')"><span class="p86-mobile-more-icon" data-p86-icon="at-symbol"></span><span class="p86-mobile-more-label">Email</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('projects')"><span class="p86-mobile-more-icon" data-p86-icon="photos"></span><span class="p86-mobile-more-label">Photos</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('my-files')"><span class="p86-mobile-more-icon" data-p86-icon="folder"></span><span class="p86-mobile-more-label">My Files</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('plans')"><span class="p86-mobile-more-icon" data-p86-icon="scale"></span><span class="p86-mobile-more-label">Plans</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('field-tools')"><span class="p86-mobile-more-icon" data-p86-icon="wrench"></span><span class="p86-mobile-more-label">Field Tools</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
         </div>
 
         <div class="p86-mobile-more-section" data-more-section>Operations</div>
         <div class="p86-mobile-more-grid" data-more-grid>
-          <button type="button" class="p86-mobile-more-tile" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED LEADS_VIEW" onclick="p86MoreGo('service-tickets')"><span class="p86-mobile-more-icon" data-p86-icon="daily-logs"></span><span>Service Tickets</span></button>
-          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('cost-inbox')"><span class="p86-mobile-more-icon" data-p86-icon="materials"></span><span>Cost Inbox</span></button>
-          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('invoices')"><span class="p86-mobile-more-icon" data-p86-icon="exports"></span><span>Invoices</span></button>
+          <button type="button" class="p86-mobile-more-tile" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED LEADS_VIEW" onclick="p86MoreGo('service-tickets')"><span class="p86-mobile-more-icon" data-p86-icon="daily-logs"></span><span class="p86-mobile-more-label">Service Tickets</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('cost-inbox')"><span class="p86-mobile-more-icon" data-p86-icon="materials"></span><span class="p86-mobile-more-label">Cost Inbox</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('invoices')"><span class="p86-mobile-more-icon" data-p86-icon="exports"></span><span class="p86-mobile-more-label">Invoices</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
         </div>
 
         <div class="p86-mobile-more-section" data-more-section>Directory</div>
         <div class="p86-mobile-more-grid" data-more-grid>
-          <button type="button" class="p86-mobile-more-tile" data-cap="ESTIMATES_VIEW" onclick="p86MoreGo('estimates',{estSub:'clients',virtual:'clients'})"><span class="p86-mobile-more-icon" data-p86-icon="id-card"></span><span>Clients</span></button>
-          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('estimates',{estSub:'subs',virtual:'subs'})"><span class="p86-mobile-more-icon" data-p86-icon="subs"></span><span>Subs</span></button>
-          <button type="button" class="p86-mobile-more-tile" data-cap="ESTIMATES_VIEW" onclick="p86MoreGo('assembly-studio')"><span class="p86-mobile-more-icon" data-p86-icon="estimates"></span><span>Assemblies</span></button>
+          <button type="button" class="p86-mobile-more-tile" data-cap="ESTIMATES_VIEW" onclick="p86MoreGo('estimates',{estSub:'clients',virtual:'clients'})"><span class="p86-mobile-more-icon" data-p86-icon="id-card"></span><span class="p86-mobile-more-label">Clients</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('estimates',{estSub:'subs',virtual:'subs'})"><span class="p86-mobile-more-icon" data-p86-icon="subs"></span><span class="p86-mobile-more-label">Subs</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
+          <button type="button" class="p86-mobile-more-tile" data-cap="ESTIMATES_VIEW" onclick="p86MoreGo('assembly-studio')"><span class="p86-mobile-more-icon" data-p86-icon="estimates"></span><span class="p86-mobile-more-label">Assemblies</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
         </div>
 
         <div class="p86-mobile-more-section" data-more-section>Company</div>
         <div class="p86-mobile-more-grid" data-more-grid>
-          <button type="button" class="p86-mobile-more-tile" data-cap="INSIGHTS_VIEW" onclick="p86MoreGo('insights')"><span class="p86-mobile-more-icon" data-p86-icon="insights"></span><span>Insights</span></button>
-          <button type="button" class="p86-mobile-more-tile" data-admin-only style="display:none;" onclick="p86MoreGo('admin')"><span class="p86-mobile-more-icon" data-p86-icon="admin"></span><span>Admin</span></button>
-          <button type="button" class="p86-mobile-more-tile" data-cap="SYSTEM_ADMIN" onclick="p86MoreGo('console')"><span class="p86-mobile-more-icon" data-p86-icon="admin"></span><span>Command Center</span></button>
+          <button type="button" class="p86-mobile-more-tile" data-cap="INSIGHTS_VIEW" onclick="p86MoreGo('insights')"><span class="p86-mobile-more-icon" data-p86-icon="insights"></span><span class="p86-mobile-more-label">Insights</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
+          <button type="button" class="p86-mobile-more-tile" data-admin-only style="display:none;" onclick="p86MoreGo('admin')"><span class="p86-mobile-more-icon" data-p86-icon="admin"></span><span class="p86-mobile-more-label">Admin</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
+          <button type="button" class="p86-mobile-more-tile" data-cap="SYSTEM_ADMIN" onclick="p86MoreGo('console')"><span class="p86-mobile-more-icon" data-p86-icon="admin"></span><span class="p86-mobile-more-label">Command Center</span><span class="p86-mobile-more-chev" aria-hidden="true"></span></button>
         </div>
       </div>
     </div>
