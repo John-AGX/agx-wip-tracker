@@ -304,6 +304,11 @@
         #app-sidebar-search.in-header .sidebar-search-input::placeholder {
             color: rgba(255, 255, 255, 0.55);
         }
+        /* The box already lights up via :focus-within; the global input:focus
+           ring on the bare input drew a second rounded ring inside it. */
+        #app-sidebar-search.in-header .sidebar-search-input:focus {
+            box-shadow: none;
+        }
         /* Results dropdown — anchored to the box's RIGHT edge (the box sits on
            the right now), wider than the slim box so rows stay readable. */
         #app-sidebar-search.in-header .sidebar-search-results {
@@ -320,6 +325,63 @@
            the bottom-nav owns navigation there — so keep the header search off. */
         @media (max-width: 768px) {
             #app-sidebar-search.in-header { display: none; }
+        }
+        /* ...and on those widths the magnifying glass (#header-search-btn)
+           drops the box open as a full-width panel under the sticky header.
+           Width-only, like the hide above, so a narrow mouse window gets it
+           too. js/search.js toggles .is-mopen and sets --p86-msearch-top to
+           the header's measured bottom edge (its height moves with the
+           640 / 480px padding tiers). */
+        #header-search-btn { display: none; }
+        @media (max-width: 768px) {
+            #header-search-btn { display: inline-flex; }
+            #header-search-btn[aria-expanded="true"] {
+                background: rgba(255, 255, 255, 0.16);
+                border-color: rgba(255, 255, 255, 0.3);
+                color: #fff;
+            }
+            #app-sidebar-search.in-header.is-mopen {
+                display: block;
+                position: fixed;
+                left: 0;
+                right: 0;
+                top: var(--p86-msearch-top, 44px);
+                z-index: 1150;
+                padding: 10px 12px 12px;
+                background: linear-gradient(180deg, #16213a 0%, #0f172a 100%);
+                border-bottom: 1px solid rgba(59, 130, 246, 0.55);
+                box-shadow: 0 16px 32px rgba(0, 0, 0, 0.4);
+                animation: p86-msearch-drop 0.16s ease-out;
+            }
+            #app-sidebar-search.in-header.is-mopen .sidebar-search-box {
+                width: auto;
+                height: 44px;
+                padding: 0 14px;
+                gap: 10px;
+                border-radius: 10px;
+            }
+            #app-sidebar-search.in-header.is-mopen .sidebar-search-icon {
+                width: 18px;
+                height: 18px;
+            }
+            /* 16px, not the desktop 12.5 — iOS zooms the whole page into
+               any focused field set under 16px. */
+            #app-sidebar-search.in-header.is-mopen .sidebar-search-input {
+                font-size: 16px;
+            }
+            #app-sidebar-search.in-header.is-mopen .sidebar-search-results {
+                position: static;
+                width: auto;
+                margin-top: 8px;
+                max-height: min(62vh, 440px);
+            }
+        }
+        @keyframes p86-msearch-drop {
+            from { opacity: 0; transform: translateY(-6px); }
+            to { opacity: 1; transform: none; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            #app-sidebar-search.in-header.is-mopen { animation: none; }
         }
 
         /* Logo lockup. 26px is small enough to share the row with
@@ -4712,46 +4774,6 @@
         font-size: 12px;
       }
 
-      /* Jobs table mobile card view — the 9-column table forces
-         horizontal scroll on every phone. Hide the columns that
-         duplicate info already in the row's primary label (Client,
-         PM, Total Income, % Complete, Gross Profit) and the leading
-         row-counter; keep Job # / Name (col 2), Status (col 5), and
-         Margin % (col 9). Each row stays a single line so the user
-         can scan a long jobs list without scrolling sideways. */
-      #jobs-table th:nth-child(1),
-      #jobs-table td:nth-child(1),
-      #jobs-table th:nth-child(3),
-      #jobs-table td:nth-child(3),
-      #jobs-table th:nth-child(4),
-      #jobs-table td:nth-child(4),
-      #jobs-table th:nth-child(6),
-      #jobs-table td:nth-child(6),
-      #jobs-table th:nth-child(7),
-      #jobs-table td:nth-child(7),
-      #jobs-table th:nth-child(8),
-      #jobs-table td:nth-child(8) {
-        display: none;
-      }
-      #jobs-table th, #jobs-table td {
-        padding: 6px 4px;
-        font-size: 11px;
-      }
-      /* Job # / Name column gets the breathing room reclaimed from
-         the hidden cols — it's the row's primary identifier. */
-      #jobs-table th:nth-child(2),
-      #jobs-table td:nth-child(2) {
-        white-space: normal;
-        word-break: break-word;
-        max-width: 60vw;
-      }
-
-      /* Filter-row labels stack vertically below the table action
-         strip so the two big <select>s (Status, Type) don't crush
-         each other side-by-side. */
-      #jobs-main-view label {
-        flex: 1 1 100%;
-      }
 
       /* Summary-grid is already single-column at 768px (line 1901);
          no change needed here. */
@@ -12388,37 +12410,232 @@ a.ci-store-v:hover { text-decoration: underline; }
   .ci-merch-amt { min-width: 0; }
 }
 
-/* Jobs list → cards on mobile. The wide #jobs-table horizontally scrolls on a
-   phone (only # + Status show). Reflow each row into a stacked card; !important
-   overrides table-enhancements' column widths + frozen-column sticky. */
+
+/* ── Jobs list ─────────────────────────────────────────────────────
+   Toolbar is ONE row on desktop: Add Job, the two quick-filter selects,
+   Filter / Views / Map, and a ⋯ menu holding the weekly-at-most
+   utilities (Import QB Costs, Export CSV, Print, Archived — see
+   jobsOpenMore in js/jobs.js). On a phone the buttons keep row one and
+   the two selects share row two. */
+.jobs-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.jobs-toolbar .ee-btn {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.jobs-toolbar .jobs-more-btn { width: 30px; padding: 0; justify-content: center; }
+.jobs-toolbar #jobs-views-btn { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.jobs-toolbar .jobs-quick-select {
+  width: auto;
+  height: 28px;
+  margin: 0;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background-color: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
+}
+.jobs-toolbar .jobs-quick-select:hover { border-color: rgba(255, 255, 255, 0.18); }
+/* A quick filter that is narrowing the list says so — same accent the
+   Filter button takes when the drawer has something set (.pf-on). */
+.jobs-toolbar .jobs-quick-select.is-set {
+  border-color: rgba(79, 140, 255, 0.55);
+  background-color: rgba(79, 140, 255, 0.12);
+  color: var(--accent, #4f8cff);
+}
+body.light-mode .jobs-toolbar .jobs-quick-select { background-color: #fff; }
+body.light-mode .jobs-toolbar .jobs-quick-select:hover { border-color: rgba(15, 23, 42, 0.25); }
+
+.jobs-more-pop {
+  position: fixed;
+  z-index: 100000;
+  min-width: 236px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px;
+  background: var(--card-bg, #161a2b);
+  border: 1px solid var(--border, #333);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+.jobs-more-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start; /* global button{} centers */
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px 7px 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.jobs-more-item:hover,
+.jobs-more-item:focus-visible { background: rgba(255, 255, 255, 0.06); outline: none; }
+/* Accent ring, not the global button:focus-visible green one. */
+.jobs-more-item:focus-visible { box-shadow: inset 0 0 0 1px rgba(79, 140, 255, 0.6); }
+.jobs-more-ic {
+  flex: 0 0 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: rgba(79, 140, 255, 0.12);
+  color: #7aa7ff;
+}
+.jobs-more-ic svg { width: 16px; height: 16px; }
+.jobs-more-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.jobs-more-label { font-weight: 600; }
+.jobs-more-hint { font-size: 11px; color: var(--text-dim); }
+body.light-mode .jobs-more-item:hover,
+body.light-mode .jobs-more-item:focus-visible { background: rgba(15, 23, 42, 0.05); }
+body.light-mode .jobs-more-ic { background: rgba(37, 99, 235, 0.1); color: #2563eb; }
+
 @media (max-width: 640px) {
-  #jobs-table { width: 100% !important; min-width: 0 !important; table-layout: auto !important; }
+  .jobs-toolbar { margin-bottom: 10px; }
+  .jobs-toolbar .ee-btn { height: 36px; padding: 0 12px; font-size: 13px; }
+  /* The buttons fill row one at 375px; the menu rides at the end of the
+     filter row instead of wrapping onto a line of its own. */
+  .jobs-toolbar .jobs-more-btn { order: 11; width: 38px; padding: 0; }
+  .jobs-toolbar #jobs-views-btn { max-width: 112px; }
+  /* 16px: iOS zooms the page into a focused select set under 16px. */
+  .jobs-toolbar .jobs-quick-select {
+    order: 10;
+    /* A real basis, not 0: at basis 0 the first select "fits" in row
+       one's leftover sliver and renders as a bare chevron. */
+    flex: 1 1 40%;
+    min-width: 0;
+    height: 38px;
+    padding: 0 10px;
+    font-size: 16px;
+  }
+}
+
+/* Jobs list → cards on a phone. Each row reflows into a three-line card:
+     1  job # · title ................................ [status]
+     2  client ........................................... PM
+     3  COMPLETE   INCOME   PROFIT   MARGIN   (captioned stats)
+   with % complete as a 3px bar along the card's bottom edge. The row is a
+   wrapping flex box; its two pseudo-elements are the zero-height line
+   breaks that end lines 1 and 2, and each cell is placed by `order`.
+   !important beats table-enhancements' column widths + frozen column. */
+@media (max-width: 640px) {
+  #jobs-table { width: 100% !important; min-width: 0 !important; table-layout: auto !important; border-collapse: separate; }
   #jobs-table thead { display: none; }
-  #jobs-table tbody, #jobs-table tr, #jobs-table td { display: block; width: auto !important; }
+  #jobs-table tbody { display: flex; flex-direction: column; gap: 8px; }
   #jobs-table tr {
-    border: 1px solid var(--border, #2a2a32); border-radius: 10px;
-    background: var(--card-bg, #141419); margin: 0 0 10px 0; padding: 8px 12px;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 10px;
+    padding: 11px 13px 14px;
+    border: 1px solid var(--border, #2a2a32);
+    border-radius: 12px;
+    background: var(--card-bg, #141419);
+    -webkit-tap-highlight-color: transparent;
   }
+  #jobs-table tr:active { background: var(--surface2, #1c1c22); }
+  #jobs-table tr::before,
+  #jobs-table tr::after { content: ""; flex: 0 0 100%; height: 0; }
+  #jobs-table tr::before { order: 25; }
+  #jobs-table tr::after { order: 55; }
   #jobs-table td {
-    border: none !important; padding: 4px 0 !important; min-width: 0 !important; max-width: none !important;
+    display: block !important;
+    width: auto !important; min-width: 0 !important; max-width: none !important;
     position: static !important; left: auto !important; z-index: auto !important;
-    display: flex !important; justify-content: space-between; align-items: baseline; gap: 12px;
-    white-space: normal !important; text-align: right;
+    padding: 0 !important; border: none !important; background: none !important;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap !important;
+    text-align: left !important;
+    font-size: 12.5px; line-height: 1.35;
   }
-  #jobs-table td::before {
-    content: attr(data-label); text-align: left;
-    color: var(--text-dim, #b4b4bf); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
-    flex: 0 0 auto; margin-right: 10px;
+  /* No bulk-select on a phone; a hidden Market column stays hidden (the
+     class, because display !important above beats its inline style). */
+  #jobs-table td.job-check-cell,
+  #jobs-table td.is-col-off { display: none !important; }
+
+  /* Line 1 — the job, and where it stands. */
+  #jobs-table td[data-col="name"] {
+    order: 10; flex: 1 1 0;
+    white-space: normal !important;
+    font-size: 14.5px; line-height: 1.3; color: var(--text);
   }
-  #jobs-table td[data-col="name"] { display: block !important; font-weight: 700; font-size: 15px; text-align: left; margin-bottom: 4px; }
-  #jobs-table td[data-col="name"]::before { display: none; }
-  #jobs-table td[data-col="client"]::before     { content: "Client"; }
-  #jobs-table td[data-col="pm"]::before         { content: "PM"; }
-  #jobs-table td[data-col="status"]::before     { content: "Status"; }
-  #jobs-table td[data-col="contract"]::before   { content: "Income"; }
-  #jobs-table td[data-col="pctcomplete"]::before { content: "% Complete"; }
-  #jobs-table td[data-col="profit"]::before     { content: "Profit"; }
-  #jobs-table td[data-col="margin"]::before     { content: "Margin"; }
+  #jobs-table td[data-col="market"] { order: 20; flex: 0 0 auto; }
+  #jobs-table td[data-col="status"] { order: 21; flex: 0 0 auto; align-self: flex-start; }
+  #jobs-table td[data-col="status"] .badge { font-size: 10.5px; padding: 3px 8px; }
+
+  /* Line 2 — client, and whose job it is. */
+  #jobs-table td[data-col="client"] { order: 30; flex: 1 1 0; margin-top: 3px; color: var(--text-dim); }
+  #jobs-table td[data-col="pm"] {
+    order: 40; flex: 0 1 auto; max-width: 48%;
+    margin-top: 3px; color: var(--text-dim); text-align: right !important;
+  }
+
+  /* Line 3 — four captioned stats. */
+  #jobs-table td[data-col="pctcomplete"],
+  #jobs-table td[data-col="contract"],
+  #jobs-table td[data-col="profit"],
+  #jobs-table td[data-col="margin"] {
+    flex: 1 1 0;
+    margin-top: 10px;
+    font-size: 14px; font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  #jobs-table td[data-col="pctcomplete"] { order: 60; }
+  #jobs-table td[data-col="contract"]    { order: 70; }
+  #jobs-table td[data-col="profit"]      { order: 80; }
+  #jobs-table td[data-col="margin"]      { order: 90; }
+  #jobs-table td[data-col="pctcomplete"]::before,
+  #jobs-table td[data-col="contract"]::before,
+  #jobs-table td[data-col="profit"]::before,
+  #jobs-table td[data-col="margin"]::before {
+    display: block;
+    margin-bottom: 2px;
+    font-size: 9.5px; font-weight: 600;
+    letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  #jobs-table td[data-col="pctcomplete"]::before { content: "Complete"; }
+  #jobs-table td[data-col="contract"]::before    { content: "Income"; }
+  #jobs-table td[data-col="profit"]::before      { content: "Profit"; }
+  #jobs-table td[data-col="margin"]::before      { content: "Margin"; }
+  /* Money shows the compact figure the row carries as data-short
+     ($412k / $1.23M) — "$1,234,567.89" does not fit a quarter card. */
+  #jobs-table td[data-col="contract"][data-short],
+  #jobs-table td[data-col="profit"][data-short] { font-size: 0; }
+  #jobs-table td[data-col="contract"][data-short]::after,
+  #jobs-table td[data-col="profit"][data-short]::after { content: attr(data-short); font-size: 14px; }
+  #jobs-table td[data-col="pctcomplete"] span { font-size: inherit !important; }
+  /* % complete as the card's bottom edge. The cell stays position:static,
+     so the bar anchors to the row; the row's overflow clips it to the
+     rounded corners. */
+  #jobs-table td[data-col="pctcomplete"] .progress-bar {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    height: 3px !important; margin: 0 !important;
+    border-radius: 0;
+    background: rgba(255, 255, 255, 0.06);
+  }
+  body.light-mode #jobs-table td[data-col="pctcomplete"] .progress-bar { background: rgba(15, 23, 42, 0.07); }
 }
 
 /* Un-pin the frozen first column on phone widths. A sticky column fights

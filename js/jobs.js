@@ -1842,6 +1842,61 @@ function renderJobsMain() {
             });
         };
 
+        // ── ⋯ menu: the list's utilities (weekly at most) ───────────────
+        // Import QB Costs / Export CSV / Print / Archived used to be four
+        // toolbar buttons — three rows of chrome on a phone before the first
+        // job. Same popover idiom as jobsOpenViews; each item calls exactly
+        // what its old button did.
+        window.jobsOpenMore = function(anchor) {
+            var existing = document.getElementById('jobs-more-pop');
+            if (existing) { existing.remove(); if (anchor) anchor.setAttribute('aria-expanded', 'false'); return; }
+            var ic = function(name) { return window.p86Icon ? window.p86Icon(name) : ''; };
+            var items = [
+                { key: 'import', icon: 'import', label: 'Import QB costs', hint: 'Weekly Detailed Job Costs .xlsx' },
+                { key: 'export', icon: 'exports', label: 'Export CSV', hint: 'The jobs shown, as a spreadsheet' },
+                { key: 'print', icon: 'document-text', label: 'Print list' },
+                { key: 'archived', icon: 'folder', label: 'Archived jobs' }
+            ];
+            var pop = document.createElement('div');
+            pop.id = 'jobs-more-pop';
+            pop.className = 'jobs-more-pop';
+            pop.setAttribute('role', 'menu');
+            pop.innerHTML = items.map(function(it) {
+                return '<button type="button" role="menuitem" class="jobs-more-item" data-act="' + it.key + '">' +
+                    '<span class="jobs-more-ic" aria-hidden="true">' + ic(it.icon) + '</span>' +
+                    '<span class="jobs-more-txt"><span class="jobs-more-label">' + escapeHTML(it.label) + '</span>' +
+                    (it.hint ? '<span class="jobs-more-hint">' + escapeHTML(it.hint) + '</span>' : '') + '</span>' +
+                '</button>';
+            }).join('');
+            document.body.appendChild(pop);
+            var r = anchor.getBoundingClientRect();
+            var w = pop.offsetWidth || 240;
+            pop.style.top = (r.bottom + 6) + 'px';
+            pop.style.left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)) + 'px';
+            anchor.setAttribute('aria-expanded', 'true');
+            function close() {
+                pop.remove(); anchor.setAttribute('aria-expanded', 'false');
+                document.removeEventListener('mousedown', onOut, true);
+                document.removeEventListener('keydown', onKey, true);
+            }
+            function onOut(e) { if (!pop.contains(e.target) && !anchor.contains(e.target)) close(); }
+            function onKey(e) { if (e.key === 'Escape') { close(); anchor.focus(); } }
+            setTimeout(function() {
+                document.addEventListener('mousedown', onOut, true);
+                document.addEventListener('keydown', onKey, true);
+            }, 0);
+            pop.addEventListener('click', function(e) {
+                var b = e.target.closest('.jobs-more-item'); if (!b) return;
+                var act = b.getAttribute('data-act');
+                close();
+                if (act === 'import') { var f = document.getElementById('qb-costs-import-file'); if (f) f.click(); }
+                else if (act === 'export') exportJobsToCSV();
+                else if (act === 'print') window.print();
+                else if (act === 'archived') showArchivedJobs();
+            });
+            var first = pop.querySelector('.jobs-more-item'); if (first) first.focus();
+        };
+
         // ── Multi-select + bulk actions (mirrors the Leads bulk bar) ─────
         let _jobsSelected = new Set();   // job ids ticked; survives re-render
         function p86JobsSelect(id, checked) {
@@ -2164,7 +2219,23 @@ function renderJobsMain() {
             var show = !!(window.p86Markets && window.p86Markets.hasMulti && window.p86Markets.hasMulti());
             document.querySelectorAll('#jobs-table [data-col="market"]').forEach(function (el) {
                 el.style.display = show ? '' : 'none';
+                // The class is what the phone card layout reads: its td rule
+                // needs display !important (to beat table-enhancements), which
+                // beat this inline style and left every card on a single-market
+                // org with a stray unlabelled "—" row.
+                el.classList.toggle('is-col-off', !show);
             });
+        }
+
+        // $412k / $1.23M — the phone card's four-up stat row has ~75px a stat,
+        // and formatCurrency's "$1,234,567.89" does not fit. Rides on the cell
+        // as data-short; the desktop table keeps the full figure. Same shape
+        // as market-pnl.js moneyShort so the app abbreviates money one way.
+        function jobsMoneyShort(v) {
+            var n = Number(v) || 0, a = Math.abs(n), sgn = n < 0 ? '-' : '';
+            if (a >= 1e6) return sgn + '$' + (a / 1e6).toFixed(a >= 1e7 ? 1 : 2) + 'M';
+            if (a >= 1e3) return sgn + '$' + Math.round(a / 1e3) + 'k';
+            return sgn + '$' + Math.round(a).toLocaleString();
         }
 
         function renderJobsTable() {
@@ -2270,9 +2341,9 @@ function renderJobsMain() {
                     <td data-col="pm">${pmCell}</td>
                     <td data-col="status"><span class="badge ${statusClass}">${escapeHTML(job.status)}</span></td>
                     <td data-col="market">${marketChip(job)}</td>
-                    <td data-col="contract" style="text-align: right;">${formatCurrency(w.totalIncome)}</td>
+                    <td data-col="contract" data-short="${jobsMoneyShort(w.totalIncome)}" style="text-align: right;">${formatCurrency(w.totalIncome)}</td>
                     <td data-col="pctcomplete" style="text-align: right;"><div class="progress-bar" style="margin-bottom: 2px; height: 6px;"><div class="progress-fill" style="width: ${w.pctComplete}%"></div></div><span style="font-size: 12px;">${w.pctComplete.toFixed(1)}%</span></td>
-                    <td data-col="profit" style="text-align: right; color: ${w.displayProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(w.displayProfit)}</td>
+                    <td data-col="profit" data-short="${jobsMoneyShort(w.displayProfit)}" style="text-align: right; color: ${w.displayProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(w.displayProfit)}</td>
                     <td data-col="margin" style="text-align: right;">${w.displayMargin.toFixed(1)}%</td>
                 `;
                 tbody.appendChild(row);
@@ -2305,6 +2376,12 @@ function renderJobsMain() {
         function filterJobs() {
             appState.currentStatusFilter = document.getElementById('statusFilter').value;
             appState.currentTypeFilter = document.getElementById('typeFilter').value;
+            // A quick filter that is narrowing the list wears the accent, so
+            // "why are jobs missing?" answers itself at a glance.
+            ['statusFilter', 'typeFilter'].forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) el.classList.toggle('is-set', !!el.value);
+            });
             renderJobsTable();
             // Tiles follow the filter — see calculateJobsSummary docs
             // for the W1 audit context. Without this, the user would

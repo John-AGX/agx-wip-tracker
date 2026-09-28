@@ -251,7 +251,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=329">
+    <link rel="stylesheet" href="css/styles.css?v=330">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=70">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -406,6 +406,15 @@
                          flash an empty placeholder. Uses the standard NWS
                          pipeline already powering the schedule + job widgets. -->
                     <div id="header-weather" class="header-weather" hidden></div>
+                    <!-- Search glass — PHONE WIDTHS ONLY (hidden above 768px, where
+                         the box above sits in the header row itself). A phone
+                         header has no room for the box, so it is hidden there and
+                         this drops it open as a full-width panel under the sticky
+                         header. js/search.js owns the open/close. -->
+                    <button id="header-search-btn" class="header-icon-btn" type="button"
+                            title="Search" aria-label="Search jobs, estimates, leads and clients"
+                            aria-controls="app-sidebar-search" aria-expanded="false"
+                            data-p86-icon="magnifying-glass"></button>
                     <!-- Quick-add "+" — replaces the former My Files icon
                          (My Files now lives in the sidebar Workspace group).
                          Opens #header-quickadd-menu, a ROLE-GATED menu of the
@@ -935,22 +944,38 @@
                 <!-- JOBS TAB -->
                 <div id="jobs" class="tab-content active">
                     <div id="jobs-main-view">
-                        <!-- Jobs list action row — restyled to the .ee-btn system.
-                             "Add Job" is the primary action and gets the filled
-                             primary chrome; everything else is .ee-btn.ghost so
-                             the row is dominated by Add Job, not by Import / Export
-                             / Print which are utilities. Ask 86 badge stays
-                             right-aligned. -->
-                        <div class="jobs-action-tabs">
+                        <!-- Jobs list toolbar — ONE row. Add Job leads; the two quick
+                             filters (status / type) sit beside it as compact selects (same
+                             ids + onchange as the old labelled "Filter by" row, so
+                             filterJobs() and setupTypeFilter('typeFilter') are unchanged);
+                             Filter / Views / Map follow. The weekly-at-most utilities
+                             (Import QB Costs, Export CSV, Print, Archived) live behind the
+                             ⋯ menu — jobsOpenMore() in js/jobs.js — so they stop taking
+                             three rows on a phone. Ask 86 mount stays right-aligned. -->
+                        <div class="jobs-action-tabs jobs-toolbar">
                             <button class="ee-btn primary" data-p86-icon="plus" onclick="openAddJobModal()" title="Add a new job">Add Job</button>
-                            <button class="ee-btn ghost" data-p86-icon="import" onclick="document.getElementById('qb-costs-import-file').click()" title="Import a QuickBooks weekly Detailed Job Costs xlsx">Import QB Costs</button>
-                            <input type="file" id="qb-costs-import-file" accept=".xlsx" style="display:none;" onchange="handleQBCostsFile(event)" />
-                            <button class="ee-btn ghost" data-p86-icon="exports" onclick="exportJobsToCSV()" title="Export the job list as CSV">Export CSV</button>
-                            <button class="ee-btn ghost" onclick="window.print()" title="Print the job list">Print</button>
-                            <button class="ee-btn ghost" onclick="showArchivedJobs()" title="Show archived jobs">Archived</button>
+                            <select id="statusFilter" class="jobs-quick-select" onchange="filterJobs()" aria-label="Filter by status" title="Filter by status">
+                                <option value="">All Active</option>
+                                <option value="New">New</option>
+                                <option value="Backlog">Backlog</option>
+                                <option value="In Progress">In Progress</option>
+                                <option value="On Hold">On Hold</option>
+                                <option value="Warranty">Warranty</option>
+                                <option value="Completed">Completed</option>
+                                <option value="Archived">Archived</option>
+                            </select>
+                            <select id="typeFilter" class="jobs-quick-select" onchange="filterJobs()" aria-label="Filter by type" title="Filter by type">
+                                <option value="">All Types</option>
+                                <option value="Service">Service</option>
+                                <option value="Mid-Tier Service">Mid-Tier Service</option>
+                                <option value="Renovation">Renovation</option>
+                                <option value="Work Order">Work Order</option>
+                            </select>
                             <button class="ee-btn ghost" id="jobs-filter-btn" onclick="jobsOpenFilter()" title="Filter jobs" aria-label="Filter"></button>
                             <button class="ee-btn ghost" id="jobs-views-btn" onclick="jobsOpenViews(this)" title="Saved views">Views ▾</button>
-                            <button class="ee-btn ghost" id="jobs-map-toggle" onclick="toggleJobsMapView()" title="Show jobs on a map (pins come from each job's geocoded address)">&#x1F5FA; Map</button>
+                            <button class="ee-btn ghost" id="jobs-map-toggle" data-p86-icon="map" onclick="toggleJobsMapView()" title="Show jobs on a map (pins come from each job's geocoded address)">Map</button>
+                            <button class="ee-btn ghost jobs-more-btn" id="jobs-more-btn" type="button" onclick="jobsOpenMore(this)" title="More: import, export, print, archived" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.9"></circle><circle cx="12" cy="12" r="1.9"></circle><circle cx="19" cy="12" r="1.9"></circle></svg></button>
+                            <input type="file" id="qb-costs-import-file" accept=".xlsx" style="display:none;" onchange="handleQBCostsFile(event)" />
                             <span class="p86-ask86-mount" style="margin-left:auto;"></span>
                         </div>
 
@@ -958,31 +983,6 @@
                              Total Cost / Total Profit) were removed from this
                              view — these metrics are moving to the Insights
                              page, which will own the richer roll-up. -->
-                        <div class="action-buttons" style="margin-bottom: 20px; display: flex; gap: 20px; flex-wrap: wrap; align-items: center;">
-                            <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
-                                Filter by Status:
-                                <select id="statusFilter" onchange="filterJobs()" style="width: 200px; margin: 0;">
-                                    <option value="">All Active</option>
-                                    <option value="New">New</option>
-                                    <option value="Backlog">Backlog</option>
-                                    <option value="In Progress">In Progress</option>
-                                    <option value="On Hold">On Hold</option>
-                                    <option value="Warranty">Warranty</option>
-                                    <option value="Completed">Completed</option>
-                                    <option value="Archived">Archived</option>
-                                </select>
-                            </label>
-                            <label style="display: flex; align-items: center; gap: 8px; margin: 0;">
-                                Filter by Type:
-                                <select id="typeFilter" onchange="filterJobs()" style="width: 200px; margin: 0;">
-                                    <option value="">All Types</option>
-                                    <option value="Service">Service</option>
-                                    <option value="Mid-Tier Service">Mid-Tier Service</option>
-                                    <option value="Renovation">Renovation</option>
-                                    <option value="Work Order">Work Order</option>
-                                </select>
-                            </label>
-                        </div>
 
                         <div id="jobs-bulkbar" style="display:none;"></div>
                         <div class="table-container">
@@ -3713,7 +3713,7 @@
     <script src="js/progress-core.js?v=1"></script>
     <script src="js/co-completion.js?v=1"></script>
     <script src="js/progress.js?v=4"></script>
-    <script src="js/jobs.js?v=256"></script>
+    <script src="js/jobs.js?v=257"></script>
     <script src="js/doc-import.js?v=8"></script>
     <script src="js/job-workflow-ui.js?v=7"></script>
     <!-- Job sidebar Files + Photos tabs (renderJobFiles / renderJobPhotos).
@@ -3818,7 +3818,7 @@
          estimates / leads / clients (GET /api/search). Loads after
          router.js so result clicks can reopen via p86Router.navigate(),
          and after api.js for the p86Api.get() fetch helper. -->
-    <script src="js/search.js?v=3"></script>
+    <script src="js/search.js?v=4"></script>
 
     <!-- Copy-to-clipboard helper. Auto-attaches a 📋 button to every
          <input type=email> and any element marked data-p86-copy. -->

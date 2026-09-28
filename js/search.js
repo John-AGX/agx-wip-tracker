@@ -12,7 +12,12 @@
    Keyboard: ArrowDown/ArrowUp move the active row, Enter opens it,
    Escape clears + closes.
 
-   Exposes window.p86Search = { open, close, clear }. */
+   Phone widths: the header has no room for the box, so CSS hides it and
+   #header-search-btn (the magnifying glass) drops it open as a full-width
+   panel under the sticky header — setMobileOpen() below. Desktop never
+   sets the panel class, so nothing here changes the desktop box.
+
+   Exposes window.p86Search = { open, close, clear, toggleMobile }. */
 (function () {
   'use strict';
 
@@ -31,6 +36,8 @@
   var reqSeq = 0;            // guards against out-of-order responses
   var current = [];          // flat list of currently-rendered results
   var activeIdx = -1;        // keyboard-highlighted row index
+  var wrapEl = null;         // #app-sidebar-search
+  var mobileBtn = null;      // #header-search-btn (phone widths only)
 
   // ── helpers ────────────────────────────────────────────────────
   function esc(s) {
@@ -120,6 +127,30 @@
     }
   }
 
+  // ── phone drop-down panel ───────────────────────────────────────
+  function isMobileOpen() { return !!(wrapEl && wrapEl.classList.contains('is-mopen')); }
+  function setMobileOpen(open) {
+    if (!wrapEl || !mobileBtn) return;
+    if (open === isMobileOpen()) return;
+    if (open) {
+      // Pin the panel to the header's real bottom edge — the phone header's
+      // height moves with its padding tiers (640 / 480px), so no constant.
+      var header = wrapEl.closest('header');
+      var top = header ? Math.round(header.getBoundingClientRect().bottom) : 0;
+      wrapEl.style.setProperty('--p86-msearch-top', Math.max(0, top) + 'px');
+      wrapEl.classList.add('is-mopen');
+      mobileBtn.setAttribute('aria-expanded', 'true');
+      // Synchronous, inside the tap handler — iOS only raises the keyboard
+      // for a focus() made during the user gesture.
+      try { inputEl.focus(); } catch (e) {}
+    } else {
+      wrapEl.classList.remove('is-mopen');
+      mobileBtn.setAttribute('aria-expanded', 'false');
+      close();
+      try { inputEl.blur(); } catch (e) {}
+    }
+  }
+
   // ── navigation ──────────────────────────────────────────────────
   function openResult(type, id) {
     var route = routeFor(type, id);
@@ -128,6 +159,7 @@
     }
     if (inputEl) inputEl.value = '';
     close();
+    setMobileOpen(false);
   }
 
   function openActive() {
@@ -181,6 +213,7 @@
       inputEl.value = '';
       close();
       inputEl.blur();
+      setMobileOpen(false);
     }
   }
 
@@ -189,6 +222,14 @@
     inputEl = document.getElementById('sidebar-search-input');
     resultsEl = document.getElementById('sidebar-search-results');
     if (!inputEl || !resultsEl) return;
+    wrapEl = document.getElementById('app-sidebar-search');
+    mobileBtn = document.getElementById('header-search-btn');
+    if (mobileBtn) {
+      mobileBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        setMobileOpen(!isMobileOpen());
+      });
+    }
 
     inputEl.addEventListener('input', onInput);
     inputEl.addEventListener('keydown', onKeydown);
@@ -225,11 +266,27 @@
       });
     }
 
-    // Close when clicking outside the search widget.
+    // Close when clicking outside the search widget. The glass is outside
+    // the widget too, but it runs its own toggle first — closing here would
+    // shut the panel in the same tap that opened it.
     document.addEventListener('click', function (e) {
       var wrap = document.getElementById('app-sidebar-search');
-      if (wrap && !wrap.contains(e.target)) close();
+      if (!wrap || wrap.contains(e.target)) return;
+      if (mobileBtn && mobileBtn.contains(e.target)) return;
+      close();
+      setMobileOpen(false);
     });
+    // Back/forward navigates without a tap outside; a panel left open over
+    // the new page reads as stuck.
+    window.addEventListener('popstate', function () { setMobileOpen(false); });
+    // Widening past phone width hides the glass; drop the panel state with it
+    // so aria-expanded never claims an open panel nobody can see.
+    if (window.matchMedia) {
+      var mq = window.matchMedia('(max-width: 768px)');
+      var onMq = function () { if (!mq.matches) setMobileOpen(false); };
+      if (mq.addEventListener) mq.addEventListener('change', onMq);
+      else if (mq.addListener) mq.addListener(onMq);
+    }
   }
 
   if (document.readyState === 'loading') {
@@ -241,6 +298,7 @@
   window.p86Search = {
     open: function () { if (inputEl) inputEl.focus(); },
     close: close,
-    clear: function () { if (inputEl) inputEl.value = ''; close(); }
+    clear: function () { if (inputEl) inputEl.value = ''; close(); },
+    toggleMobile: function (open) { setMobileOpen(open == null ? !isMobileOpen() : !!open); }
   };
 })();

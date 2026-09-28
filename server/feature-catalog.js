@@ -526,9 +526,24 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.69';
+const APP_VERSION = '1.70';
 
 const releases = [
+  {
+    version: '1.70',
+    date: '2026-09-28',
+    name: 'The Jobs list, on a phone',
+    summary: 'About five jobs to a screen instead of one, search in the header on a phone, and a tidier Jobs toolbar everywhere.',
+    changes: [
+      { type: 'improved', text: 'On a phone, each job is now a three-line card: the job and its status, then the client and the PM, then % complete, income, profit and margin under small captions. Money is shortened to fit ($413k, $1.24M), and % complete also runs as a thin bar along the bottom of the card. You see about five jobs a screen instead of one.' },
+      { type: 'new', text: 'Search on a phone. The magnifying glass in the header opens the same search the desktop header has \u2014 jobs, estimates, leads and clients \u2014 as a panel under the header. Tap a result to open it; tap anywhere else, or the glass again, to put it away.' },
+      { type: 'improved', text: 'The Jobs toolbar is one row: Add Job, the status and type filters, Filter, Views and Map. Import QB costs, Export CSV, Print and Archived jobs moved into the \u22ef menu at the end \u2014 they are used weekly at most, and on a phone they were taking three rows before the first job. A status or type filter that is narrowing the list is now highlighted, so it is plain why jobs are missing.' },
+      { type: 'fixed', text: 'On a phone, every job card showed an extra unlabelled \u201c\u2014\u201d line for a company with one market, and a checkbox that does nothing on a phone. Both are gone.' },
+      { type: 'fixed', text: 'The search box in the desktop header drew a second outline inside itself when you clicked into it. It shows one now.' },
+      { type: 'improved', text: 'The More menu on a phone is a list \u2014 an icon, a name and an arrow on each row \u2014 instead of a grid of tiles.' },
+      { type: 'fixed', text: 'Fourteen icons, the Email icon among them, were drawn in a fixed near-black and all but vanished on the dark theme. They now take the colour of the text around them, like every other icon.' },
+    ],
+  },
   {
     version: '1.69',
     date: '2026-09-27',
