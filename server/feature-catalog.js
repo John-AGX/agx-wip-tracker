@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.68';
+const APP_VERSION = '1.69';
 
 const releases = [
+  {
+    version: '1.69',
+    date: '2026-09-27',
+    name: 'The change order is where you hit the wall',
+    summary: 'A service ticket that needs a change order gets one in the job\u2019s change orders, and now you can start it from the line that tells you so.',
+    changes: [
+      { type: 'improved', text: 'When a service ticket is billed and the work has gone past the contract price, the screen has always said that extra work is a change order \u2014 and left you to go and find the button. The button is now on that line. It starts the same change order the rest of the ticket does, on the job, so there is still only one way in and only one draft per problem.' },
+      { type: 'improved', text: 'A change order raised from a service ticket lands in the JOB\u2019s change orders section, where change orders live. It always has \u2014 this only makes it say so, on the line that sends you there.' },
+      { type: 'fixed', text: 'A service ticket that hangs off a lead rather than a job now says plainly that there is no change orders section to put one in, and that it needs a job first. Before, the button was simply missing with no explanation.' },
+    ],
+  },
   {
     version: '1.68',
     date: '2026-09-27',

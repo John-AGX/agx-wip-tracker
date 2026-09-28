@@ -306,6 +306,54 @@ describe('a contract price is the price', () => {
     expect(host.innerHTML).not.toMatch(/override|force|anyway|i mean it/i);
   });
 
+  // John, 2026-09-27: "if a service ticket needs a change order it should
+  // create one in the jobs change orders section." It already did — the
+  // change-order door has always written to ticket.job_id. What it did not
+  // do was say so where somebody hits the ceiling, which turned a refusal
+  // into a dead end.
+  test('the road sits at the wall: the cap line carries the change-order button', () => {
+    const { host } = mount({ sheet: contract() });
+    const cap = q(host, '.p86-bl-cap');
+    expect(text(cap)).toContain('extra work is a change order on this job');
+    const btn = q(cap, '.p86-bl-co');
+    expect(btn).not.toBe(null);
+    // The SAME button the change-order panel draws, not a second way in: the
+    // delegated [data-co-src] handler on the detail element opens the one
+    // flow, with its one already-started guard.
+    expect(btn.getAttribute('data-co-src')).toBe('ticket');
+  });
+
+  test('and the panel does not swallow the click — it has to reach the detail element', () => {
+    // The billing panel has its own delegated click handler. If it ever
+    // called stopPropagation, or claimed this button, the button would look
+    // right and do nothing.
+    const { host, calls } = mount({ sheet: contract() });
+    let reached = null;
+    host.addEventListener('click', (e) => {
+      const src = e.target.closest && e.target.closest('[data-co-src]');
+      if (src) reached = src.getAttribute('data-co-src');
+    });
+    q(host, '.p86-bl-co').click();
+    expect(reached).toBe('ticket');
+    expect(calls).toEqual([]);          // and it billed nothing on the way past
+  });
+
+  test('a ticket on a LEAD says there is no change orders section to put one in', () => {
+    // A lead has no job, so John's rule has nowhere to land. Saying so is the
+    // only honest answer; the alternative is a button that 404s.
+    const { host } = mount({ sheet: contract(), t: { id: 'st_l', job_id: null, lead_id: 'ld1' } });
+    const cap = text(q(host, '.p86-bl-cap'));
+    expect(cap).toContain('belongs to a lead, not a job');
+    expect(cap).toContain('needs a job first');
+    expect(q(host, '.p86-bl-co')).toBe(null);
+  });
+
+  test('a reader who cannot edit sees the sentence and no button', () => {
+    const { host } = mount({ sheet: contract(), canEdit: false });
+    expect(text(q(host, '.p86-bl-cap'))).toContain('extra work is a change order');
+    expect(q(host, '.p86-bl-co')).toBe(null);
+  });
+
   test('billing sends the amount', async () => {
     const { host, calls } = mount({ sheet: contract() });
     q(host, '.p86-bl-bill').click();

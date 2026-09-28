@@ -893,6 +893,52 @@ describe('MUTANTS', () => {
   });
 });
 
+// ── 12b. A CHANGE ORDER BELONGS TO THE JOB. ─────────────────────────────
+// John, 2026-09-27: "if a service ticket needs a change order it should
+// create one in the jobs change orders section."
+//
+// That settles a question that had been open since 2026-09-24, when the
+// working note said the opposite — that extra work on a service ticket should
+// become a change order ON THAT TICKET, which would have needed
+// job_change_orders to grow a ticket parent. It does not, and this is here so
+// nobody builds that later: a change order has ONE parent and it is a job.
+describe('a change order belongs to the job, never to the ticket', () => {
+  test('job_change_orders has no ticket parent, and must not grow one', () => {
+    const cols = require('./helpers/db-schema').columnsFor('job_change_orders');
+    expect(cols).toBeTruthy();
+    for (const c of ['service_ticket_id', 'ticket_id', 'parent_ticket_id']) {
+      expect([c, cols.has(c)]).toEqual([c, false]);
+    }
+    // The link runs the OTHER way and is a record inside data, not a column:
+    // data.fromWorkOrder says which work order a change order came out of.
+    expect(cols.has('job_id')).toBe(true);
+  });
+
+  test('billing a job\u2019s ticket writes the change order onto THAT job', async () => {
+    await priceTheJobTicket();
+    await doBill('st_j');
+    const co = eng.all('SELECT * FROM job_change_orders')[0];
+    expect(co.job_id).toBe('j1');
+    expect(ticketRow('st_j').job_id).toBe('j1');
+  });
+
+  test('and a contract service ticket on a job bills into that job too', async () => {
+    await doBill('st_c');
+    const co = eng.all('SELECT * FROM job_change_orders')[0];
+    expect(co.job_id).toBe('j1');
+    // It is an ordinary job change order: the job's own section lists it by
+    // job_id, with no ticket predicate anywhere.
+    expect(co.organization_id).toBe(1);
+  });
+
+  test('a ticket with no job has nowhere to put one, and says so rather than guessing', () => {
+    // destinationFor is the one place that decides. A lead's ticket is an
+    // INVOICE, never a change order invented on some other job.
+    expect(bill.destinationFor({ lead_id: 'ld1' }).kind).toBe('invoice');
+    expect(bill.destinationFor({})).toBe(null);   // no parent, no destination at all
+  });
+});
+
 // ── 13. the billing views on the company-wide board ──────────────────────
 // "To bill" is the list somebody works through: done, approved, earning
 // nothing. It is a view on the existing board rather than a new page, so it

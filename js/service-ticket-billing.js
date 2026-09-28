@@ -212,9 +212,9 @@
       '</tr></tfoot></table>';
   }
 
-  function contractHTML(s, canEdit) {
+  function contractHTML(s, canEdit, t) {
     if (!s.contract) return '';
-    var t = typedFor('x');
+    var onAJob = !!(t && t.job_id);
     return '<div class="p86-bl-contract">' +
       '<div>Contract price <strong>' + esc(money(s.contract.amount)) + '</strong></div>' +
       '<label><span>Bill this much</span>' +
@@ -223,8 +223,20 @@
             'class="p86-bl-in" data-f="amount" value="' + esc(s.contract.amount) + '"' +
             (canEdit ? '' : ' disabled') + ' /></span>' +
       '</label>' +
+      // THE ROAD SITS AT THE WALL. Saying "extra work is a change order" and
+      // leaving the button somewhere else on the page is how a refusal turns
+      // into a dead end. This is the SAME button the change-order panel draws
+      // (data-co-src="ticket"), caught by the same delegated handler on the
+      // detail element, so it opens the same flow and gets the same
+      // already-started guard — not a second way in.
       '<p class="p86-bl-cap">A contract price is the price. Anything above ' +
-        esc(money(s.contract.amount)) + ' is extra work, and extra work is a change order.</p>' +
+        esc(money(s.contract.amount)) + ' is extra work, and extra work is a change order' +
+        (onAJob ? ' on this job.' : '.') +
+        (onAJob
+          ? (canEdit ? ' <button type="button" class="ee-btn secondary p86-bl-co" data-co-src="ticket">Start change order</button>' : '')
+          : ' This ticket belongs to a lead, not a job, so there is no change' +
+            ' orders section to put one in — it needs a job first.') +
+      '</p>' +
       '</div>';
   }
 
@@ -262,7 +274,7 @@
       // there is a control that changes nothing.
       (s.billed || s.bill_as !== 'time_materials' ? '' : rateHTML(s, canEdit)) +
       gridHTML(s, canEdit) +
-      contractHTML(s, canEdit) +
+      contractHTML(s, canEdit, t) +
       blockersHTML(s) +
       actionsHTML(s, canEdit) +
       '</div>';
