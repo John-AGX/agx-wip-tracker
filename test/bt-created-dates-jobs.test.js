@@ -290,3 +290,173 @@ describe('a new column has to reach the people who already use the list', () => 
     expect(defaults).not.toContain('bt_synced_at');
   });
 });
+
+describe('the four record types that hang off a job', () => {
+  /* THE SAME DATE, FOUR MORE TIMES, dropped at a different layer in each.
+   *
+   * Change orders and purchase orders lost it at the READER (allowlisted for
+   * the dataset, never named in readChangeOrder/readPurchaseOrder). Estimates
+   * lost it one layer later, in btSide — the enumerated worksheet view, the
+   * same shape that dropped the job's date. Bills were already carrying it all
+   * the way to the wire and only wanted a column to land in.
+   */
+  const fieldMap = require('../server/services/clickr/field-map');
+
+  test('layer 1: each reader names the key ITS dataset sends', () => {
+    // Buildertrend does not use one name, and a reader that names the wrong
+    // one reads undefined and says nothing about it.
+    expect(fieldMap.readChangeOrder({ changeOrderId: '1', dateAdded: '2026-03-01T10:00:00' }).dateAdded)
+      .toBe('2026-03-01T10:00:00');
+    expect(fieldMap.readPurchaseOrder({ purchaseOrderId: '1', dateAdded: '2026-03-01T10:00:00' }).dateAdded)
+      .toBe('2026-03-01T10:00:00');
+    expect(fieldMap.readBill({ billId: '1', createdDate: '2026-03-01T10:00:00' }).createdDate)
+      .toBe('2026-03-01T10:00:00');
+    expect(fieldMap.readEstimateLine({ worksheetId: '1', dateAdded: '2026-03-01T10:00:00' }).dateAdded)
+      .toBe('2026-03-01T10:00:00');
+  });
+
+  test('the key is chosen in ONE place, not guessed per call site', () => {
+    // Six kinds, two names. Naming a key at each of the six call sites is how
+    // one of them ends up reading undefined for ever without a word.
+    const src = read('server/services/clickr/sync-apply.js').replace(/\r\n/g, '\n');
+    expect(liveLine(src, 'function btCreatedRaw(bt) {')).toBe(true);
+    const calls = src.match(/healBtDates(Loose)?\(db, '[a-z_]+', orgId, [a-z.]+, row\.bt\)/g) || [];
+    expect(calls.length).toBe(6);
+    // and nothing hands it a single named key instead of the whole bt side
+    expect(src).not.toContain('row.bt.createdDate)');
+    expect(src).not.toContain('row.bt.dateAdded)');
+  });
+
+  test('it is only ever pointed at tables this file names itself', () => {
+    // The table name is interpolated into the SQL, so it must never come from
+    // a record.
+    const src = read('server/services/clickr/sync-apply.js');
+    const tables = (src.match(/healBtDates(?:Loose)?\(db, '([a-z_]+)'/g) || [])
+      .map((c) => c.split("'")[1]);
+    expect(new Set(tables)).toEqual(new Set(['jobs', 'leads', 'job_change_orders',
+      'job_purchase_orders', 'job_vendor_bills', 'estimates']));
+  });
+
+  test('the columns exist on all six tables', () => {
+    const db = read('server/db.js');
+    for (const t of ['jobs', 'leads', 'job_change_orders', 'job_purchase_orders',
+      'job_vendor_bills', 'estimates']) {
+      expect(db).toMatch(new RegExp('ALTER TABLE ' + t + '\\s+ADD COLUMN IF NOT EXISTS bt_created_at TIMESTAMPTZ;'));
+      expect(db).toMatch(new RegExp('ALTER TABLE ' + t + '\\s+ADD COLUMN IF NOT EXISTS bt_synced_at\\s+TIMESTAMPTZ;'));
+    }
+  });
+
+  test('EVERY door that hands out the Buildertrend link hands out its dates', () => {
+    // Not "at least one select has them": these routes each have several, and
+    // a door that carries the link but not the dates renders a record as
+    // synced while showing the date we imported it. Found by mutation — the
+    // first version of this test asserted "more than none" and a select could
+    // lose them in silence.
+    //
+    // The rule is per SELECT: wherever bt_<kind>_id is read off the row, both
+    // dates are read beside it.
+    for (const [file, idCol] of [
+      ['server/routes/change-order-routes.js', 'bt_co_id'],
+      ['server/routes/purchase-order-routes.js', 'bt_po_id'],
+      ['server/routes/bill-routes.js', 'bt_bill_id'],
+      ['server/routes/estimate-routes.js', 'bt_worksheet_id'],
+    ]) {
+      // Comments are stripped first: the word SELECT appears in the prose
+      // beside these columns, and a comment is not a door. Then any
+      // `${NAME}` column list is inlined from the const it names — bills keep
+      // theirs in SELECT_COLS, and without this their every door reads as
+      // carrying no columns at all and the check passes vacuously.
+      let src = read(file).replace(/\r\n/g, '\n')
+        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+      for (const [, name] of src.matchAll(/\$\{([A-Z_]+)\}/g)) {
+        const m = src.match(new RegExp('const ' + name + ' = `([^`]*)`'));
+        if (m) src = src.split('${' + name + '}').join(m[1]);
+      }
+      const selects = src.split(/\bSELECT\b/).slice(1)
+        .map((chunk) => chunk.split(/\bFROM\b/)[0])
+        .filter((cols) => new RegExp('\\b' + idCol + '\\b').test(cols));
+      expect(selects.length).toBeGreaterThan(0);
+      for (const cols of selects) {
+        expect([file, idCol, /\bbt_created_at\b/.test(cols), /\bbt_synced_at\b/.test(cols)])
+          .toEqual([file, idCol, true, true]);
+      }
+      // and the row shape hands them to the client, exactly once
+      expect(liveLines(src, 'bt_created_at: r.bt_created_at').length).toBe(1);
+      expect(liveLines(src, 'bt_synced_at: r.bt_synced_at').length).toBe(1);
+    }
+  });
+
+  test('none of them can round-trip back into a data blob', () => {
+    // They ride OUT on every read, so without this they ride back IN on the
+    // next save and sit in the blob shadowing nothing and growing.
+    // Exact counts, not "more than none": job-financials.js holds BOTH the
+    // change-order and the purchase-order cleaner, so one of them could lose
+    // the line without the other noticing. Mutation-checked.
+    const fin = read('server/services/job-financials.js').replace(/\r\n/g, '\n');
+    expect(liveLines(fin, "'bt_created_at', 'bt_synced_at',").length).toBe(2);
+    const bills = read('server/routes/bill-routes.js').replace(/\r\n/g, '\n');
+    expect(liveLines(bills, "'bt_created_at', 'bt_synced_at',").length).toBe(1);
+    const est = read('server/routes/estimate-routes.js').replace(/\r\n/g, '\n');
+    expect(liveLine(est, 'delete blob.bt_created_at;')).toBe(true);
+    expect(liveLine(est, 'delete blob.bt_synced_at;')).toBe(true);
+  });
+
+  test('all three jobs-hub lists print it, through ONE cell', () => {
+    // Three tables, one createdCell — a fourth copy is how two of them end up
+    // reading different keys.
+    const src = read('js/jobs-hub.js').replace(/\r\n/g, '\n');
+    expect(liveLine(src, 'function createdCell(r) {')).toBe(true);
+    expect(liveLines(src, 'createdCell(r) +').length).toBe(3);
+    expect((src.match(/<th data-col="created">Created<\/th>/g) || []).length).toBe(3);
+  });
+
+  test('the estimates list prints it AND sorts on it', () => {
+    const src = read('js/estimates.js').replace(/\r\n/g, '\n');
+    expect(liveLines(src, "estimatesHeaderCell('Created',       'created_at')").length).toBe(1);
+    expect(liveLines(src, 'data-col="created_at"').length).toBe(1);
+    expect(liveLines(src, "else if (key === 'created_at') {").length).toBe(1);
+    // an unknown date sorts LAST in both directions, not as 0
+    const cmp = src.slice(src.indexOf("else if (key === 'created_at') {"));
+    expect(cmp.slice(0, 700)).toContain('if (ac == null) return 1;');
+    expect(cmp.slice(0, 700)).toContain('if (bc == null) return -1;');
+    // and it defaults to newest-first like the other two dates
+    expect(src).toContain("key === 'sent_at' || key === 'created_at' || key === 'status'");
+  });
+});
+
+describe('the column, the sort, the filter and the export all mean the same date', () => {
+  /* A LIST THAT SHOWS ONE DATE AND FILTERS ANOTHER IS WORSE THAN NO COLUMN.
+   *
+   * Created moved to Buildertrend's date on the leads and estimates lists, but
+   * the date-range FILTER and the Excel EXPORT still read the raw created_at.
+   * On the live org 911 of 1,062 leads and 55 of 108 estimates carry the import
+   * day there — so filtering Created to 2024 returned nothing while the visible
+   * column was full of 2024, "last 30 days" returned every imported record, and
+   * the spreadsheet's Created column disagreed with the screen's on every row.
+   */
+  test('leads: the filter reads the same accessor the cell does', () => {
+    const src = read('js/leads.js').replace(/\r\n/g, '\n');
+    expect(liveLines(src, 'leadDateInRange(leadCreated(l), FD.resolveDateRange(d.created_at))').length).toBe(1);
+    // and nothing still filters Created on the raw column
+    expect(liveLines(src, 'leadDateInRange(l.created_at,').length).toBe(0);
+  });
+
+  test('leads: the export prints the same date, and Synced as a day not an instant', () => {
+    const src = read('js/leads.js').replace(/\r\n/g, '\n');
+    expect(liveLines(src, "case 'created_at': { var lc = leadCreated(l);").length).toBe(1);
+    expect(liveLines(src, "case 'bt_synced_at': { var ls = leadSynced(l);").length).toBe(1);
+    // created_at must no longer fall through the shared raw-column case
+    const shared = src.match(/case 'projected_sale_date':[^\n]*\n/);
+    expect(shared).toBeTruthy();
+    expect(shared[0]).not.toContain("case 'created_at'");
+  });
+
+  test('estimates: the filter and the export read the column accessor', () => {
+    const src = read('js/estimates.js').replace(/\r\n/g, '\n');
+    expect(liveLines(src, 'estDateInRange(estCreated(e) || e.created_at, FD.resolveDateRange(d.created_at))').length).toBe(1);
+    expect(liveLines(src, 'estDateInRange(e.created_at,').length).toBe(0);
+    expect(liveLines(src, 'var ec = estCreated(e) || e.created_at;').length).toBe(1);
+    // the raw column must no longer be what the sheet prints for Created
+    expect(liveLines(src, "e.created_at ? String(e.created_at).slice(0, 10) : ''").length).toBe(0);
+  });
+});

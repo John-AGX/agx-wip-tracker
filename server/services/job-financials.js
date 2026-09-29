@@ -305,7 +305,12 @@ function normalizeCoLines(lines) {
 function cleanCoData(body) {
   const data = { ...(body || {}) };
   ['id', 'job_id', 'owner_id', 'status', 'co_number', 'approved_at', 'approved_by',
-   'linked_node_id', 'is_locked', 'created_at', 'updated_at'].forEach(k => delete data[k]);
+   'linked_node_id', 'is_locked', 'created_at', 'updated_at',
+   // The two Buildertrend dates ride OUT on every read of this record, so
+   // without this they ride back IN on the next save and sit in the blob as
+   // junk that shadows nothing and grows for ever. The sync owns them.
+   'bt_created_at', 'bt_synced_at',
+  ].forEach(k => delete data[k]);
   if (!Array.isArray(data.lines)) data.lines = [];
   // Rich-text fields hold sanitized HTML from the p86RichText editor; clean
   // them again server-side so a direct API POST — or an agent payload —
@@ -323,7 +328,12 @@ function cleanPoData(body) {
    // body (the route merges them from the existing row + the /status,/addendum
    // endpoints own them). Stripping them here is the e-sign-wipe fix.
    'baselineTotal', 'addendums', 'acceptance', 'revising',
-   'extraction'].forEach(k => delete data[k]); // 'extraction' is a training artifact, not PO data
+   'extraction',
+   // The two Buildertrend dates ride OUT on every read of this record, so
+   // without this they ride back IN on the next save and sit in the blob as
+   // junk that shadows nothing and grows for ever. The sync owns them.
+   'bt_created_at', 'bt_synced_at',
+  ].forEach(k => delete data[k]); // 'extraction' is a training artifact, not PO data
   if (!Array.isArray(data.lines)) data.lines = [];
   return data;
 }

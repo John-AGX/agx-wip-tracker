@@ -570,7 +570,13 @@ function p86Ask(message, opts) {
     if (rr.min != null || rr.max != null) { var rev = Number(revenueFromAttachedEstimates(l.id) || l.estimated_revenue_low || 0); if (rr.min != null && rev < rr.min) return false; if (rr.max != null && rev > rr.max) return false; }
     if (!leadDateInRange(l.projected_sale_date, FD.resolveDateRange(d.projected_sale_date))) return false;
     if (!leadDateInRange(l.next_followup_at, FD.resolveDateRange(d.next_followup_at))) return false;
-    if (!leadDateInRange(l.created_at, FD.resolveDateRange(d.created_at))) return false;
+    // THE SAME DATE THE COLUMN SHOWS AND THE SORT ORDERS. leadCreated is
+    // Buildertrend's date where we have one, and on the live org 911 of 1,062
+    // leads carry the import day in created_at — so filtering on the raw
+    // column asked a different question from the one the screen answers:
+    // Created = 2024 returned nothing while the visible dates were full of
+    // 2024, and "last 30 days" returned every imported lead.
+    if (!leadDateInRange(leadCreated(l), FD.resolveDateRange(d.created_at))) return false;
     return true;
   }
   function updateLeadsFilterBtn() {
@@ -695,7 +701,12 @@ function p86Ask(message, opts) {
       case 'est_rev_high': return l.estimated_revenue_high != null ? Number(l.estimated_revenue_high) : '';
       case 'salesperson': return l.salesperson_name || '';
       case 'status_changed_at': { if (!l.status_changed_at) return ''; var sc = new Date(l.status_changed_at).getTime(); return isNaN(sc) ? '' : Math.max(0, Math.floor((Date.now() - sc) / 86400000)); }
-      case 'projected_sale_date': case 'next_followup_at': case 'converted_at': case 'lost_at': case 'created_at': case 'updated_at': return l[key] ? String(l[key]).slice(0, 10) : '';
+      // Both Buildertrend dates as calendar days, from the SAME accessors the
+      // column uses — a spreadsheet whose Created disagrees with the Created
+      // on screen is worse than no column at all.
+      case 'created_at': { var lc = leadCreated(l); return lc ? String(lc).slice(0, 10) : ''; }
+      case 'bt_synced_at': { var ls = leadSynced(l); return ls ? String(ls).slice(0, 10) : ''; }
+      case 'projected_sale_date': case 'next_followup_at': case 'converted_at': case 'lost_at': case 'updated_at': return l[key] ? String(l[key]).slice(0, 10) : '';
       default: return l[key] != null ? String(l[key]) : '';
     }
   }

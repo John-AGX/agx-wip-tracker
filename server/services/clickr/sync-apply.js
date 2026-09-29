@@ -247,12 +247,35 @@ async function readDataset(org, kind, deps) {
     transport: deps.transport, limits: deps.limits, now: deps.now, baseUrl: deps.baseUrl });
 }
 
+/* WHICH KEY HOLDS BUILDERTREND'S CREATION DATE, for any of the six kinds.
+ *
+ * Buildertrend does not use one name: jobs, leads and bills send createdDate;
+ * change orders, purchase orders and estimate worksheets send dateAdded. So
+ * every caller below goes through this rather than naming a key of its own —
+ * a call site that guesses the wrong one reads undefined, writes nothing, and
+ * says nothing about it, which is the failure this whole column exists to fix.
+ *
+ * Neither key is read through a FALLBACK OF NAMES at the reader: field-map.js
+ * names exactly what each dataset sends, so a key Clickr renames reads as
+ * absent there and shows itself in the mapping diagnostic. This is the one
+ * place that knows both names, and it is a union of two settled keys, not a
+ * guess at a third.
+ */
+function btCreatedRaw(bt) {
+  if (!bt) return null;
+  const a = bt.createdDate;
+  if (a != null && String(a).trim() !== '') return a;
+  return bt.dateAdded != null ? bt.dateAdded : null;
+}
+
 /* BACKFILL THE BUILDERTREND DATES ON A ROW THAT ALREADY EXISTS.
  *
  * Every record imported before these columns existed carries NULL, and the
- * live org has 687 jobs and 1,062 leads in exactly that state. Re-importing
- * to fix a date is not an option — an import is the one operation that can
- * create duplicates — so the ordinary sync heals them in passing.
+ * live org is in exactly that state across all six kinds: 687 jobs, 1,062
+ * leads, 58 change orders, 97 purchase orders, 43 bills, 108 estimates.
+ * Re-importing to fix a date is not an option — an import is the one
+ * operation that can create duplicates — so the ordinary sync heals them in
+ * passing.
  *
  * FILL-ONLY, and that is the whole safety argument:
  *   • `bt_created_at IS NULL` in the predicate, so a date already recorded is
@@ -260,19 +283,43 @@ async function readDataset(org, kind, deps) {
  *   • nothing happens at all unless Buildertrend gave a date btInstant could
  *     parse; a null stays null rather than becoming NOW().
  *
- * It runs BEFORE the "nothing to correct" early return further down. That
- * return is taken by exactly the rows this is for — a job long since in step
- * with Buildertrend has no field to apply, and would otherwise never be
+ * It runs BEFORE the "nothing to correct" early return in every applier. That
+ * return is taken by exactly the rows this is for — a record long since in
+ * step with Buildertrend has no field to apply, and would otherwise never be
  * reached. It is provenance, not a correction, so it is deliberately not
  * journalled and not reported as an applied field: it changes no figure and
  * no one is being told their record was edited.
+ *
+ * `bt` is the Buildertrend side of the row, whichever kind it is: the date is
+ * read off it HERE, through btCreatedRaw, so no call site can name the wrong
+ * key for its dataset and silently write nothing.
  */
-async function healBtDates(db, table, orgId, id, btCreatedRaw) {
-  const iso = match.btInstant(btCreatedRaw);
+async function healBtDates(db, table, orgId, id, bt) {
+  const iso = match.btInstant(btCreatedRaw(bt));
   if (!iso) return;
   await db.query(
     'UPDATE ' + table + ' SET bt_created_at = $1, bt_synced_at = COALESCE(bt_synced_at, NOW())'
     + ' WHERE id = $2 AND organization_id = $3 AND bt_created_at IS NULL',
+    [iso, id, orgId]);
+}
+
+/* A CHANGE ORDER, PURCHASE ORDER, BILL OR ESTIMATE CAN CARRY A NULL
+ * organization_id — their Buildertrend id columns are unique outright for
+ * exactly that reason (server/db.js), because the row itself may not know its
+ * organization. `organization_id = $3` would silently match no row on one of
+ * those and the date would never land.
+ *
+ * So they are scoped the way their own appliers scope their locked read, with
+ * OR-IS-NULL. That is belt-and-braces rather than the boundary: the id comes
+ * from row.p86.id, which the locked read a few lines above every call site has
+ * already proved belongs to a job of the caller's organization.
+ */
+async function healBtDatesLoose(db, table, orgId, id, bt) {
+  const iso = match.btInstant(btCreatedRaw(bt));
+  if (!iso) return;
+  await db.query(
+    'UPDATE ' + table + ' SET bt_created_at = $1, bt_synced_at = COALESCE(bt_synced_at, NOW())'
+    + ' WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL) AND bt_created_at IS NULL',
     [iso, id, orgId]);
 }
 
@@ -292,7 +339,7 @@ async function applyJob(db, orgId, row, mode, fields) {
   const taken = await db.query('SELECT id FROM jobs WHERE organization_id = $1 AND bt_job_id = $2 AND id <> $3', [orgId, btId, job.id]);
   if (taken.rows.length) return { skipped: 'Another P86 job is already linked to this Buildertrend job.' };
 
-  await healBtDates(db, 'jobs', orgId, job.id, row.bt.createdDate);
+  await healBtDates(db, 'jobs', orgId, job.id, row.bt);
 
   const data = (job.data && typeof job.data === 'object') ? Object.assign({}, job.data) : {};
   const applied = [];
@@ -425,6 +472,11 @@ async function applyChangeOrder(db, orgId, row, mode, fields) {
   const linkedTo = norm(co.bt_co_id);
   if (linkedTo && linkedTo !== btId) return { skipped: 'This P86 change order is already linked to a different Buildertrend change order.' };
   if (await coLinkedElsewhere(db, orgId, btId, co.id)) return { skipped: 'Another P86 change order is already linked to this Buildertrend change order.' };
+
+  // Buildertrend’s own date, filled in passing — see healBtDates. Above every
+  // early return below, because a record long since in step with Buildertrend
+  // has no field to apply and is exactly the one this is for.
+  await healBtDatesLoose(db, 'job_change_orders', orgId, co.id, row.bt);
 
   let data = parseData(co.data);
   const applied = [];
@@ -559,10 +611,11 @@ async function createChangeOrder(db, orgId, row, user) {
   if (Math.abs(m.income - price) >= 0.005) return { skipped: 'P86 could not reproduce Buildertrend\'s price on this change order, so it is not created.' };
   const id = genId('co_');
   await db.query(
-    'INSERT INTO job_change_orders (id, job_id, owner_id, status, co_number, data, approved_at, approved_by, is_locked, organization_id, bt_co_id) '
-    + 'VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, NULL, $8, (SELECT organization_id FROM jobs WHERE id = $2), $9)',
+    'INSERT INTO job_change_orders (id, job_id, owner_id, status, co_number, data, approved_at, approved_by, is_locked, organization_id, bt_co_id, bt_created_at, bt_synced_at) '
+    + 'VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, NULL, $8, (SELECT organization_id FROM jobs WHERE id = $2), $9, $10, NOW())',
     [id, jobId, user && user.id != null ? user.id : null, bornStatus, number, JSON.stringify(data),
-      approved ? (coMatch.approvalInstant(bt.statusChangedDate) || new Date().toISOString()) : null, approved, btId]);
+      approved ? (coMatch.approvalInstant(bt.statusChangedDate) || new Date().toISOString()) : null, approved, btId,
+      match.btInstant(btCreatedRaw(bt))]);
   return { created: id, notes };
 }
 
@@ -597,6 +650,11 @@ async function applyPurchaseOrder(db, orgId, row, mode, fields) {
   const linkedTo = norm(po.bt_po_id);
   if (linkedTo && linkedTo !== btId) return { skipped: 'This P86 purchase order is already linked to a different Buildertrend purchase order.' };
   if (await poLinkedElsewhere(db, orgId, btId, po.id)) return { skipped: 'Another P86 purchase order is already linked to this Buildertrend purchase order.' };
+
+  // Buildertrend’s own date, filled in passing — see healBtDates. Above every
+  // early return below, because a record long since in step with Buildertrend
+  // has no field to apply and is exactly the one this is for.
+  await healBtDatesLoose(db, 'job_purchase_orders', orgId, po.id, row.bt);
 
   let data = parseData(po.data);
   let subId = po.sub_id || null;
@@ -801,9 +859,10 @@ async function createPurchaseOrder(db, orgId, row, user) {
   if (Math.abs(poMatch.poTotal(data) - cost) >= 0.005) return { skipped: 'P86 could not reproduce Buildertrend\'s cost on this purchase order, so it is not created.' };
   const id = genId('po_');
   await db.query(
-    'INSERT INTO job_purchase_orders (id, job_id, organization_id, owner_id, sub_id, status, po_number, data, is_locked, approved_at, approved_by, bt_po_id) '
-    + "VALUES ($1, $2, (SELECT organization_id FROM jobs WHERE id = $2), $3, $4, $5, $6, $7::jsonb, $8, CASE WHEN $5 IN ('approved', 'work_complete', 'closed') THEN NOW() ELSE NULL END, NULL, $9)",
-    [id, jobId, user && user.id != null ? user.id : null, rs.sub ? rs.sub.id : null, status, number, JSON.stringify(data), locked, btId]);
+    'INSERT INTO job_purchase_orders (id, job_id, organization_id, owner_id, sub_id, status, po_number, data, is_locked, approved_at, approved_by, bt_po_id, bt_created_at, bt_synced_at) '
+    + "VALUES ($1, $2, (SELECT organization_id FROM jobs WHERE id = $2), $3, $4, $5, $6, $7::jsonb, $8, CASE WHEN $5 IN ('approved', 'work_complete', 'closed') THEN NOW() ELSE NULL END, NULL, $9, $10, NOW())",
+    [id, jobId, user && user.id != null ? user.id : null, rs.sub ? rs.sub.id : null, status, number, JSON.stringify(data), locked, btId,
+      match.btInstant(btCreatedRaw(bt))]);
   return { created: id, notes };
 }
 
@@ -869,6 +928,11 @@ async function applyBill(db, orgId, row, mode, fields) {
   const linkedTo = norm(bill.bt_bill_id);
   if (linkedTo && linkedTo !== btId) return { skipped: 'This P86 bill is already linked to a different Buildertrend bill.' };
   if (await billLinkedElsewhere(db, orgId, btId, bill.id)) return { skipped: 'Another P86 bill is already linked to this Buildertrend bill.' };
+
+  // Buildertrend’s own date, filled in passing — see healBtDates. Above every
+  // early return below, because a record long since in step with Buildertrend
+  // has no field to apply and is exactly the one this is for.
+  await healBtDatesLoose(db, 'job_vendor_bills', orgId, bill.id, row.bt);
 
   let data = parseData(bill.data);
   let poId = bill.po_id || null;
@@ -1041,11 +1105,12 @@ async function createBill(db, orgId, row, user) {
 
   const id = genId('bill_');
   await db.query(
-    'INSERT INTO job_vendor_bills (id, job_id, organization_id, owner_id, po_id, sub_id, status, bill_number, amount, bill_date, due_date, data, approved_at, approved_by, bt_bill_id) '
+    'INSERT INTO job_vendor_bills (id, job_id, organization_id, owner_id, po_id, sub_id, status, bill_number, amount, bill_date, due_date, data, approved_at, approved_by, bt_bill_id, bt_created_at, bt_synced_at) '
     + "VALUES ($1, $2, (SELECT organization_id FROM jobs WHERE id = $2), $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, "
-    + "CASE WHEN $6 IN ('approved', 'paid') THEN NOW() ELSE NULL END, NULL, $12)",
+    + "CASE WHEN $6 IN ('approved', 'paid') THEN NOW() ELSE NULL END, NULL, $12, $13, NOW())",
     [id, jobId, user && user.id != null ? user.id : null, poId, subId, status, number, amount,
-      match.dateKey(bt.invoiceDate) || null, match.dateKey(bt.dueDate) || null, JSON.stringify(data), btId]);
+      match.dateKey(bt.invoiceDate) || null, match.dateKey(bt.dueDate) || null, JSON.stringify(data), btId,
+      match.btInstant(btCreatedRaw(bt))]);
   return { created: id, notes };
 }
 
@@ -1096,6 +1161,14 @@ async function applyEstimate(db, orgId, row, mode, fields) {
   const linkedTo = norm(est.bt_worksheet_id);
   if (linkedTo && linkedTo !== btId) return { skipped: 'This P86 estimate is already linked to a different Buildertrend worksheet.' };
   if (await estimateLinkedElsewhere(db, orgId, btId, est.id)) return { skipped: 'Another P86 estimate is already linked to this Buildertrend worksheet.' };
+
+  // Buildertrend’s own date, filled in passing — see healBtDates. Above every
+  // early return below, because a record long since in step with Buildertrend
+  // has no field to apply and is exactly the one this is for.
+  // Above the lifecycle lock as well as the early returns: an estimate that
+  // went to a client is refused every other write, and its AGE is not a write
+  // into the document — it is the same provenance the link beside it records.
+  await healBtDatesLoose(db, 'estimates', orgId, est.id, row.bt);
   const wasLinked = linkedTo === btId;
 
   // THE GUARD, re-checked against the LOCKED row rather than against the
@@ -1221,9 +1294,10 @@ async function createEstimate(db, orgId, row, user) {
   if (word) data.btStatus = word;
   // THE ORGANISATION COMES FROM THE PARENT JOB, never from the request.
   await db.query(
-    'INSERT INTO estimates (id, owner_id, data, organization_id, attached_job_id, bt_worksheet_id) '
-    + 'VALUES ($1, $2, $3::jsonb, (SELECT organization_id FROM jobs WHERE id = $4), $4, $5)',
-    [id, user && user.id != null ? user.id : null, JSON.stringify(data), jobId, btId]);
+    'INSERT INTO estimates (id, owner_id, data, organization_id, attached_job_id, bt_worksheet_id, bt_created_at, bt_synced_at) '
+    + 'VALUES ($1, $2, $3::jsonb, (SELECT organization_id FROM jobs WHERE id = $4), $4, $5, $6, NOW())',
+    [id, user && user.id != null ? user.id : null, JSON.stringify(data), jobId, btId,
+      match.btInstant(btCreatedRaw(bt))]);
   const notes = [];
   const content = stamped.filter((l) => l.section !== '__section_header__').length;
   notes.push('Created with ' + content + ' Buildertrend line' + (content === 1 ? '' : 's') + ', unsent, unlocked and not approved.');
@@ -1469,11 +1543,19 @@ async function applyLead(db, orgId, row, mode, fields) {
   const linkedTo = norm(lead.bt_lead_id);
   if (linkedTo && linkedTo !== btId) return { skipped: 'This P86 lead is already linked to a different Buildertrend lead.' };
 
-  // Same fill-only backfill as a job — see healBtDates. The leads matcher has
-  // carried bt.createdDate since it was written; nothing ever recorded it.
-  await healBtDates(db, 'leads', orgId, lead.id, row.bt.createdDate);
   const taken = await db.query('SELECT id FROM leads WHERE organization_id = $1 AND bt_lead_id = $2 AND id <> $3', [orgId, btId, lead.id]);
   if (taken.rows.length) return { skipped: 'Another P86 lead is already linked to this Buildertrend lead.' };
+
+  // Same fill-only backfill as a job — see healBtDates. The leads matcher has
+  // carried bt.createdDate since it was written; nothing ever recorded it.
+  //
+  // BELOW the "already linked elsewhere" guard, as in every other applier.
+  // Above it, a Buildertrend lead that is already linked to a DIFFERENT P86
+  // lead would stamp its creation date onto this one and then refuse to link —
+  // a foreign record's date on a lead that is not it. Reachable: two P86 leads
+  // matching one Buildertrend lead is the possible_duplicate class, and the
+  // live org has 18 of them.
+  await healBtDates(db, 'leads', orgId, lead.id, row.bt);
 
   const sets = {};
   const applied = [];

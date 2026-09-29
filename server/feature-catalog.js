@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.77';
+const APP_VERSION = '1.78';
 
 const releases = [
+  {
+    version: '1.78',
+    date: '2026-09-29',
+    name: 'Change orders, POs, bills and estimates keep their Buildertrend date too',
+    summary: 'The same fix as Leads and Jobs, on the four record types that hang off a job.',
+    changes: [
+      { type: 'fixed', text: 'A change order, purchase order, bill or estimate brought in from Buildertrend was dated the moment it was imported — 50 of 58 change orders on the same day, 41 of 97 purchase orders, 31 of 43 bills, 55 of 108 estimates. Buildertrend had the real date for every one of them and it was being thrown away, at a different point for each: change orders and purchase orders lost it as it was read, and estimates lost it a step later, when a worksheet was assembled from its lines.' },
+      { type: 'new', text: 'A Created column on the change orders, purchase orders, bills and estimates lists. It shows the date the record was raised in whichever system raised it, with the sync date on hover, and on Estimates it sorts. An estimate worksheet is dated by its FIRST line — including a line since deleted, because the worksheet still began the day that line was added.' },
+      { type: 'improved', text: 'Records already imported are repaired in place by the next sync, the same way as leads and jobs: only ever filled in, never overwritten, and a record Buildertrend cannot give us a date for keeps showing the date we have rather than a made-up one.' },
+    ],
+  },
   {
     version: '1.77',
     date: '2026-09-29',

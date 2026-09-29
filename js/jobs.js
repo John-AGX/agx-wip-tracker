@@ -52,7 +52,7 @@ function jobSynced(job) {
     return (window.p86BtBadge && window.p86BtBadge.syncedInstant(job)) || null;
 }
 function jobDateText(v) {
-    return window.p86BtBadge ? window.p86BtBadge.fmtInstant(v) : '';
+    return window.p86BtBadge ? window.p86BtBadge.fmtDateInstant(v) : '';
 }
 // Sorting by these (and by everything else) is js/jobs-sort.js: an unknown
 // date sorts LAST in BOTH directions there, rather than as 1970 — the rule

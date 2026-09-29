@@ -754,14 +754,17 @@ describe('APPLY — the safe press links and NOTHING else; the database row prov
     expect(billRow('bill-e').bill_number).toBe('BILL-0007');
     // Nothing anywhere gained or lost a row.
     expect(allBills()).toHaveLength(before.length);
-    // Only bt_bill_id, data.btStatus and updated_at moved on any row. btStatus
-    // is BUILDERTREND'S OWN WORD beside the P86 status (the same key jobs and
-    // change orders record), which is exactly what the safe confirm promises;
-    // no P86 status, amount, number, purchase order or vendor moved anywhere.
+    // Only bt_bill_id, the two Buildertrend dates, data.btStatus and
+    // updated_at moved on any row. btStatus is BUILDERTREND'S OWN WORD beside
+    // the P86 status (the same key jobs and change orders record), and the
+    // dates are provenance of the same kind — when Buildertrend made the bill
+    // and when its copy reached us, neither of which is a figure on the bill.
+    // No P86 status, amount, number, purchase order or vendor moved anywhere.
     const strip = (r) => {
       const d = JSON.parse(r.data);
       delete d.btStatus;
-      return Object.assign({}, r, { bt_bill_id: null, updated_at: null, data: JSON.stringify(d) });
+      return Object.assign({}, r, { bt_bill_id: null, updated_at: null, data: JSON.stringify(d),
+        bt_created_at: null, bt_synced_at: null });
     };
     for (const b of allBills()) {
       expect(strip(b)).toEqual(strip(JSON.parse(before.find((s) => JSON.parse(s).id === b.id))));
@@ -1218,5 +1221,62 @@ describe('the dataset is wired in everywhere a dataset has to be', () => {
     expect(billMatch.dayKey(new Date(2026, 2, 1))).toBe('2026-03-01');
     expect(billMatch.dayKey(new Date(2026, 11, 31))).toBe('2026-12-31');
     expect(billMatch.dayKey(null)).toBe('');
+  });
+});
+
+/* ── THE DATE BUILDERTREND MADE IT ───────────────────────────────────────
+ *
+ * A bill imported from Buildertrend was dated the moment it was
+ * imported. Buildertrend sends the real date on every record, under
+ * `createdDate`, and the fixtures above have carried it since they were
+ * written — nothing read it. These drive the real router and read the row.
+ */
+describe('the date Buildertrend made it', () => {
+  const dates = (id) => engine.db.prepare(
+    'SELECT bt_created_at, bt_synced_at FROM job_vendor_bills WHERE id = ?').get(id);
+
+  test('a safe run records both dates on every confident match', async () => {
+    const before = engine.db.prepare('SELECT id FROM job_vendor_bills WHERE bt_created_at IS NOT NULL').all();
+    expect(before).toEqual([]);
+    const r = await put(ADMIN, { mode: 'safe' });
+    expect(r.status).toBe(200);
+    const filled = engine.db.prepare('SELECT id, bt_created_at, bt_synced_at FROM job_vendor_bills WHERE bt_created_at IS NOT NULL').all();
+    // EXACTLY the rows THIS RUN ran on, not "more than none" — a mutation
+    // showed length > 0 surviving the backfill being moved below the applier's
+    // early return, which is the state most already-imported records are in.
+    // The population comes from the run itself: an outcome of applied or
+    // unchanged means the applier reached the end for that row, so every one
+    // of them must carry the date. (Rows linked by an earlier test or by a
+    // create path are not in it — this run never touched them.)
+    const ran = (r.json.results || []).filter((x) => x.outcome === 'applied' || x.outcome === 'unchanged')
+      .map((x) => x.p86Id).filter(Boolean);
+    expect(ran.length).toBeGreaterThan(0);
+    const dated = new Set(filled.map((x) => x.id));
+    expect(ran.filter((id) => !dated.has(id))).toEqual([]);
+    for (const row of filled) {
+      expect(new Date(row.bt_created_at).toISOString()).toBe('2026-03-01T10:00:00.000Z');
+      expect(row.bt_synced_at).toBeTruthy();
+      // THE POINT: the two are months apart. Before this the only date on
+      // the row was the instant of the sync.
+      expect(Date.parse(row.bt_synced_at) - Date.parse(row.bt_created_at)).toBeGreaterThan(30 * 86400000);
+    }
+  });
+
+  test('a second pass writes nothing: the date is only ever FILLED', async () => {
+    await put(ADMIN, { mode: 'safe' });
+    const first = engine.db.prepare('SELECT id, bt_created_at, bt_synced_at FROM job_vendor_bills WHERE bt_created_at IS NOT NULL ORDER BY id').all();
+    preview.forgetFetch(AGX);
+    await put(ADMIN, { mode: 'safe' });
+    const second = engine.db.prepare('SELECT id, bt_created_at, bt_synced_at FROM job_vendor_bills WHERE bt_created_at IS NOT NULL ORDER BY id').all();
+    expect(second).toEqual(first);
+  });
+
+  test('a date already on the row is never overwritten', async () => {
+    const target = (await (async () => { await put(ADMIN, { mode: 'safe' }); return engine.db.prepare('SELECT id FROM job_vendor_bills WHERE bt_created_at IS NOT NULL ORDER BY id').get(); })());
+    expect(target).toBeTruthy();
+    engine.db.prepare('UPDATE job_vendor_bills SET bt_created_at = ? WHERE id = ?').run('2019-06-06T00:00:00.000Z', target.id);
+    preview.forgetFetch(AGX);
+    await put(ADMIN, { mode: 'safe' });
+    expect(new Date(dates(target.id).bt_created_at).toISOString()).toBe('2019-06-06T00:00:00.000Z');
   });
 });

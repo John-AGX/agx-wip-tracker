@@ -1938,10 +1938,22 @@ function matchClients(btValues, p86Rows, ctx) {
 // Refuses anything before 1990 or more than a day ahead: Buildertrend sends
 // 0001 and 1900 sentinels for "unset", and those pin themselves to the top of
 // an age-sorted list for ever.
+//
+// BUILDERTREND SENDS NO TIME ZONE. Live: "2025-02-01T18:05:21.037". ECMAScript
+// reads a date-TIME with no designator as LOCAL, so the same record would land
+// on a different instant on every machine that parsed it — hours apart, and a
+// day apart at the edges, which is exactly what a date column must not do.
+// (Measured: a 10:00 fixture stored as 15:00Z on a US-Eastern machine and
+// 10:00Z on the UTC server that runs this.) A bare DATE with no time is
+// already UTC by that same spec and is left alone. So a zone-less date-time is
+// pinned to UTC — the reading the server this runs on happens to give it, and
+// the only one that is the same everywhere.
+const NO_ZONE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
 function btInstant(v) {
   if (v == null) return null;
-  const s = String(v).trim();
+  let s = String(v).trim();
   if (!s) return null;
+  if (NO_ZONE.test(s)) s = s.replace(' ', 'T') + 'Z';
   const t = Date.parse(s);
   if (!isFinite(t)) return null;
   const d = new Date(t);

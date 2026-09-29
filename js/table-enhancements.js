@@ -55,7 +55,7 @@
       // surface so the frozen column reads as part of the table.
       frozenBg: 'var(--bg,#101014)',
       widths: { title: 280, client: 220, lines: 70, baseCost: 130,
-                markup: 110, clientPrice: 140, margin: 110, updated_at: 120 }
+                markup: 110, clientPrice: 140, margin: 110, created_at: 110, sent_at: 110, updated_at: 120 }
     },
     leads: {
       selector: '#leads-list table',
@@ -97,13 +97,13 @@
       selector: '#jobshub-change-orders table',
       frozen: null,
       frozenBg: 'var(--bg,#101014)',
-      widths: { co: 110, job: 240, title: 280, status: 130, updated: 120 }
+      widths: { co: 110, job: 240, title: 280, status: 130, created: 110, updated: 120 }
     },
     jobshubPO: {
       selector: '#jobshub-purchase-orders table',
       frozen: null,
       frozenBg: 'var(--bg,#101014)',
-      widths: { po: 110, job: 220, sub: 180, title: 260, total: 120, status: 130 }
+      widths: { po: 110, job: 220, sub: 180, title: 260, total: 120, status: 130, created: 110 }
     },
     jobshubRFI: {
       selector: '#jobshub-rfis table',

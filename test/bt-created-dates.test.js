@@ -56,6 +56,33 @@ describe('reading a Buildertrend date', () => {
     // but today is fine
     expect(t(new Date().toISOString())).not.toBeNull();
   });
+
+  test('BUILDERTREND SENDS NO TIME ZONE, and the answer must not depend on the machine', () => {
+    // The live shape, exactly: jobs.createdDate is "2025-02-01T18:05:21.037".
+    // ECMAScript reads a date-TIME with no designator as LOCAL, so without the
+    // pin the same record lands on a different instant on every machine that
+    // parses it. Found by a fixture: a 10:00 value stored as 15:00Z on a
+    // US-Eastern machine and 10:00Z on the UTC server this runs on.
+    expect(t('2025-02-01T18:05:21.037')).toBe('2025-02-01T18:05:21.037Z');
+    expect(t('2026-03-01T10:00:00.00')).toBe('2026-03-01T10:00:00.000Z');
+    expect(t('2026-03-01T10:00:00')).toBe('2026-03-01T10:00:00.000Z');
+    expect(t('2026-03-01T10:00')).toBe('2026-03-01T10:00:00.000Z');
+    // A space instead of the T is the same value.
+    expect(t('2026-03-01 10:00:00')).toBe('2026-03-01T10:00:00.000Z');
+    // This machine's own zone, so the assertion above says something.
+    expect(new Date('2026-03-01T10:00:00').toISOString() === '2026-03-01T10:00:00.000Z')
+      .toBe(new Date().getTimezoneOffset() === 0);
+  });
+
+  test('a zone that IS stated is obeyed, and a bare date is left alone', () => {
+    // The pin must not overwrite a real offset, and a DATE with no time is
+    // already UTC by the same spec — rewriting it would shift nothing but
+    // would mean this function had two rules for one shape.
+    expect(t('2023-05-11T14:03:00Z')).toBe('2023-05-11T14:03:00.000Z');
+    expect(t('2023-05-11T14:03:00-05:00')).toBe('2023-05-11T19:03:00.000Z');
+    expect(t('2023-05-11T14:03:00+02:00')).toBe('2023-05-11T12:03:00.000Z');
+    expect(t('2024-03-14')).toBe('2024-03-14T00:00:00.000Z');
+  });
 });
 
 describe('the three layers that were dropping the job’s date', () => {
@@ -88,31 +115,89 @@ describe('the three layers that were dropping the job’s date', () => {
 describe('repairing the records already imported', () => {
   const src = read('server/services/clickr/sync-apply.js');
 
-  test('the backfill only ever FILLS — it cannot overwrite a date', () => {
-    const at = src.indexOf('async function healBtDates');
-    expect(at).toBeGreaterThan(-1);
-    const body = src.slice(at, at + 700);
-    expect(liveLines(body, 'bt_created_at IS NULL').length).toBe(1);
-    // and it refuses to write anything when the date will not parse
-    expect(liveLine(body, 'if (!iso) return;')).toBe(true);
+  test('BOTH backfills only ever FILL — neither can overwrite, neither guesses', () => {
+    // Two functions, not one: healBtDates scopes strictly (jobs, leads) and
+    // healBtDatesLoose carries the OR-IS-NULL arm for the four kinds that hang
+    // off a job. The first version of this test took a 700-BYTE WINDOW from
+    // the first match, which ended inside the comment above the loose one — so
+    // a `|| new Date().toISOString()` fallback in the function all four new
+    // record types use passed straight through it. Sliced by NAME now, and
+    // both are checked.
+    for (const sig of ['async function healBtDates(', 'async function healBtDatesLoose(']) {
+      const at = src.indexOf(sig);
+      expect([sig, at > -1]).toEqual([sig, true]);
+      const body = src.slice(at, src.indexOf('\n}', at));
+      expect([sig, liveLines(body, 'bt_created_at IS NULL').length]).toEqual([sig, 1]);
+      // and it writes nothing at all when the date will not parse
+      expect([sig, liveLine(body, 'if (!iso) return;')]).toEqual([sig, true]);
+      // no fallback to "now" anywhere in either body — the defect they exist to fix
+      expect([sig, /new Date\(\)/.test(body)]).toEqual([sig, false]);
+    }
   });
 
-  test('it runs BEFORE the "nothing to correct" early return', () => {
-    // That return is taken by exactly the rows the backfill is for: a job long
-    // since in step with Buildertrend has no field to apply. Called after it,
-    // the backfill would never reach a single one of them.
-    const heal = src.indexOf("healBtDates(db, 'jobs'");
-    const early = src.indexOf('if (!applied.length && wasLinked && !nextBtStatus) return');
-    expect(heal).toBeGreaterThan(-1);
-    expect(early).toBeGreaterThan(-1);
-    expect(heal).toBeLessThan(early);
+  /* IT RUNS BEFORE THE EARLY RETURN — IN EVERY APPLIER, NOT JUST THE JOB ONE.
+   *
+   * That return is taken by exactly the rows the backfill is for: a record long
+   * since in step with Buildertrend has no field to apply. Called after it, the
+   * backfill would never reach one of them — which on the live org is 609 of
+   * 687 jobs, 50 of 58 change orders, 55 of 108 estimates.
+   *
+   * This used to check the job applier alone, and the needle it used
+   * ("healBtDates(db, 'jobs'") cannot match "healBtDatesLoose(db, ...", so all
+   * four of the kinds that hang off a job were unpinned: moving any of those
+   * calls below its early return left every test in the repo green.
+   *
+   * Each applier's own return is named, because they are not the same
+   * sentence — an estimate's is the lifecycle lock, which refuses every other
+   * write to a document that went to a client.
+   */
+  const APPLIERS = [
+    ['applyJob', "healBtDates(db, 'jobs'", 'if (!applied.length && wasLinked && !nextBtStatus) return'],
+    ['applyLead', "healBtDates(db, 'leads'", 'if (!applied.length && wasLinked) return'],
+    ['applyChangeOrder', "healBtDatesLoose(db, 'job_change_orders'", 'if (!applied.length && wasLinked && !nextBtStatus) return'],
+    ['applyPurchaseOrder', "healBtDatesLoose(db, 'job_purchase_orders'", 'if (!applied.length && wasLinked'],
+    ['applyBill', "healBtDatesLoose(db, 'job_vendor_bills'", 'if (!applied.length && wasLinked'],
+    ['applyEstimate', "healBtDatesLoose(db, 'estimates'", 'const locked = estimateMatch.lifecycleLock(view);'],
+  ];
+
+  test.each(APPLIERS)('%s heals before its own early return', (fn, healNeedle, returnNeedle) => {
+    const from = src.indexOf('async function ' + fn + '(');
+    expect([fn, from > -1]).toEqual([fn, true]);
+    const heal = src.indexOf(healNeedle, from);
+    const early = src.indexOf(returnNeedle, from);
+    expect([fn, heal > -1, early > -1]).toEqual([fn, true, true]);
+    expect([fn, heal < early]).toEqual([fn, true]);
+  });
+
+  test('every applier heals BELOW its "already linked to another record" guard', () => {
+    // A Buildertrend record already linked to a DIFFERENT P86 record must not
+    // leave its creation date behind on the one it is then refused. applyLead
+    // used to heal above that guard while the other five healed below it;
+    // reachable, because two P86 records matching one Buildertrend record is
+    // the possible_duplicate class and the live org has 18 leads in it.
+    const GUARDS = [
+      ['applyJob', "healBtDates(db, 'jobs'", 'Another P86 job is already linked'],
+      ['applyLead', "healBtDates(db, 'leads'", 'Another P86 lead is already linked'],
+      ['applyChangeOrder', "healBtDatesLoose(db, 'job_change_orders'", 'Another P86 change order is already linked'],
+      ['applyPurchaseOrder', "healBtDatesLoose(db, 'job_purchase_orders'", 'Another P86 purchase order is already linked'],
+      ['applyBill', "healBtDatesLoose(db, 'job_vendor_bills'", 'Another P86 bill is already linked'],
+      ['applyEstimate', "healBtDatesLoose(db, 'estimates'", 'Another P86 estimate is already linked'],
+    ];
+    for (const [fn, healNeedle, guard] of GUARDS) {
+      const from = src.indexOf('async function ' + fn + '(');
+      const heal = src.indexOf(healNeedle, from);
+      const g = src.indexOf(guard, from);
+      expect([fn, heal > -1, g > -1]).toEqual([fn, true, true]);
+      expect([fn, g < heal]).toEqual([fn, true]);
+    }
   });
 
   test('it is only ever pointed at tables this file names itself', () => {
     // The table name is interpolated, so it must never come from a record.
-    const calls = src.match(/healBtDates\(db, '[a-z_]+'/g) || [];
-    expect(calls.length).toBeGreaterThan(0);
-    expect(new Set(calls.map((c) => c.split("'")[1]))).toEqual(new Set(['jobs', 'leads']));
+    const calls = src.match(/healBtDates(?:Loose)?\(db, '[a-z_]+'/g) || [];
+    expect(calls.length).toBe(6);
+    expect(new Set(calls.map((c) => c.split("'")[1]))).toEqual(new Set(['jobs', 'leads',
+      'job_change_orders', 'job_purchase_orders', 'job_vendor_bills', 'estimates']));
   });
 
   test('the columns exist, on both tables', () => {
@@ -180,5 +265,80 @@ describe('what a list shows and sorts on', () => {
     // and on the raw column they would not have sorted at all
     const raw = new Set(leads.slice(0, 3).map((l) => l.created_at));
     expect(raw.size).toBe(1);
+  });
+});
+
+describe('a Buildertrend worksheet is dated by the line that started it', () => {
+  // A Buildertrend estimate record is one LINE. The worksheet was made when
+  // its FIRST line was, so the date is the earliest across its lines — not the
+  // first in the array (that is display order) and not the latest, which would
+  // move every time somebody added a line and make the column meaningless.
+  const { worksheetCreated } = require('../server/services/clickr/estimate-match');
+
+  test('the earliest wins, whatever order the lines arrive in', () => {
+    const w = { all: [
+      { dateAdded: '2026-05-02T09:00:00' },
+      { dateAdded: '2026-03-01T10:00:00' },   // the one that started it
+      { dateAdded: '2026-07-11T16:30:00' },
+    ] };
+    expect(worksheetCreated(w)).toBe('2026-03-01T10:00:00');
+  });
+
+  test('a DELETED line still dates the worksheet', () => {
+    // The opening line being removed since does not change the day the
+    // worksheet began, so this reads w.all and not the live lines.
+    const w = { all: [
+      { dateAdded: '2026-03-01T10:00:00', isDeleted: true },
+      { dateAdded: '2026-06-01T10:00:00' },
+    ] };
+    expect(worksheetCreated(w)).toBe('2026-03-01T10:00:00');
+  });
+
+  test('a worksheet with no usable date says so, rather than guessing', () => {
+    expect(worksheetCreated({ all: [{}, { dateAdded: '' }, { dateAdded: 'nonsense' }] })).toBe('');
+    expect(worksheetCreated({ all: [] })).toBe('');
+    expect(worksheetCreated(null)).toBe('');
+  });
+
+  test('one unreadable line does not hide the rest', () => {
+    const w = { all: [{ dateAdded: 'nonsense' }, { dateAdded: '2026-03-01T10:00:00' }] };
+    expect(worksheetCreated(w)).toBe('2026-03-01T10:00:00');
+  });
+});
+
+describe('the backfill is not an edit anybody made', () => {
+  /* IT RUNS INSIDE THE JOURNAL WINDOW.
+   *
+   * apply() snapshots the row before the applier and calls journal.capture()
+   * after it, for every result that is not `skipped` — `unchanged` included.
+   * The heal happens in between. So unless bt_created_at is named as noise,
+   * the first scheduled run after these columns ship records a change on every
+   * healed record — on the live org 609 jobs, 911 leads, 50 change orders, 41
+   * purchase orders, 31 bills and 55 estimates — each attributing an edit to
+   * the sync on a record it did not edit, and each offering an "undo" that
+   * would put the NULL back.
+   *
+   * The code comment claimed it was "deliberately not journalled". It was not,
+   * until this test existed.
+   */
+  const journal = require('../server/services/clickr/sync-journal');
+
+  test('a row that only gained its Buildertrend dates produces NO change rows', () => {
+    const before = { id: 'j-1', data: { title: 'A' }, bt_created_at: null, bt_synced_at: null, updated_at: '2026-01-01T00:00:00.000Z' };
+    const after = { id: 'j-1', data: { title: 'A' }, bt_created_at: new Date('2025-02-01T18:05:21.037Z'), bt_synced_at: new Date('2026-09-29T12:00:00.000Z'), updated_at: '2026-09-29T12:00:00.000Z' };
+    expect(journal.diffColumns(before, after)).toEqual([]);
+  });
+
+  test('a real edit in the same write is still recorded', () => {
+    // The exemption must not swallow the change beside it.
+    const before = { id: 'j-1', status: 'open', bt_created_at: null };
+    const after = { id: 'j-1', status: 'closed', bt_created_at: new Date('2025-02-01T18:05:21.037Z') };
+    expect(journal.diffColumns(before, after).map((c) => c.column)).toEqual(['status']);
+  });
+
+  test('both dates are named, and nothing else was quietly added to the exemption', () => {
+    // NOISE is an exemption list, and widening one is how a real change stops
+    // being recorded. These four are the whole of it.
+    expect([...journal.NOISE].sort()).toEqual(['bt_created_at', 'bt_synced_at', 'updated_at']);
   });
 });

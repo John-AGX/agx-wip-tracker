@@ -69,6 +69,25 @@ function p86Ask(message, opts) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+  /* WHEN BUILDERTREND MADE IT, and when its copy first reached us.
+   *
+   * A record imported from Buildertrend has a created_at of the SYNC. On the
+   * live org 50 of 58 change orders share one day, 41 of 97 purchase orders
+   * and 31 of 43 bills — so ordering any of these lists by age ranked them by
+   * when we happened to fetch them. A record made in Project 86 has no
+   * Buildertrend date and its created_at IS its true creation, which is why
+   * the fallback exists and why the two kinds sit in one chronology.
+   */
+  function btCreated(r) { return (window.p86BtBadge && window.p86BtBadge.createdInstant(r)) || null; }
+  function btSynced(r) { return (window.p86BtBadge && window.p86BtBadge.syncedInstant(r)) || null; }
+  // One cell, the same on all three lists: the date, with the sync date in
+  // its tooltip when we have one.
+  function createdCell(r) {
+    var syn = btSynced(r);
+    return '<td data-col="created"' + (syn ? ' title="Synced from Buildertrend ' + esc(fmtDate(syn)) + '"' : '')
+      + '>' + esc(fmtDate(btCreated(r))) + '</td>';
+  }
+
   function fmtDate(s) {
     if (!s) return '';
     // Some of what lands here is a CALENDAR date, not an instant — an RFI or a
@@ -639,7 +658,7 @@ function p86Ask(message, opts) {
       },
       tableHTML: function (rows) {
         return '<div class="p86-tbl-scroll"><table class="leads-table jobshub-table"><thead><tr>' +
-          '<th data-col="co">CO #</th><th data-col="job">Job</th><th data-col="title">Title</th><th data-col="status">Status</th><th data-col="updated">Updated</th>' +
+          '<th data-col="co">CO #</th><th data-col="job">Job</th><th data-col="title">Title</th><th data-col="status">Status</th><th data-col="created">Created</th><th data-col="updated">Updated</th>' +
           '</tr></thead><tbody>' +
           rows.map(function (r) {
             return '<tr data-job-id="' + esc(r.job_id) + '" data-co-id="' + esc(r.id) + '">' +
@@ -647,6 +666,7 @@ function p86Ask(message, opts) {
               '<td data-col="job">' + esc(jobLabelFromRow(r)) + '</td>' +
               '<td data-col="title">' + esc(r.title || '(untitled)') + '</td>' +
               '<td data-col="status">' + statusBadge(r.status, CO_STATUS_LABEL) + '</td>' +
+              createdCell(r) +
               '<td data-col="updated">' + esc(fmtDate(r.updated_at)) + '</td>' +
             '</tr>';
           }).join('') + '</tbody></table></div>';
@@ -752,7 +772,7 @@ function p86Ask(message, opts) {
       },
       tableHTML: function (rows) {
         return '<div class="p86-tbl-scroll"><table class="leads-table jobshub-table"><thead><tr>' +
-          '<th data-col="po">PO #</th><th data-col="job">Job</th><th data-col="sub">Sub</th><th data-col="title">Title</th><th class="num" data-col="total">Total</th><th data-col="status">Status</th>' +
+          '<th data-col="po">PO #</th><th data-col="job">Job</th><th data-col="sub">Sub</th><th data-col="title">Title</th><th class="num" data-col="total">Total</th><th data-col="status">Status</th><th data-col="created">Created</th>' +
           '</tr></thead><tbody>' +
           rows.map(function (r) {
             return '<tr data-po-id="' + esc(r.id) + '">' +
@@ -762,6 +782,7 @@ function p86Ask(message, opts) {
               '<td data-col="title">' + esc(r.title || '(untitled)') + '</td>' +
               '<td class="num" data-col="total">' + money(poSum(r)) + '</td>' +
               '<td data-col="status">' + statusBadge(r.status) + '</td>' +
+              createdCell(r) +
             '</tr>';
           }).join('') + '</tbody></table></div>';
       }
@@ -817,7 +838,7 @@ function p86Ask(message, opts) {
       },
       tableHTML: function (rows) {
         return '<div class="p86-tbl-scroll"><table class="leads-table jobshub-table"><thead><tr>' +
-          '<th data-col="bill">Bill #</th><th data-col="job">Job</th><th data-col="vendor">Vendor</th><th data-col="po">PO #</th><th class="num" data-col="amount">Amount</th><th data-col="status">Status</th><th data-col="due">Due</th>' +
+          '<th data-col="bill">Bill #</th><th data-col="job">Job</th><th data-col="vendor">Vendor</th><th data-col="po">PO #</th><th class="num" data-col="amount">Amount</th><th data-col="status">Status</th><th data-col="created">Created</th><th data-col="due">Due</th>' +
           '</tr></thead><tbody>' +
           rows.map(function (r) {
             var overdue = r.due_date && r.status !== 'paid' && r.status !== 'void' && new Date(r.due_date).getTime() < Date.now();
@@ -828,6 +849,7 @@ function p86Ask(message, opts) {
               '<td data-col="po">' + esc(r.po_number || '—') + '</td>' +
               '<td class="num" data-col="amount">' + money(r.amount) + '</td>' +
               '<td data-col="status">' + statusBadge(r.status) + '</td>' +
+              createdCell(r) +
               '<td data-col="due"' + (overdue ? ' style="color:#f87171;font-weight:600;"' : '') + '>' + esc(fmtDate(r.due_date)) + '</td>' +
             '</tr>';
           }).join('') + '</tbody></table></div>';

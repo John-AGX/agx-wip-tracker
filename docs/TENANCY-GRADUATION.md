@@ -192,7 +192,27 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**581** occurrences of `organization_id IS NULL` across `server/`.
+**582** occurrences of `organization_id IS NULL` across `server/`.
+
+581 → 582: `healBtDatesLoose` in `services/clickr/sync-apply.js`, which fills in
+the date Buildertrend made a record on the four kinds that hang off a job —
+change orders, purchase orders, bills, estimates. One arm, and it COPIES the
+predicate those four already use: a change order, purchase order or bill row can
+carry a NULL `organization_id` (which is why `server/db.js` makes each
+`bt_*_id` unique OUTRIGHT rather than per organization), and an estimate row
+can too. `organization_id = $3` would silently match no row on exactly those,
+and the date would never land on them.
+
+The arm is NOT the boundary here. The id passed in is `row.p86.id`, which the
+locked read a few lines above every call site has already resolved through the
+record's JOB, whose organization is the caller's — `lockedChangeOrder`,
+`lockedPurchaseOrder`, `lockedBill` and `lockedEstimate` each carry that join.
+The arm only stops the fill being skipped; it never widens what the sync can
+reach. `test/clickr-change-orders.test.js` drives both directions: a change
+order whose `organization_id` is NULL is dated, and the other tenant's twin is
+not. The jobs and leads halves of the same fill use the STRICT predicate,
+because those two tables have no legacy NULL-org rows. When this item closes it
+retires with the four reads it copied.
 
 578 → 581: billing a work order (Phase 4). Three arms, and each one COPIES a
 predicate that already exists rather than inventing a looser one:

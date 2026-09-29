@@ -870,6 +870,26 @@ function groupWorksheets(btValues) {
 
 // The Buildertrend side of a row: a worksheet, summarised. Values only — the
 // same shape every other dataset's bt side has.
+/* WHEN BUILDERTREND MADE THE WORKSHEET.
+ *
+ * A Buildertrend record is one LINE, and each line carries its own dateAdded.
+ * The worksheet was made when its FIRST line was, so this is the earliest of
+ * them — not the first line in the array, which is display order, and not the
+ * latest, which moves every time somebody adds a line.
+ *
+ * Deleted lines count: a worksheet whose opening line has since been removed
+ * was still made the day that line was added. Only `w.all` knows about them.
+ */
+function worksheetCreated(w) {
+  let best = null;
+  for (const L of (w && w.all) || []) {
+    const t = L && L.dateAdded ? Date.parse(L.dateAdded) : NaN;
+    if (!isFinite(t)) continue;
+    if (best == null || t < best.t) best = { t, raw: L.dateAdded };
+  }
+  return best ? best.raw : '';
+}
+
 function btSide(w, live, cost, owner) {
   const first = live[0] || w.all[0] || {};
   const contract = parseMoney(first.contractPrice);
@@ -877,6 +897,10 @@ function btSide(w, live, cost, owner) {
     btId: w.btId,
     worksheetId: w.btId,
     scope: 'open',
+    // ENUMERATED VIEW: a key missing from this object is read off the line by
+    // field-map.js and thrown away here, which is exactly what happened to the
+    // job's creation date. dateAdded IS read; nothing carried it.
+    createdDate: worksheetCreated(w),
     title: worksheetTitle(first),
     raw: worksheetTitle(first) || 'Worksheet ' + w.btId,
     jobId: isBtBlank(first.jobId) ? '' : norm(first.jobId),
@@ -1278,7 +1302,7 @@ function notInBuildertrend(rows, btValues, p86) {
 module.exports = {
   matchEstimates, notInBuildertrend, btStatusDue,
   markupPercentFor, priceTolerance, lineAgreesWithBuildertrend, buildLines, headerNameFor, lineDescription,
-  worksheetTitle, groupWorksheets, WS_FACTS,
+  worksheetTitle, groupWorksheets, worksheetCreated, WS_FACTS,
   p86EstimateView, linesFingerprint, lifecycleLock, lockSentence, noLineIdSentence,
   promisedCandidates, promisedSentence,
   p86PricedTotal, btOwnerTotal, btCostTotal, num, numExact, EPS,

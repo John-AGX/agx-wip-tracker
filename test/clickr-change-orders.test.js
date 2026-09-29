@@ -760,3 +760,93 @@ describe('PENDING — the un-signed status, end to end', () => {
     expect(by.pending.proposedIncome).toBe(500);
   });
 });
+
+/* ── THE DATE BUILDERTREND MADE IT ───────────────────────────────────────
+ *
+ * A change order imported from Buildertrend was dated the moment it was
+ * imported. Buildertrend sends the real date on every record, under
+ * `dateAdded`, and the fixtures above have carried it since they were
+ * written — nothing read it. These drive the real router and read the row.
+ */
+describe('the date Buildertrend made it', () => {
+  const dates = (id) => engine.db.prepare(
+    'SELECT bt_created_at, bt_synced_at FROM job_change_orders WHERE id = ?').get(id);
+
+  test('a safe run records both dates on every confident match', async () => {
+    const before = engine.db.prepare('SELECT id FROM job_change_orders WHERE bt_created_at IS NOT NULL').all();
+    expect(before).toEqual([]);
+    const r = await put(ADMIN, { mode: 'safe' });
+    expect(r.status).toBe(200);
+    const filled = engine.db.prepare('SELECT id, bt_created_at, bt_synced_at FROM job_change_orders WHERE bt_created_at IS NOT NULL').all();
+    // EXACTLY the rows THIS RUN ran on, not "more than none" — a mutation
+    // showed length > 0 surviving the backfill being moved below the applier's
+    // early return, which is the state most already-imported records are in.
+    // The population comes from the run itself: an outcome of applied or
+    // unchanged means the applier reached the end for that row, so every one
+    // of them must carry the date. (Rows linked by an earlier test or by a
+    // create path are not in it — this run never touched them.)
+    const ran = (r.json.results || []).filter((x) => x.outcome === 'applied' || x.outcome === 'unchanged')
+      .map((x) => x.p86Id).filter(Boolean);
+    expect(ran.length).toBeGreaterThan(0);
+    const dated = new Set(filled.map((x) => x.id));
+    expect(ran.filter((id) => !dated.has(id))).toEqual([]);
+    for (const row of filled) {
+      expect(new Date(row.bt_created_at).toISOString()).toBe('2026-03-01T10:00:00.000Z');
+      expect(row.bt_synced_at).toBeTruthy();
+      // THE POINT: the two are months apart. Before this the only date on
+      // the row was the instant of the sync.
+      expect(Date.parse(row.bt_synced_at) - Date.parse(row.bt_created_at)).toBeGreaterThan(30 * 86400000);
+    }
+  });
+
+  test('a second pass writes nothing: the date is only ever FILLED', async () => {
+    await put(ADMIN, { mode: 'safe' });
+    const first = engine.db.prepare('SELECT id, bt_created_at, bt_synced_at FROM job_change_orders WHERE bt_created_at IS NOT NULL ORDER BY id').all();
+    preview.forgetFetch(AGX);
+    await put(ADMIN, { mode: 'safe' });
+    const second = engine.db.prepare('SELECT id, bt_created_at, bt_synced_at FROM job_change_orders WHERE bt_created_at IS NOT NULL ORDER BY id').all();
+    expect(second).toEqual(first);
+  });
+
+  test('a date already on the row is never overwritten', async () => {
+    const target = (await (async () => { await put(ADMIN, { mode: 'safe' }); return engine.db.prepare('SELECT id FROM job_change_orders WHERE bt_created_at IS NOT NULL ORDER BY id').get(); })());
+    expect(target).toBeTruthy();
+    engine.db.prepare('UPDATE job_change_orders SET bt_created_at = ? WHERE id = ?').run('2019-06-06T00:00:00.000Z', target.id);
+    preview.forgetFetch(AGX);
+    await put(ADMIN, { mode: 'safe' });
+    expect(new Date(dates(target.id).bt_created_at).toISOString()).toBe('2019-06-06T00:00:00.000Z');
+  });
+});
+
+describe('a record that does not know its own organization is dated too', () => {
+  /* A CHANGE ORDER ROW CAN CARRY A NULL organization_id.
+   *
+   * server/db.js says so where it makes bt_co_id unique OUTRIGHT rather than
+   * per organization, for exactly that reason, and the same is true of
+   * purchase orders, bills and estimates. Every sync read reaches the row
+   * through its JOB, whose organization is the caller's — which is why the
+   * backfill's own predicate is OR-IS-NULL and not `organization_id = $3`.
+   *
+   * Written after a mutation showed the strict predicate passing everything:
+   * every fixture in this file carries an organization, so nothing here was
+   * exercising the case the loose predicate exists for.
+   */
+  test('a change order with no organization_id still gets both dates', async () => {
+    engine.db.prepare("UPDATE job_change_orders SET organization_id = NULL WHERE id = 'co-a'").run();
+    const r = await put(ADMIN, { mode: 'safe' });
+    expect(r.status).toBe(200);
+    const row = engine.db.prepare("SELECT organization_id, bt_created_at, bt_synced_at FROM job_change_orders WHERE id = 'co-a'").get();
+    expect(row.organization_id).toBeNull();
+    expect(new Date(row.bt_created_at).toISOString()).toBe('2026-03-01T10:00:00.000Z');
+    expect(row.bt_synced_at).toBeTruthy();
+  });
+
+  test('and the other tenant is still never touched', async () => {
+    // OR-IS-NULL widens the predicate, so the boundary has to be proved
+    // somewhere: it is the locked read above the call, which resolves the row
+    // through a job of the caller's organization.
+    await put(ADMIN, { mode: 'safe' });
+    const theirs = engine.db.prepare("SELECT bt_created_at FROM job_change_orders WHERE id = 'co-x'").get();
+    expect(theirs.bt_created_at).toBeNull();
+  });
+});

@@ -169,7 +169,7 @@ router.get('/', requireAuth, async (req, res) => {
     // Wave 1.A Phase 2 — org-scoped list. NULL org_id retained for
     // unbackfilled legacy until NOT NULL tightening.
     const { rows } = await pool.query(
-      'SELECT id, owner_id, data, created_at, updated_at, geocode_lat, geocode_lng, is_locked, sent_at, viewed_at, accepted_at, sent_count, approval_status, sent_to, sent_method, approved_at, approved_by, approval_method, declined_at, decline_reason, market_id, attached_job_id, bt_worksheet_id FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
+      'SELECT id, owner_id, data, created_at, updated_at, geocode_lat, geocode_lng, is_locked, sent_at, viewed_at, accepted_at, sent_count, approval_status, sent_to, sent_method, approved_at, approved_by, approval_method, declined_at, decline_reason, market_id, attached_job_id, bt_worksheet_id, bt_created_at, bt_synced_at FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
       [req.user.organization_id]
     );
     // Surface created_at/updated_at + geocode coords + lifecycle timestamps on
@@ -218,7 +218,13 @@ router.get('/', requireAuth, async (req, res) => {
       // a lead or a client had to learn both can be absent, and this is the
       // field it learns the job from.
       attached_job_id: r.attached_job_id || null,
-      bt_worksheet_id: r.bt_worksheet_id || null
+      bt_worksheet_id: r.bt_worksheet_id || null,
+      // WHEN BUILDERTREND MADE THE WORKSHEET, and when its copy reached us.
+      // An estimate imported from Buildertrend has a created_at of the SYNC:
+      // 55 of 108 on the live org share one day. Columns, not the blob — the
+      // sync owns them, and they are stripped from any save below.
+      bt_created_at: r.bt_created_at || null,
+      bt_synced_at: r.bt_synced_at || null
     }));
     res.json({ estimates });
   } catch (e) {
@@ -457,6 +463,11 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), requi
         // re-fires the IS DISTINCT FROM and resets updated_at across the list.
         delete blob.attached_job_id;
         delete blob.bt_worksheet_id;
+        // The two Buildertrend dates ride out on the GET above, so without
+        // this they ride back in here and a client could date an estimate to
+        // anything. Same rule, same two reasons.
+        delete blob.bt_created_at;
+        delete blob.bt_synced_at;
         // Only bump updated_at when the JSONB actually differs from what's
         // stored. The frontend bulk-save sends EVERY estimate on every
         // save, so without this gate, opening any one estimate would

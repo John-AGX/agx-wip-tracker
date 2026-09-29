@@ -179,6 +179,17 @@ function seedJobScopesFromEstimate(jobId, estimateId) {
 }
 window.seedJobScopesFromEstimate = seedJobScopesFromEstimate;
 
+// WHEN THE ESTIMATE WAS MADE, and when Buildertrend’s copy reached us.
+// Buildertrend keeps its worksheets as LINES, each with its own date; the
+// worksheet was made when its first line was, and estimate-match.js resolves
+// that to one date before it ever reaches here.
+// One writer for how these two print, shared with the jobs and leads lists:
+// bt-badge.js owns it, and it renders INSTANTS only (see the ledger in
+// test/calendar-dates-vs-instants.test.js). Nothing here is a DATE column.
+function estDate(v) { return window.p86BtBadge ? window.p86BtBadge.fmtDateInstant(v) : ''; }
+function estCreated(est) { return (window.p86BtBadge && window.p86BtBadge.createdInstant(est)) || null; }
+function estSynced(est) { return (window.p86BtBadge && window.p86BtBadge.syncedInstant(est)) || null; }
+
 function compareEstimates(a, b, key, dir) {
     var av, bv;
     var ta = a.__totals || {};
@@ -194,6 +205,19 @@ function compareEstimates(a, b, key, dir) {
         bv = (tb.markedUp || 0) > 0 ? ((tb.markedUp - tb.baseCost) / tb.markedUp) : 0;
     }
     else if (key === 'lines') { av = ta.lineCount || 0; bv = tb.lineCount || 0; }
+    else if (key === 'created_at') {
+        // Buildertrend’s own date when we have it. An estimate imported from
+        // Buildertrend has a created_at of the SYNC — 55 of 108 on the live org
+        // share one day — so ordering on that ranked them by import order.
+        // An estimate with no known date sorts LAST in BOTH directions rather
+        // than as 0, which would pile every unknown onto one end.
+        var ac = window.p86BtBadge ? window.p86BtBadge.createdSortKey(a) : null;
+        var bc = window.p86BtBadge ? window.p86BtBadge.createdSortKey(b) : null;
+        if (ac == null && bc == null) return 0;
+        if (ac == null) return 1;
+        if (bc == null) return -1;
+        av = ac; bv = bc;
+    }
     else if (key === 'updated_at') {
         av = a.updated_at ? new Date(a.updated_at).getTime() : 0;
         bv = b.updated_at ? new Date(b.updated_at).getTime() : 0;
@@ -224,7 +248,7 @@ function sortEstimatesBy(key) {
         // matches how a user usually wants to scan the list.
         _estimatesSort.dir = (key === 'baseCost' || key === 'markup' || key === 'clientPrice' ||
                               key === 'margin' || key === 'lines' || key === 'updated_at' ||
-                              key === 'sent_at' || key === 'status') ? 'desc' : 'asc';
+                              key === 'sent_at' || key === 'created_at' || key === 'status') ? 'desc' : 'asc';
     }
     renderEstimatesList();
 }
@@ -477,7 +501,11 @@ function matchesEstimateDrawer(e, d) {
     var mr = FD.resolveNumRange(d.margin);
     if (mr.min != null || mr.max != null) { var m = (t.markedUp > 0) ? ((t.markedUp - t.baseCost) / t.markedUp) * 100 : 0; if (mr.min != null && m < mr.min) return false; if (mr.max != null && m > mr.max) return false; }
     if (!estDateInRange(e.sent_at, FD.resolveDateRange(d.sent_at))) return false;
-    if (!estDateInRange(e.created_at, FD.resolveDateRange(d.created_at))) return false;
+    // The date the Created column shows and the comparator orders, not the
+    // raw column: 55 of 108 estimates on the live org carry the import day in
+    // created_at, so filtering on that asked a different question from the one
+    // the list answers.
+    if (!estDateInRange(estCreated(e) || e.created_at, FD.resolveDateRange(d.created_at))) return false;
     return true;
 }
 function updateEstFilterBtn() {
@@ -685,7 +713,9 @@ function p86EstExportSelected() {
                 Number(t.baseCost || 0), Number((t.blendedMarkup || 0).toFixed(1)),
                 Number(t.clientPrice || 0), Number(margin.toFixed(1)),
                 e.sent_at ? String(e.sent_at).slice(0, 10) : '',
-                e.created_at ? String(e.created_at).slice(0, 10) : '',
+                // The same date the Created column prints — a spreadsheet whose
+                // Created disagrees with the Created on screen is worse than none.
+                (function () { var ec = estCreated(e) || e.created_at; return ec ? String(ec).slice(0, 10) : ''; }()),
                 e.updated_at ? String(e.updated_at).slice(0, 10) : '',
                 e.id
             ]);
@@ -768,6 +798,7 @@ function renderEstimatesList() {
                 estimatesHeaderCell('Markup %',      'markup',      { num: true }) +
                 estimatesHeaderCell('Client Price',  'clientPrice', { num: true }) +
                 estimatesHeaderCell('Margin %',      'margin',      { num: true }) +
+                estimatesHeaderCell('Created',       'created_at') +
                 estimatesHeaderCell('Sent',          'sent_at') +
                 estimatesHeaderCell('Updated',       'updated_at');
 
@@ -782,7 +813,7 @@ function renderEstimatesList() {
                             // colspan tracks the Market column so the empty
                         // state still spans the full table on a
                         // multi-market org.
-                        '<tbody><tr><td colspan="' + (estMarketMulti() ? 12 : 11) + '" style="padding:24px;text-align:center;color:var(--text-dim,#888);">' + msg + '</td></tr></tbody>' +
+                        '<tbody><tr><td colspan="' + (estMarketMulti() ? 13 : 12) + '" style="padding:24px;text-align:center;color:var(--text-dim,#888);">' + msg + '</td></tr></tbody>' +
                         '</table>' +
                     '</div>';
                 return;
@@ -843,6 +874,9 @@ function renderEstimatesList() {
                     '<td data-col="markup" class="num" style="color:#fbbf24;">' + t.blendedMarkup.toFixed(1) + '%</td>' +
                     '<td data-col="clientPrice" class="num" style="color:#34d399;font-weight:600;">' + formatCurrency(t.clientPrice) + '</td>' +
                     '<td data-col="margin" class="num">' + marginCell + '</td>' +
+                    '<td data-col="created_at" style="white-space:nowrap;color:var(--text-dim,#888);"' + (estSynced(est) ? ' title="Synced from Buildertrend ' + escapeHTML(estDate(estSynced(est))) + '"' : '') + '>' +
+                        escapeHTML(estDate(estCreated(est))) +
+                    '</td>' +
                     '<td data-col="sent_at" style="white-space:nowrap;color:var(--text-dim,#888);" title="' + escapeHTML(est.sent_at || '') + '">' + sentCell + '</td>' +
                     '<td data-col="updated_at" style="white-space:nowrap;color:var(--text-dim,#888);" title="' + escapeHTML(est.updated_at || '') + '">' +
                         escapeHTML(fmtRelativeDate(est.updated_at)) +

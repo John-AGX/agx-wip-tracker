@@ -542,6 +542,10 @@ function readChangeOrder(rec) {
     totalPrice: r.totalPrice === undefined ? null : r.totalPrice,
     statusChangedDate: scalarText(r.statusChangedDate),
     statusChangedBy: scalarText(r.statusChangedBy),
+    // When Buildertrend made the change order. Allowlisted at the top of this
+    // file since the dataset was declared and never named here, so it was
+    // fetched, permitted and dropped — the same way the job's own date was.
+    dateAdded: scalarText(r.dateAdded),
     isDeleted: r.isDeleted === true,
   };
 }
@@ -563,6 +567,10 @@ function readPurchaseOrder(rec) {
     subName: scalarText(r.performingUserName),
     costCodes: Array.isArray(r.costCodes) ? r.costCodes.map(scalarText).filter((x) => x != null && x.trim() !== '') : [],
     estCompleteDate: scalarText(r.estCompleteDate),
+    // When Buildertrend made the purchase order — NOT estCompleteDate above,
+    // which is when the work on it is due. Allowlisted since the dataset was
+    // declared and never named here, so it was fetched, permitted and dropped.
+    dateAdded: scalarText(r.dateAdded),
     isDeleted: r.isDeleted === true,
     isRecalled: r.isRecalled === true,
   };

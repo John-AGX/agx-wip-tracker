@@ -1551,6 +1551,24 @@ async function initSchema() {
     -- what is stored here is the WORKSHEET id, never a line item id.
     ALTER TABLE estimates ADD COLUMN IF NOT EXISTS bt_worksheet_id TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_estimates_bt_worksheet_id ON estimates(bt_worksheet_id) WHERE bt_worksheet_id IS NOT NULL;
+    -- WHEN BUILDERTREND MADE THEM, on the four record types that hang off a
+    -- job, exactly as on jobs and leads above and for the same reason: a row
+    -- imported from Buildertrend has a created_at of the SYNC. Measured on the
+    -- live org — 50 of 58 change orders share one day, 41 of 97 purchase
+    -- orders, 31 of 43 bills, 55 of 108 estimates.
+    --
+    -- Buildertrend names the field differently per dataset (dateAdded on
+    -- change orders, purchase orders and estimate lines; createdDate on bills),
+    -- which is why services/clickr/sync-apply.js reads it through one accessor
+    -- rather than naming a key at each call site: a wrong guess is silent.
+    ALTER TABLE job_change_orders   ADD COLUMN IF NOT EXISTS bt_created_at TIMESTAMPTZ;
+    ALTER TABLE job_change_orders   ADD COLUMN IF NOT EXISTS bt_synced_at  TIMESTAMPTZ;
+    ALTER TABLE job_purchase_orders ADD COLUMN IF NOT EXISTS bt_created_at TIMESTAMPTZ;
+    ALTER TABLE job_purchase_orders ADD COLUMN IF NOT EXISTS bt_synced_at  TIMESTAMPTZ;
+    ALTER TABLE job_vendor_bills    ADD COLUMN IF NOT EXISTS bt_created_at TIMESTAMPTZ;
+    ALTER TABLE job_vendor_bills    ADD COLUMN IF NOT EXISTS bt_synced_at  TIMESTAMPTZ;
+    ALTER TABLE estimates           ADD COLUMN IF NOT EXISTS bt_created_at TIMESTAMPTZ;
+    ALTER TABLE estimates           ADD COLUMN IF NOT EXISTS bt_synced_at  TIMESTAMPTZ;
     -- Buildertrend reconcile archive (services/clickr/reconcile-merge.js): a merged
     -- duplicate or a P86-only record set aside for review. NULL = live. Archived
     -- leads and clients are left out of their list routes and the map; an archived

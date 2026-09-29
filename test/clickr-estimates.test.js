@@ -1618,3 +1618,60 @@ describe('the dataset is wired in everywhere a dataset has to be', () => {
     expect(routes).toContain('delete blob.bt_worksheet_id;');
   });
 });
+
+/* ── THE DATE BUILDERTREND MADE IT ───────────────────────────────────────
+ *
+ * A estimate imported from Buildertrend was dated the moment it was
+ * imported. Buildertrend sends the real date on every record, under
+ * `dateAdded`, and the fixtures above have carried it since they were
+ * written — nothing read it. These drive the real router and read the row.
+ */
+describe('the date Buildertrend made it', () => {
+  const dates = (id) => engine.db.prepare(
+    'SELECT bt_created_at, bt_synced_at FROM estimates WHERE id = ?').get(id);
+
+  test('a safe run records both dates on every confident match', async () => {
+    const before = engine.db.prepare('SELECT id FROM estimates WHERE bt_created_at IS NOT NULL').all();
+    expect(before).toEqual([]);
+    const r = await put(ADMIN, { mode: 'safe' });
+    expect(r.status).toBe(200);
+    const filled = engine.db.prepare('SELECT id, bt_created_at, bt_synced_at FROM estimates WHERE bt_created_at IS NOT NULL').all();
+    // EXACTLY the rows THIS RUN ran on, not "more than none" — a mutation
+    // showed length > 0 surviving the backfill being moved below the applier's
+    // early return, which is the state most already-imported records are in.
+    // The population comes from the run itself: an outcome of applied or
+    // unchanged means the applier reached the end for that row, so every one
+    // of them must carry the date. (Rows linked by an earlier test or by a
+    // create path are not in it — this run never touched them.)
+    const ran = (r.json.results || []).filter((x) => x.outcome === 'applied' || x.outcome === 'unchanged')
+      .map((x) => x.p86Id).filter(Boolean);
+    expect(ran.length).toBeGreaterThan(0);
+    const dated = new Set(filled.map((x) => x.id));
+    expect(ran.filter((id) => !dated.has(id))).toEqual([]);
+    for (const row of filled) {
+      expect(new Date(row.bt_created_at).toISOString()).toBe('2026-03-01T10:00:00.000Z');
+      expect(row.bt_synced_at).toBeTruthy();
+      // THE POINT: the two are months apart. Before this the only date on
+      // the row was the instant of the sync.
+      expect(Date.parse(row.bt_synced_at) - Date.parse(row.bt_created_at)).toBeGreaterThan(30 * 86400000);
+    }
+  });
+
+  test('a second pass writes nothing: the date is only ever FILLED', async () => {
+    await put(ADMIN, { mode: 'safe' });
+    const first = engine.db.prepare('SELECT id, bt_created_at, bt_synced_at FROM estimates WHERE bt_created_at IS NOT NULL ORDER BY id').all();
+    preview.forgetFetch(AGX);
+    await put(ADMIN, { mode: 'safe' });
+    const second = engine.db.prepare('SELECT id, bt_created_at, bt_synced_at FROM estimates WHERE bt_created_at IS NOT NULL ORDER BY id').all();
+    expect(second).toEqual(first);
+  });
+
+  test('a date already on the row is never overwritten', async () => {
+    const target = (await (async () => { await put(ADMIN, { mode: 'safe' }); return engine.db.prepare('SELECT id FROM estimates WHERE bt_created_at IS NOT NULL ORDER BY id').get(); })());
+    expect(target).toBeTruthy();
+    engine.db.prepare('UPDATE estimates SET bt_created_at = ? WHERE id = ?').run('2019-06-06T00:00:00.000Z', target.id);
+    preview.forgetFetch(AGX);
+    await put(ADMIN, { mode: 'safe' });
+    expect(new Date(dates(target.id).bt_created_at).toISOString()).toBe('2019-06-06T00:00:00.000Z');
+  });
+});

@@ -74,7 +74,13 @@ function shapeRow(r) {
     // The Buildertrend link, for the provenance mark (js/bt-badge.js).
     // Undefined rather than null when a door did not SELECT the column, so
     // that door renders no badge instead of asserting "Project 86 only".
-    bt_bill_id: r.bt_bill_id
+    bt_bill_id: r.bt_bill_id,
+    // When Buildertrend made it, and when its copy first reached us. The
+    // COLUMNS, never the blob: the sync owns them, and a client-supplied copy
+    // would let anyone date a record to anything. Undefined rather than null
+    // when a door did not SELECT them, same rule as the id above.
+    bt_created_at: r.bt_created_at,
+    bt_synced_at: r.bt_synced_at
   };
 }
 
@@ -86,7 +92,12 @@ function cleanData(body) {
    // Transport-only: the override flag is a request instruction, not a
    // field on the bill. Without this it lands in the data blob as junk
    // and, worse, sticks around to look like a standing permission.
-   'allow_overbill'].forEach((k) => delete data[k]);
+   'allow_overbill',
+   // The two Buildertrend dates ride OUT on every read of this record, so
+   // without this they ride back IN on the next save and sit in the blob as
+   // junk that shadows nothing and grows for ever. The sync owns them.
+   'bt_created_at', 'bt_synced_at',
+  ].forEach((k) => delete data[k]);
   // Do NOT force lines:[] here — the PUT merges this blob (data || $1), so an
   // injected empty lines would clobber a bill's real data.lines (e.g. future
   // OCR line items). Callers that need lines pass them explicitly.
@@ -106,7 +117,7 @@ async function nextBillNumber(orgId) {
 
 const SELECT_COLS = `b.id, b.job_id, b.owner_id, b.po_id, b.sub_id, b.status, b.bill_number,
   b.amount, b.bill_date, b.due_date, b.data, b.approved_at, b.approved_by, b.created_at, b.updated_at,
-  b.bt_bill_id`;
+  b.bt_bill_id, b.bt_created_at, b.bt_synced_at`;
 
 // ── per-job list ────────────────────────────────────────────────────
 router.get('/jobs/:jobId/bills', requireAuth, async (req, res) => {

@@ -120,6 +120,7 @@ const LEDGER = {
   'js/projects.js:fmtDate': { cal: false, pg: false, inst: true, why: 'photo.uploaded_at, TIMESTAMPTZ' },
   'js/proposal.js:formatDateShort': { cal: false, pg: false, inst: true, why: 'estimates has no DATE column; only timestamps reach it' },
   'js/proposal.js:formatDateLong': { cal: false, pg: false, inst: true, why: 'estimates has no DATE column; only timestamps reach it' },
+  'js/bt-badge.js:fmtDateInstant': { cal: false, pg: false, inst: true, why: 'the ONE writer for how a provenance date prints on the jobs, leads, change-order, purchase-order, bill and estimate lists. Its three inputs — bt_created_at, bt_synced_at, created_at — are TIMESTAMPTZ on every one of those tables (server/db.js); no DATE column reaches it, and the lists that DO render DATE columns beside it (a bill due_date, a lead projected_sale_date) keep their own fmtDate for those' },
 };
 
 // ── Lifting ──────────────────────────────────────────────────────────────

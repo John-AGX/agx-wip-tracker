@@ -93,7 +93,13 @@ function shapeRow(r) {
     // The Buildertrend link, for the provenance mark (js/bt-badge.js).
     // Undefined rather than null when a door did not SELECT the column, so
     // that door renders no badge instead of asserting "Project 86 only".
-    bt_co_id: r.bt_co_id
+    bt_co_id: r.bt_co_id,
+    // When Buildertrend made it, and when its copy first reached us. The
+    // COLUMNS, never the blob: the sync owns them, and a client-supplied copy
+    // would let anyone date a record to anything. Undefined rather than null
+    // when a door did not SELECT them, same rule as the id above.
+    bt_created_at: r.bt_created_at,
+    bt_synced_at: r.bt_synced_at
   };
 }
 
@@ -106,7 +112,8 @@ router.get('/jobs/:jobId/change-orders', requireAuth, async (req, res) => {
     if (!inOrg) return res.json({ change_orders: [] });
     const { rows } = await pool.query(
       `SELECT id, job_id, owner_id, status, co_number, data, approved_at,
-              approved_by, linked_node_id, is_locked, created_at, updated_at, bt_co_id
+              approved_by, linked_node_id, is_locked, created_at, updated_at, bt_co_id,
+              bt_created_at, bt_synced_at
        FROM job_change_orders
        WHERE job_id = $1
        ORDER BY updated_at DESC`,
@@ -167,7 +174,7 @@ router.get('/change-orders', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT co.id, co.job_id, co.owner_id, co.status, co.co_number, co.data,
               co.approved_at, co.approved_by, co.linked_node_id, co.is_locked, co.bt_co_id,
-              co.created_at, co.updated_at,
+              co.created_at, co.updated_at, co.bt_created_at, co.bt_synced_at,
               j.data->>'jobNumber' AS job_number,
               j.data->>'title'     AS job_title
          FROM job_change_orders co
@@ -196,7 +203,7 @@ router.get('/change-orders/:id', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT co.id, co.job_id, co.owner_id, co.status, co.co_number, co.data,
               co.approved_at, co.approved_by, co.linked_node_id, co.is_locked, co.bt_co_id,
-              co.created_at, co.updated_at
+              co.created_at, co.updated_at, co.bt_created_at, co.bt_synced_at
          FROM job_change_orders co
          JOIN jobs j ON j.id = co.job_id
         WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,

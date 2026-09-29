@@ -44,7 +44,25 @@ const TABLE = {
 // would be restoring a lie, and bt_synced_at is how sync-apply tells its own
 // rows from a person's — putting the old one back would hand a task it had
 // only just written back to the "a person wrote this" side of that test.
-const NOISE = new Set(['updated_at', 'bt_synced_at']);
+//
+// bt_created_at is the same kind of thing and was missed. It is the date
+// BUILDERTREND made the record, filled in passing by healBtDates while the
+// journal window is open (services/clickr/sync-apply.js), on rows the run
+// applied nothing else to — capture() runs for every result that is not
+// `skipped`, `unchanged` included. Without this line the first scheduled run
+// after the columns ship writes a change row per healed record — on the live
+// org 609 jobs, 911 leads, 50 change orders, 41 purchase orders, 31 bills and
+// 55 estimates — each attributing an edit to the sync on a record it did not
+// edit, drowning the real changes in the one run where they matter most, and
+// keeping otherwise-empty runs alive past dropEmptyRun. Undoing one would put
+// the NULL back, which is not a correction anybody wants.
+//
+// Safe to ignore because NOTHING ELSE WRITES IT: the two heal functions and
+// the create paths are the only writers (the creates journal the whole row as
+// a 'create', not per column), no editable allowlist carries it, and every
+// save path strips it from the blob. A person cannot change it, so there is
+// nothing of theirs to restore.
+const NOISE = new Set(['updated_at', 'bt_synced_at', 'bt_created_at']);
 
 function journalled(kind) {
   return Object.prototype.hasOwnProperty.call(TABLE, kind);

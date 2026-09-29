@@ -119,7 +119,13 @@ function shapeRow(r) {
     // The Buildertrend link, for the provenance mark. Undefined rather than
     // null when the caller's SELECT did not ask for the column, so a door
     // that does not carry it renders no badge instead of asserting "local".
-    bt_po_id: r.bt_po_id
+    bt_po_id: r.bt_po_id,
+    // When Buildertrend made it, and when its copy first reached us. The
+    // COLUMNS, never the blob: the sync owns them, and a client-supplied copy
+    // would let anyone date a record to anything. Undefined rather than null
+    // when a door did not SELECT them, same rule as the id above.
+    bt_created_at: r.bt_created_at,
+    bt_synced_at: r.bt_synced_at
   };
 }
 
@@ -135,6 +141,7 @@ router.get('/jobs/:jobId/purchase-orders', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT po.id, po.job_id, po.owner_id, po.sub_id, po.status, po.po_number,
               po.data, po.is_locked, po.approved_at, po.approved_by, po.created_at, po.updated_at, po.bt_po_id,
+              po.bt_created_at, po.bt_synced_at,
               s.name AS sub_name
          FROM job_purchase_orders po
          JOIN jobs j ON j.id = po.job_id
@@ -173,6 +180,7 @@ router.get('/purchase-orders', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT po.id, po.job_id, po.owner_id, po.sub_id, po.status, po.po_number,
               po.data, po.is_locked, po.approved_at, po.approved_by, po.created_at, po.updated_at, po.bt_po_id,
+              po.bt_created_at, po.bt_synced_at,
               j.data->>'jobNumber' AS job_number,
               j.data->>'title'     AS job_title,
               s.name AS sub_name
@@ -228,6 +236,7 @@ router.get('/purchase-orders/:id', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT po.id, po.job_id, po.owner_id, po.sub_id, po.status, po.po_number,
               po.data, po.is_locked, po.approved_at, po.approved_by, po.created_at, po.updated_at, po.bt_po_id,
+              po.bt_created_at, po.bt_synced_at,
               j.data->>'jobNumber' AS job_number,
               j.data->>'title'     AS job_title,
               s.name AS sub_name

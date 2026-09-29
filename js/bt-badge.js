@@ -250,7 +250,7 @@
   // TIMESTAMPTZ instants, so they go through new Date() and land in the
   // viewer’s own zone — unlike a DATE column, which must not shift (see
   // fmtDate in js/leads.js, which handles both kinds for its own feed).
-  function fmtInstant(v) {
+  function fmtDateInstant(v) {
     if (!v) return '';
     const d = new Date(v);
     return isNaN(d.getTime()) ? '' : d.toLocaleDateString();
@@ -258,7 +258,7 @@
 
   window.p86BtBadge = {
     createdInstant: createdInstant,
-    fmtInstant: fmtInstant,
+    fmtDateInstant: fmtDateInstant,
     syncedInstant: syncedInstant,
     createdSortKey: createdSortKey,
     state: state,
