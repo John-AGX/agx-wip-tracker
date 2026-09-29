@@ -526,9 +526,22 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.72';
+const APP_VERSION = '1.73';
 
 const releases = [
+  {
+    version: '1.73',
+    date: '2026-09-29',
+    name: 'Send the photos as a zip',
+    summary: 'A work order\u2019s photos and files download as one zip, already sorted into Before, After and Issues.',
+    changes: [
+      { type: 'new', text: 'Print / PDF on a work order has a third entry: Photos & files (.zip). It downloads everything on the work order as one archive, sorted into Before, After and Issues \u2014 plus a Documents folder for anything that is not a photograph. The folders are not a new guess: Before is the photos uploaded against the Before button, Issues is the photos on a problem your crew flagged, and After is the rest.' },
+      { type: 'new', text: 'Photos are grouped by building and numbered in order, so a recipient opening Before/ sees one building\u2019s shots together rather than everything interleaved. A short summary file at the top of the zip says what the work order was and how many photos are in each folder.' },
+      { type: 'new', text: 'RECEIPTS ARE NOT IN IT. The whole point of the zip is to send it to somebody, and a receipt is a picture of what things cost \u2014 so it is left out, and the summary file says so rather than letting you assume. If you need them (your own bookkeeper, say), there is a second entry that includes them, and it only appears for people who can already see money.' },
+      { type: 'improved', text: 'If a photo cannot be read from storage the rest of the export still comes, and the gap is marked in the archive instead of the file quietly not being there.' },
+      { type: 'fixed', text: 'The row of buttons under a work order\u2019s details \u2014 Share, Archive, Ask 86, Start change order, Print / PDF \u2014 drew on top of itself on a phone and ran off the edge of the screen. They were being squeezed into equal slices narrower than their own words. They now size to their text, wrap onto a second line when they need to, and are slimmer than they were.' },
+    ],
+  },
   {
     version: '1.72',
     date: '2026-09-29',

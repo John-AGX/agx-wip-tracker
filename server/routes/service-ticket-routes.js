@@ -2381,6 +2381,15 @@ billingRoutes.registerBillingRoutes(router, {
   ticketAccessOk,
 });
 
+// The zip export, here for the same reason: it reads the work order and its
+// buildings' photos, so it wants exactly this file's access rule and not a
+// second copy of it. '/:id/export.zip' is two segments, so it cannot be
+// swallowed by the '/:id' shapes above.
+require('./service-ticket-export-routes').registerExportRoutes(router, {
+  loadOwnedTicket,
+  ticketAccessOk,
+});
+
 // The crew-safe whitelist GET /my-buildings shapes every row through, so a
 // test asserts the key set without re-typing it (and a new column cannot be
 // added to the projection without the test noticing).

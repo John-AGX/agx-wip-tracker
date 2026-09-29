@@ -13886,9 +13886,30 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
   }
   #job-service-tickets .p86-st-meta:nth-child(1) .p86-st-meta-v select { flex: 1 1 auto; width: auto; }
 
-  /* Save / Share / Archive / Ask 86 sit right under the Details they save. */
+  /* Save / Share / Archive / Ask 86 sit right under the Details they save.
+     Then Start change order and Print / PDF register into the same row, and
+     the billing panel adds nothing here but the row still reached five.
+
+     `flex: 1 1 0` divided the row EQUALLY and `min-width: 0` let each share
+     shrink below its own text, so on a 375px phone five buttons got ~65px
+     each and "Start change order" and "Print / PDF" drew straight over their
+     neighbours (John's screenshot, 2026-09-29). flex-wrap was already on and
+     never fired, because a box that can shrink to nothing never needs to
+     wrap. Sizing to CONTENT is what makes wrapping happen.
+
+     They are slimmer too, which is the other half of what was asked: content
+     width instead of a full-width stretch, 13px, tighter padding. 40px of
+     height rather than 44 — still a comfortable target, and the bulk people
+     actually notice on this row is the width. */
   #job-service-tickets .p86-st-actions { flex-wrap: wrap; gap: 8px; margin: 0; }
-  #job-service-tickets .p86-st-actions .ee-btn { flex: 1 1 0; min-width: 0; min-height: 44px; font-size: 14px; justify-content: center; }
+  #job-service-tickets .p86-st-actions .ee-btn {
+    flex: 0 1 auto; min-width: 0; max-width: 100%;
+    min-height: 40px; padding: 0 12px; font-size: 13px;
+    justify-content: center;
+    /* Last line of defence: a label longer than the whole row ellipsises
+       instead of going back to drawing over the button beside it. */
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
   #job-service-tickets .p86-st-actions .p86-st-save { flex-basis: 100%; }
   #job-service-tickets .p86-st-share-panel { margin-top: 0; }
   #job-service-tickets .p86-st-share-form input,

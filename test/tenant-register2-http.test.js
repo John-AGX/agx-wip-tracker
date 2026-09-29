@@ -515,11 +515,16 @@ describe('REGISTER 2 — the route population', () => {
     //      deliberately NO share-link door among them. All five are writes or
     //      need a path parameter, so all five are waived here and driven by
     //      test/work-order-billing.test.js.
-    expect(R.routes).toBe(633);
+    //      633 -> 634: GET /api/service-tickets/:id/export.zip — the work
+    //      order’s photos and files as a zip, sorted into Before / After /
+    //      Issues. Office only, on the main ticket router so it inherits
+    //      that file’s access rule. It is a path-parameter GET, so it is
+    //      waived here and driven by test/work-order-export.test.js.
+    expect(R.routes).toBe(634);
     expect(R.routers).toBe(79);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (142 driven, 491 counted)', () => {
+  test('the DRIVEN / COUNTED-WAIVED split is committed (142 driven, 492 counted)', () => {
     // 466 -> 476: the ten Work Orders (1.30) routes above, every one waived.
     // 476 -> 477: POST /api/clients/merge, a write (see the note above).
     // 139 -> 141: the two Work Orders (1.33) reads above. Both are GETs with
@@ -532,7 +537,9 @@ describe('REGISTER 2 — the route population', () => {
     // 485 -> 486: the receipt door, a write (see the note above).
     // 486 -> 491: the five billing doors. GET /:id/billing takes a path
     // parameter, so even the read is waived and the driven side does not move.
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 142, waived: 491 });
+    // 491 -> 492: the zip export. A GET, but it takes :id, so the driven
+    // side does not move.
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 142, waived: 492 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

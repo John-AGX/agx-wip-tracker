@@ -1451,3 +1451,70 @@ describe('router and app.js', () => {
     expect(src).not.toMatch(/\/work-orders|Work Orders page|newest 200/);
   });
 });
+
+// ── THE ACTIONS ROW ON A PHONE ───────────────────────────────────────────
+// John, 2026-09-29, with a screenshot: "Can you fix the overlap on the
+// buttons and slim them up." Five buttons — Share, Archive, Ask 86, Start
+// change order, Print / PDF — were drawn over one another and ran off the
+// right edge of a 375px screen.
+//
+// The cause was 'flex: 1 1 0' with 'min-width: 0': every button took an
+// EQUAL share of the row and was allowed to shrink below its own text, so
+// five of them got about 65px each and the long labels spilled out of their
+// boxes. flex-wrap was already on and never fired — a box that can shrink to
+// nothing never needs to wrap.
+//
+// jsdom does no layout, so this reads the stylesheet. It is a weaker check
+// than measuring, and the measuring was done in a real browser at 375px
+// (no overlapping pairs, no clipped labels, three rows). What this keeps is
+// the RULE, because the rule is what somebody would change back.
+describe('the actions row wraps instead of overlapping', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'css', 'styles.css'), 'utf8');
+  const coCss = fs.readFileSync(path.join(__dirname, '..', 'css', 'service-ticket-co-print.css'), 'utf8');
+
+  function ruleFor(sheet, selector) {
+    const at = sheet.indexOf(selector);
+    expect([selector, at > 0]).toEqual([selector, true]);
+    return sheet.slice(at, sheet.indexOf('}', at));
+  }
+
+  test('buttons size to their CONTENT, so a row that does not fit wraps', () => {
+    const rule = ruleFor(css, '#job-service-tickets .p86-st-actions .ee-btn {');
+    expect(rule).toMatch(/flex:\s*0 1 auto/);
+    // The exact pair that caused it: 1 1 0 divides the row equally.
+    expect(rule).not.toMatch(/flex:\s*1 1 0/);
+    expect(ruleFor(css, '#job-service-tickets .p86-st-actions {')).toMatch(/flex-wrap:\s*wrap/);
+  });
+
+  test('and a label too long for the whole row ellipsises, never overlaps', () => {
+    const rule = ruleFor(css, '#job-service-tickets .p86-st-actions .ee-btn {');
+    expect(rule).toMatch(/overflow:\s*hidden/);
+    expect(rule).toMatch(/text-overflow:\s*ellipsis/);
+    expect(rule).toMatch(/max-width:\s*100%/);
+  });
+
+  test('they are slimmer than they were, and still a real touch target', () => {
+    const rule = ruleFor(css, '#job-service-tickets .p86-st-actions .ee-btn {');
+    const h = /min-height:\s*(\d+)px/.exec(rule);
+    expect(h).not.toBe(null);
+    expect(Number(h[1])).toBeLessThan(44);        // it was 44
+    expect(Number(h[1])).toBeGreaterThanOrEqual(40);
+    expect(rule).toMatch(/font-size:\s*13px/);
+  });
+
+  test('the two longest labels follow the same rule, in their own sheet', () => {
+    // Start change order and Print / PDF register into this row from
+    // css/service-ticket-co-print.css, and had their own 'flex: 1 1 0'.
+    // They carry the longest labels, so they overlapped first.
+    const rule = ruleFor(coCss, '#job-service-tickets .p86-st-actions .p86-st-print-wrap,');
+    expect(rule).toMatch(/flex:\s*0 1 auto/);
+    expect(coCss).not.toMatch(/\.p86-st-(print-wrap|co-start)[^{]*\{[^}]*flex:\s*1 1 0/);
+    const inner = ruleFor(coCss, '#job-service-tickets .p86-st-actions .p86-st-print-wrap .ee-btn {');
+    expect(inner).toMatch(/width:\s*auto/);       // was width: 100%
+  });
+
+  test('Save still takes the whole line — it is the primary', () => {
+    expect(ruleFor(css, '#job-service-tickets .p86-st-actions .p86-st-save {'))
+      .toMatch(/flex-basis:\s*100%/);
+  });
+});

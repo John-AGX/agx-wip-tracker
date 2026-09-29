@@ -114,13 +114,58 @@
     '</span>';
   }
 
+  // The zip lives in this menu rather than beside it because it is the same
+  // errand as the other two: getting the work order OUT, to send to somebody.
+  // A separate button would make it look like a different kind of thing.
+  //
+  // The receipts line only appears for somebody who can read money. The
+  // server refuses it either way (routes/service-ticket-export-routes.js), so
+  // this is not the guard — it is not offering people a door that will shut
+  // in their face.
   function menuHTML() {
     return '<div class="p86-st-print-menu" role="menu">' +
       '<button type="button" role="menuitem" class="p86-st-print-item" data-print="work_order">' +
         '<span class="p86-st-print-name">Work order</span> — <span class="p86-st-print-hint">for the crew, no prices</span></button>' +
       '<button type="button" role="menuitem" class="p86-st-print-item" data-print="completion">' +
         '<span class="p86-st-print-name">Completion report</span> — <span class="p86-st-print-hint">photos for the property manager</span></button>' +
+      '<button type="button" role="menuitem" class="p86-st-print-item" data-print="zip">' +
+        '<span class="p86-st-print-name">Photos &amp; files (.zip)</span> — <span class="p86-st-print-hint">sorted into before, after and issues</span></button>' +
+      (canSeeMoney()
+        ? '<button type="button" role="menuitem" class="p86-st-print-item" data-print="zip_receipts">' +
+            '<span class="p86-st-print-name">…including receipts</span> — <span class="p86-st-print-hint">shows what things cost</span></button>'
+        : '') +
     '</div>';
+  }
+
+  // Receipts are pictures of prices, so offering them is a money question.
+  // Fails CLOSED here (unlike jobEditable elsewhere, which fails open): the
+  // cost of hiding a menu line from somebody who could have used it is that
+  // they ask; the cost of showing it is a 403 that reads as a bug.
+  function canSeeMoney() {
+    try {
+      var a = window.p86Auth;
+      if (!a || typeof a.hasCapability !== 'function') return false;
+      return a.hasCapability('FINANCIALS_VIEW') || a.hasCapability('ESTIMATES_EDIT');
+    } catch (e) { return false; }
+  }
+
+  // A plain navigation, not a fetch: the archive is photographs and can run
+  // to hundreds of megabytes, so the browser streams it to disk instead of
+  // holding it in memory as a blob. The cookie the app sets on login carries
+  // the auth, so no token goes in the URL.
+  function downloadZip(ticketId, withReceipts) {
+    if (ticketId == null) return;
+    var url = '/api/service-tickets/' + encodeURIComponent(ticketId) + '/export.zip' +
+      (withReceipts ? '?receipts=1' : '');
+    var a = document.createElement('a');
+    a.href = url;
+    a.rel = 'noopener';
+    // No download= attribute: the server's Content-Disposition already names
+    // the file after the work order, and setting it here would override that
+    // with whatever this page guessed.
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }
 
   function closeMenus(root) {
@@ -778,7 +823,10 @@
         ev.preventDefault();
         closeMenus(d.ownerDocument);
         var t = live.t || {};
-        if (item.getAttribute('data-print') === 'work_order') openWorkOrder(t, live);
+        var what = item.getAttribute('data-print');
+        if (what === 'work_order') openWorkOrder(t, live);
+        else if (what === 'zip') downloadZip(t.id, false);
+        else if (what === 'zip_receipts') downloadZip(t.id, true);
         else openCompletionReport(t, !!live.canEdit, live);
         return;
       }
@@ -820,6 +868,8 @@
 
   var publicApi = {
     menuButtonHTML: menuButtonHTML,
+    menuHTML: menuHTML,
+    downloadZip: downloadZip,
     wire: wire,
     openWorkOrder: openWorkOrder,
     openCompletionReport: openCompletionReport,
@@ -851,7 +901,9 @@
         shareRowHTML: shareRowHTML,
         approvalLine: approvalLine,
         eventWhat: eventWhat,
-        menuHTML: menuHTML
+        menuHTML: menuHTML,
+        downloadZip: downloadZip,
+        canSeeMoney: canSeeMoney
       }
     };
   }

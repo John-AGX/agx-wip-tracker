@@ -433,6 +433,11 @@ const FULL_LEDGER = {
     why: 'Phase 3 field capture: the office list of time and material lines joins the building a line was sent against, for its title, matched on the line\'s own ticket and organization.',
     check: pinnedReads('the field-line join'),
   },
+  'server/services/service-ticket-export.js': {
+    kind: 'ticket-scoped',
+    why: 'The zip export reads THIS work order\'s buildings for their names, so a photo can say which building it came from and the folders group by it. Titles and ids only — never a list anybody reads as tasks.',
+    check: pinnedReads('the export building names'),
+  },
   'server/routes/service-ticket-field-routes.js': {
     kind: 'ticket-scoped',
     why: 'Phase 3 field capture: the ids of the buildings on THIS work order, so a retried crew Send answers with its building still named. Never a list anyone reads as tasks.',

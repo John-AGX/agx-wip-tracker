@@ -361,7 +361,13 @@ describe('registration and the Print / PDF menu', () => {
     const d = mountDetail(env, ctxFor(env.win));
     click(env.win, d.querySelector('.p86-st-print'));
     const items = Array.from(d.querySelectorAll('[data-print]')).map((b) => b.textContent);
-    expect(items).toEqual(['Work order — for the crew, no prices', 'Completion report — photos for the property manager']);
+    expect(items).toEqual([
+      'Work order — for the crew, no prices',
+      'Completion report — photos for the property manager',
+      // The zip export (2026-09-29). No receipts line here: this env has no
+      // p86Auth, and canSeeMoney fails closed.
+      'Photos & files (.zip) — sorted into before, after and issues',
+    ]);
     click(env.win, d.querySelector('[data-print="work_order"]'));
     // Synchronously, before the document has even been fetched.
     expect(env.win.open).toHaveBeenCalledTimes(1);
@@ -610,5 +616,117 @@ describe('house rules for this file', () => {
 
   test('CRLF on disk', () => {
     expect(PRINT_SRC.indexOf('\r\n')).toBeGreaterThan(-1);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * THE ZIP EXPORT IN THE PRINT MENU
+ * John, 2026-09-29: "export a service tickets files and photos to a zip
+ * folder ... so I can send the report and photos to someone." It sits in this
+ * menu because it is the same errand as the other two entries: getting the
+ * work order out to somebody.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('the zip export entry', () => {
+  const T = pure();
+
+  afterEach(() => { delete global.window; });
+
+  function withCaps(caps) {
+    global.window = { p86Auth: { hasCapability: (k) => caps.indexOf(k) >= 0 } };
+  }
+
+  test('the menu offers it, and says what the sorting is', () => {
+    withCaps([]);
+    const html = T.menuHTML();
+    expect(html).toContain('data-print="zip"');
+    expect(html).toContain('Photos &amp; files (.zip)');
+    expect(html).toContain('sorted into before, after and issues');
+  });
+
+  test('receipts are NOT offered to somebody who cannot read money', () => {
+    withCaps(['JOBS_VIEW_ALL']);
+    const html = T.menuHTML();
+    expect(html).toContain('data-print="zip"');
+    expect(html).not.toContain('data-print="zip_receipts"');
+    expect(html).not.toMatch(/receipt/i);
+  });
+
+  test('and are, to somebody who can — with the reason on the line', () => {
+    withCaps(['FINANCIALS_VIEW']);
+    const html = T.menuHTML();
+    expect(html).toContain('data-print="zip_receipts"');
+    expect(html).toContain('shows what things cost');
+    withCaps(['ESTIMATES_EDIT']);
+    expect(T.menuHTML()).toContain('data-print="zip_receipts"');
+  });
+
+  test('with no auth object at all it fails CLOSED', () => {
+    // A 403 that reads as a bug is worse than a line somebody has to ask for.
+    global.window = {};
+    expect(T.menuHTML()).not.toContain('zip_receipts');
+    global.window = { p86Auth: {} };
+    expect(T.menuHTML()).not.toContain('zip_receipts');
+  });
+});
+
+describe('downloading the zip', () => {
+  const T = pure();
+  let dom;
+
+  beforeEach(() => {
+    dom = new JSDOM('<!doctype html><body></body>');
+    global.window = dom.window;
+    global.document = dom.window.document;
+  });
+  afterEach(() => { delete global.window; delete global.document; });
+
+  function clicked(fn) {
+    const seen = [];
+    const realClick = dom.window.HTMLAnchorElement.prototype.click;
+    dom.window.HTMLAnchorElement.prototype.click = function () {
+      seen.push({ href: this.getAttribute('href'), download: this.getAttribute('download'), rel: this.rel });
+    };
+    try { fn(); } finally { dom.window.HTMLAnchorElement.prototype.click = realClick; }
+    return seen;
+  }
+
+  test('it is a NAVIGATION, so the browser streams it to disk', () => {
+    // Not a fetch: the archive is photographs and runs to hundreds of
+    // megabytes. A blob would hold the whole thing in memory first.
+    const seen = clicked(() => T.downloadZip('st_a', false));
+    expect(seen).toHaveLength(1);
+    expect(seen[0].href).toBe('/api/service-tickets/st_a/export.zip');
+  });
+
+  test('receipts ride as a query flag, and the server still decides', () => {
+    const seen = clicked(() => T.downloadZip('st_a', true));
+    expect(seen[0].href).toBe('/api/service-tickets/st_a/export.zip?receipts=1');
+  });
+
+  test('no download attribute — the SERVER names the file', () => {
+    // Content-Disposition names it after the work order. A download= here
+    // would override that with whatever this page guessed.
+    const seen = clicked(() => T.downloadZip('st_a', false));
+    expect(seen[0].download).toBe(null);
+  });
+
+  test('the id is encoded, so it cannot escape the path', () => {
+    const seen = clicked(() => T.downloadZip('a/../b?x=1', false));
+    expect(seen[0].href).toBe('/api/service-tickets/a%2F..%2Fb%3Fx%3D1/export.zip');
+  });
+
+  test('no id, no navigation', () => {
+    expect(clicked(() => T.downloadZip(null, false))).toEqual([]);
+    expect(clicked(() => T.downloadZip(undefined, true))).toEqual([]);
+  });
+
+  test('the anchor does not outlive the click', () => {
+    clicked(() => T.downloadZip('st_a', false));
+    expect(dom.window.document.body.querySelectorAll('a')).toHaveLength(0);
+  });
+
+  test('no token is put in the URL — the login cookie carries the auth', () => {
+    const seen = clicked(() => T.downloadZip('st_a', true));
+    expect(seen[0].href).not.toMatch(/token|jwt|bearer|auth=/i);
   });
 });

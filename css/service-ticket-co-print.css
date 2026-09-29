@@ -190,9 +190,13 @@ span.p86-st-co-src.is-linked { cursor: default; }
 
 /* ── phones ────────────────────────────────────────────────────────────── */
 @media (max-width: 760px) {
+  /* Sized to their text and allowed to wrap, matching the rule the rest of
+     this row follows in css/styles.css. These two carry the LONGEST labels
+     on it ("Start change order", "Print / PDF"), so the old `flex: 1 1 0`
+     equal-share made them the two that overlapped first. */
   #job-service-tickets .p86-st-actions .p86-st-print-wrap,
-  #job-service-tickets .p86-st-actions .p86-st-co-start { flex: 1 1 0; min-width: 0; }
-  #job-service-tickets .p86-st-actions .p86-st-print-wrap .ee-btn { flex: 1 1 auto; width: 100%; }
+  #job-service-tickets .p86-st-actions .p86-st-co-start { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+  #job-service-tickets .p86-st-actions .p86-st-print-wrap .ee-btn { flex: 0 1 auto; width: auto; max-width: 100%; }
   .p86-st-print-menu { right: auto; left: 0; }
 }
 @media (max-width: 480px) {
