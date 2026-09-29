@@ -185,3 +185,47 @@ describe('the two dates reach the client at all', () => {
     expect(allow).not.toContain('bt_');
   });
 });
+
+describe('a new column has to reach the people who already use the list', () => {
+  /* THE TRAP THIS FILE'S OWN CODE NAMES.
+   *
+   * The Leads list keeps its visible columns in localStorage, and a saved set
+   * out-ranks the registry. Everyone who has ever opened the page has one. So
+   * adding Synced to LEAD_COLS shipped it to nobody — checked on the live
+   * list, where the column was in the code and not on the page. js/leads.js
+   * says this in as many words about the Market column, one block above.
+   */
+  const src = read('js/leads.js').replace(/\r\n/g, '\n');
+  const restore = src.slice(src.indexOf('function restoreLeadCols()'),
+    src.indexOf('var _isTerminalLead'));
+
+  test('the registry alone is not enough — there is a one-time upgrade', () => {
+    expect(restore).toContain("_leadCols.indexOf('bt_synced_at') === -1");
+    expect(liveLines(restore, "_leadCols.splice(_leadCols.indexOf('created_at') + 1, 0, 'bt_synced_at')").length).toBe(1);
+    expect(liveLine(restore, 'persistLeadCols();')).toBe(true);
+  });
+
+  test('it runs ONCE, under its own flag, so removing the column sticks', () => {
+    // Without the flag the column comes back on every page load and the
+    // person can never get rid of it.
+    expect(restore).toContain("'p86-leads-cols-syncv1'");
+    expect(liveLines(restore, "localStorage.setItem('p86-leads-cols-syncv1', '1')").length).toBe(1);
+    // and it must not borrow the Market column's flag, which is already set
+    // for every existing user — the upgrade would never run at all.
+    const at = restore.indexOf("indexOf('bt_synced_at')");
+    expect(restore.slice(0, at)).toContain("!localStorage.getItem('p86-leads-cols-syncv1')");
+  });
+
+  test('only where Created is already shown, and never added to the defaults', () => {
+    // Synced answers a question about a date that is already on screen. In an
+    // organisation with no Buildertrend it is a column of blanks.
+    expect(restore).toContain("_leadCols.indexOf('created_at') >= 0");
+    const defaults = src.slice(src.indexOf('var LEADS_DEFAULT_COLS = '), src.indexOf('\n', src.indexOf('var LEADS_DEFAULT_COLS = ')));
+    expect(defaults).not.toContain('bt_synced_at');
+  });
+
+  test('the column is in the registry, so the picker can offer it', () => {
+    const cols = src.slice(src.indexOf('var LEAD_COLS'), src.indexOf('var LEADS_DEFAULT_COLS'));
+    expect(cols).toContain("{ key: 'bt_synced_at', label: 'Synced', sort: true }");
+  });
+});

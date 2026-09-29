@@ -1653,3 +1653,120 @@ describe('RUN SYNC NOW', () => {
     expect((await put(RUN, ADMIN, {})).status).toBe(409);
   });
 });
+
+/* ── THE TWO BUILDERTREND DATES, driven end to end ───────────────────────
+ * Everything else about this fix is covered by reading the source, which
+ * says only that the SQL is written down. These drive the real router, the
+ * real matcher and the real schema, so they say the row actually moves.
+ *
+ * jobRec/leadRec above carry Buildertrend's createdDate on every record
+ * (2025-01-02 and 2026-04-03). Nothing was reading it until this change.
+ */
+describe('the date Buildertrend made it', () => {
+  const dates = (t, id) => engine.db.prepare('SELECT bt_created_at, bt_synced_at, created_at FROM ' + t + ' WHERE id = ?').get(id);
+
+  test('a safe run records both dates on a job it links', async () => {
+    expect(dates('jobs', 'j-1').bt_created_at).toBeNull();
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    const d = dates('jobs', 'j-1');
+    expect(new Date(d.bt_created_at).toISOString()).toBe('2025-01-02T15:00:00.000Z');
+    expect(d.bt_synced_at).toBeTruthy();
+    // THE POINT: the two are years apart. Before this, the only date on the
+    // row was the instant of the sync, so every imported job read as made
+    // today and an age sort ranked them by import order.
+    expect(Date.parse(d.bt_synced_at) - Date.parse(d.bt_created_at)).toBeGreaterThan(365 * 86400000);
+  });
+
+  test('it reaches a job with NOTHING to apply', async () => {
+    // The whole point of the backfill, and the reason it sits above the
+    // "nothing to correct" early return: a job long since in step with
+    // Buildertrend offers no field, and every one of the 687 already
+    // imported is in exactly that state. `fields: []` is this suite's way of
+    // saying "apply no field at all".
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+    expect(r.status).toBe(200);
+    expect(r.json.counts.applied + r.json.counts.unchanged).toBe(1);
+    expect(new Date(dates('jobs', 'j-1').bt_created_at).toISOString()).toBe('2025-01-02T15:00:00.000Z');
+  });
+
+  test('a second pass writes nothing: the date is only ever FILLED', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    const first = dates('jobs', 'j-1');
+    preview.forgetFetch(AGX);
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    const second = dates('jobs', 'j-1');
+    expect(second.bt_created_at).toBe(first.bt_created_at);
+    expect(second.bt_synced_at).toBe(first.bt_synced_at);
+  });
+
+  test('a record whose date arrives LATE keeps the day it first reached us', async () => {
+    // The one path where the backfill meets a row that already has a sync
+    // stamp, and the only reason bt_synced_at is COALESCE'd rather than set:
+    // a job the sync CREATED while Buildertrend had no usable date for it
+    // carries bt_synced_at from birth and bt_created_at NULL. When the date
+    // later turns up, the heal fires — and "when Buildertrend's copy first
+    // reached us" must not move to today.
+    const rec = BT_JOBS.find((j) => j.jobId === 446);
+    const keep = rec.createdDate;
+    try {
+      rec.createdDate = '0001-01-01T00:00:00';
+      await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create', btIds: ['446'] });
+      const born = engine.db.prepare("SELECT id, bt_created_at, bt_synced_at FROM jobs WHERE bt_job_id = '446'").get();
+      expect(born.bt_created_at).toBeNull();
+      expect(born.bt_synced_at).toBeTruthy();
+      // A day passes, and Buildertrend now has the real date.
+      engine.db.prepare('UPDATE jobs SET bt_synced_at = ? WHERE id = ?').run('2026-01-05T09:00:00.000Z', born.id);
+      rec.createdDate = keep;
+      preview.forgetFetch(AGX);
+      await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['446'], fields: [] });
+      const healed = engine.db.prepare('SELECT bt_created_at, bt_synced_at FROM jobs WHERE id = ?').get(born.id);
+      expect(new Date(healed.bt_created_at).toISOString()).toBe('2025-01-02T15:00:00.000Z');
+      expect(new Date(healed.bt_synced_at).toISOString()).toBe('2026-01-05T09:00:00.000Z');
+    } finally { rec.createdDate = keep; }
+  });
+
+  test('a date already on the row is never overwritten, even by a different one', async () => {
+    engine.db.prepare("UPDATE jobs SET bt_created_at = '2019-06-06T00:00:00.000Z' WHERE id = 'j-1'").run();
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    expect(new Date(dates('jobs', 'j-1').bt_created_at).toISOString()).toBe('2019-06-06T00:00:00.000Z');
+  });
+
+  test('a job Buildertrend gives no usable date for stays NULL, never "now"', async () => {
+    // A fallback to the current moment is the defect this column exists to
+    // fix, and it would be invisible — "now" always looks like a real date.
+    const rec = BT_JOBS.find((j) => j.jobId === 111);
+    const keep = rec.createdDate;
+    for (const bad of ['', 'not a date', '0001-01-01T00:00:00', '1900-01-01']) {
+      seed();
+      preview.forgetFetch(AGX);
+      rec.createdDate = bad;
+      await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+      expect(dates('jobs', 'j-1').bt_created_at).toBeNull();
+    }
+    rec.createdDate = keep;
+  });
+
+  test('a job the sync CREATES carries both dates from birth', async () => {
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create', btIds: ['446'] });
+    expect(r.status).toBe(200);
+    const made = engine.db.prepare("SELECT id, bt_created_at, bt_synced_at FROM jobs WHERE bt_job_id = '446'").get();
+    expect(made).toBeTruthy();
+    expect(new Date(made.bt_created_at).toISOString()).toBe('2025-01-02T15:00:00.000Z');
+    expect(made.bt_synced_at).toBeTruthy();
+  });
+
+  test('a lead is treated exactly the same way', async () => {
+    expect(dates('leads', 'l-1').bt_created_at).toBeNull();
+    await put(APPLY, ADMIN, { dataset: 'leads', btIds: ['555'], fields: [] });
+    const d = dates('leads', 'l-1');
+    expect(new Date(d.bt_created_at).toISOString()).toBe('2026-04-03T12:00:00.000Z');
+    expect(d.bt_synced_at).toBeTruthy();
+  });
+
+  test('the other tenant’s twin is never dated by our sync', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    await put(APPLY, ADMIN, { dataset: 'leads', mode: 'safe' });
+    expect(dates('jobs', 'j-b').bt_created_at).toBeNull();
+    expect(dates('leads', 'l-b').bt_created_at).toBeNull();
+  });
+});

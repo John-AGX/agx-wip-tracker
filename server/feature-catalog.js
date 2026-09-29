@@ -526,9 +526,18 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.73';
+const APP_VERSION = '1.74';
 
 const releases = [
+  {
+    version: '1.74',
+    date: '2026-09-29',
+    name: 'The Synced column on Leads actually appears',
+    summary: '1.71 said the leads list had a new Synced column. It did not — the column existed in the code and reached nobody.',
+    changes: [
+      { type: 'fixed', text: 'The leads list remembers which columns you have chosen, and what you have chosen outranks anything added later — so a new column ships to people who have never opened the list, which is nobody who uses it. Synced now appears once, next to Created, for anyone whose list already shows Created. Hide it and it stays hidden; it is not forced back on the next time you load the page.' },
+    ],
+  },
   {
     version: '1.73',
     date: '2026-09-29',

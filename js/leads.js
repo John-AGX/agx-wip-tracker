@@ -262,6 +262,25 @@ function p86Ask(message, opts) {
         localStorage.setItem('p86-leads-cols-mktv1', '1');
       }
     } catch (e) {}
+    // The SAME trap, for the Synced column. Adding it to LEAD_COLS alone
+    // shipped it to nobody: every person who has ever opened this list has a
+    // saved set, and a saved set out-ranks the registry. Checked on the live
+    // list — the column was in the code and not on the page.
+    //
+    // Only where Created is already shown, and never added to the defaults.
+    // Synced answers "when did Buildertrend's copy reach us", which is a
+    // question about a date that is already on screen; beside a list with no
+    // Created column, and in an organisation with no Buildertrend at all, it
+    // is a column of blanks. Flagged, so removing it keeps it removed.
+    try {
+      if (!localStorage.getItem('p86-leads-cols-syncv1')) {
+        if (_leadCols && _leadCols.indexOf('created_at') >= 0 && _leadCols.indexOf('bt_synced_at') === -1) {
+          _leadCols.splice(_leadCols.indexOf('created_at') + 1, 0, 'bt_synced_at');
+          persistLeadCols();
+        }
+        localStorage.setItem('p86-leads-cols-syncv1', '1');
+      }
+    } catch (e) {}
   }
   var _isTerminalLead = function (l) { return ['sold', 'lost', 'no_opportunity'].indexOf(l.status) !== -1; };
   var _overdueDate = function (val, active) { if (!val) return false; var t = new Date(val).getTime(); return active && !isNaN(t) && t < Date.now() - 86400000; };
