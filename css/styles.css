@@ -12573,6 +12573,12 @@ body.light-mode .jobs-more-ic { background: rgba(37, 99, 235, 0.1); color: #2563
      class, because display !important above beats its inline style). */
   #jobs-table td.job-check-cell,
   #jobs-table td.is-col-off { display: none !important; }
+  /* Created / Synced are desk questions, and every cell on this card is
+     placed by an explicit `order` — a cell with none defaults to 0 and
+     would land ABOVE the job name. Hidden rather than squeezed in: the
+     card is deliberately three lines of money and status. */
+  #jobs-table td[data-col="created"],
+  #jobs-table td[data-col="synced"] { display: none !important; }
 
   /* Line 1 — the job, and where it stands. */
   #jobs-table td[data-col="name"] {

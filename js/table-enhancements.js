@@ -43,7 +43,8 @@
       frozen: 'name',
       frozenBg: 'var(--bg,#101014)',
       widths: { idx: 50, name: 320, client: 200, pm: 170, status: 130,
-                contract: 150, pctcomplete: 150, profit: 150, margin: 110 }
+                contract: 150, pctcomplete: 150, profit: 150, margin: 110,
+                created: 110, synced: 110 }
     },
     estimates: {
       selector: '#estimates-list table',

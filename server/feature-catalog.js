@@ -526,9 +526,19 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.71';
+const APP_VERSION = '1.72';
 
 const releases = [
+  {
+    version: '1.72',
+    date: '2026-09-29',
+    name: 'The jobs list can be sorted by age',
+    summary: 'Two new columns on the jobs list: when the job was created, and when Buildertrend’s copy of it reached us.',
+    changes: [
+      { type: 'new', text: 'Created and Synced on the jobs list, both sortable. Created is the date the job was raised in whichever system raised it — Buildertrend’s own date for a job that came from there, ours for a job started in Project 86 — so the two kinds sit in one chronology. Synced is when Buildertrend’s copy first reached us. Hovering Created also shows the sync date.' },
+      { type: 'improved', text: 'A job whose date we do not have sorts to the bottom of the list in both directions rather than pretending to be the oldest job on the books. Both columns can be moved, resized or pinned like any other, and neither appears on a phone, where the job card stays the three lines of money and status it has been.' },
+    ],
+  },
   {
     version: '1.71',
     date: '2026-09-29',

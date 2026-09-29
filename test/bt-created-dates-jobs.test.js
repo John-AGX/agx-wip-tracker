@@ -1,0 +1,187 @@
+/**
+ * @jest-environment jsdom
+ */
+/* ──────────────────────────────────────────────────────────────────────────
+ * THE JOBS LIST HAD NO DATE COLUMN AT ALL.
+ *
+ * 687 jobs and no way to ask which are old. The reason it was never added is
+ * that the only date available was created_at, and on an imported job that is
+ * the instant of the sync: 609 of 687 carried 2026-09-25. A "Created" column
+ * built on it would have sorted the list by the order we fetched it.
+ *
+ * With bt_created_at on the row the column means something, so this covers
+ * the two it adds, what they read, how they sort, and the one thing a new
+ * cell breaks on a phone.
+ * ────────────────────────────────────────────────────────────────────────── */
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const { extractFunction, compile } = require('./helpers/browser-fn');
+const { liveLine, liveLines } = require('./helpers/live-line');
+
+const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
+
+describe('the two columns exist and are sortable', () => {
+  const html = read('index.html');
+  const head = html.slice(html.indexOf('<table id="jobs-table">'), html.indexOf('<tbody></tbody>', html.indexOf('<table id="jobs-table">')));
+
+  test('each has a header, a data-col and a sort handler', () => {
+    for (const key of ['created', 'synced']) {
+      expect(head).toContain('data-col="' + key + '"');
+      expect(head).toContain('data-sort="' + key + '"');
+      expect(head).toContain("sortJobsTable('" + key + "')");
+    }
+  });
+
+  test('the row emits a cell for each, so enhance() can reorder them', () => {
+    // table-enhancements.js pairs <th> to <td> by data-col and SKIPS a row
+    // without a full set. A header with no cell silently disables reordering
+    // for the whole table rather than erroring.
+    const src = read('js/jobs.js');
+    for (const key of ['created', 'synced']) {
+      expect(src).toContain('<td data-col="' + key + '"');
+    }
+  });
+
+  test('each has a default width', () => {
+    const src = read('js/table-enhancements.js');
+    const jobs = src.slice(src.indexOf('jobs: {'), src.indexOf('estimates: {'));
+    expect(jobs).toContain('created: 110');
+    expect(jobs).toContain('synced: 110');
+  });
+});
+
+describe('what the cells read', () => {
+  let jobCreated, jobSynced;
+  beforeAll(() => {
+    window.eval(read('js/bt-badge.js'));
+    const src = read('js/jobs.js');
+    const sources = [extractFunction(src, 'jobCreated'), extractFunction(src, 'jobSynced')];
+    jobCreated = compile(sources, ['window'], [window], 'jobCreated');
+    jobSynced = compile(sources, ['window'], [window], 'jobSynced');
+  });
+
+  test('Buildertrend’s date wins over the date of the sync', () => {
+    expect(jobCreated({ bt_job_id: '1', bt_created_at: '2025-02-01T18:05:21Z', created_at: '2026-09-25T12:13:34Z' }))
+      .toBe('2025-02-01T18:05:21Z');
+  });
+
+  test('a job made in Project 86 keeps its own date', () => {
+    expect(jobCreated({ created_at: '2026-03-04T00:00:00Z' })).toBe('2026-03-04T00:00:00Z');
+  });
+
+  test('a job synced before the columns existed still shows a date', () => {
+    expect(jobCreated({ bt_job_id: '1', created_at: '2026-09-25T12:13:34Z' })).toBe('2026-09-25T12:13:34Z');
+  });
+
+  test('Synced is null when nothing was ever synced, not the creation date', () => {
+    expect(jobSynced({ created_at: '2026-03-04T00:00:00Z' })).toBeNull();
+    expect(jobSynced({ bt_synced_at: '2026-09-25T12:00:00Z' })).toBe('2026-09-25T12:00:00Z');
+  });
+});
+
+describe('how the two columns sort', () => {
+  let cmp;
+  let jobCreated;
+  beforeAll(() => {
+    window.eval(read('js/bt-badge.js'));
+    const src = read('js/jobs.js');
+    const sources = [extractFunction(src, 'jobCreated'), extractFunction(src, 'jobDateCompare')];
+    cmp = compile(sources, ['window'], [window], 'jobDateCompare');
+    jobCreated = compile(sources, ['window'], [window], 'jobCreated');
+  });
+
+  test('imported jobs spread out instead of clumping on the import date', () => {
+    // Three jobs from one sync. On created_at they are one instant apart at
+    // most and the order is meaningless; on Buildertrend’s date they are a
+    // year and a half apart.
+    const synced = '2026-09-25T12:13:34Z';
+    const jobs = [
+      { id: 'c', bt_created_at: '2026-01-10T00:00:00Z', created_at: synced },
+      { id: 'a', bt_created_at: '2024-12-12T13:09:42Z', created_at: synced },
+      { id: 'b', bt_created_at: '2025-06-02T00:00:00Z', created_at: synced },
+    ];
+    const asc = jobs.slice().sort((a, b) => cmp(a, b, jobCreated, 1)).map((j) => j.id);
+    expect(asc).toEqual(['a', 'b', 'c']);
+    expect(jobs.slice().sort((a, b) => cmp(a, b, jobCreated, -1)).map((j) => j.id)).toEqual(['c', 'b', 'a']);
+    expect(new Set(jobs.map((j) => j.created_at)).size).toBe(1);
+  });
+
+  test('a job with no date sorts LAST in BOTH directions', () => {
+    // The defect this replaces: an unknown read as 0 and every one of them
+    // piled onto the oldest end ascending and the newest end descending.
+    const known = { bt_created_at: '2025-01-01T00:00:00Z' };
+    const unknown = {};
+    expect(cmp(known, unknown, jobCreated, 1)).toBeLessThan(0);
+    expect(cmp(unknown, known, jobCreated, 1)).toBeGreaterThan(0);
+    expect(cmp(known, unknown, jobCreated, -1)).toBeLessThan(0);
+    expect(cmp(unknown, known, jobCreated, -1)).toBeGreaterThan(0);
+    expect(cmp(unknown, {}, jobCreated, 1)).toBe(0);
+  });
+});
+
+describe('the phone card', () => {
+  test('hides both, because a cell with no order lands above the job name', () => {
+    // Every cell on the card is placed by an explicit `order`; the default is
+    // 0, which is ahead of the job name at 10. A new column that only added a
+    // <td> would have rewritten the card that shipped in 1.70.
+    // The repo is CRLF, so a needle anchored on \n finds nothing and
+    // slice(-1) then hands back the last character of the file — a test that
+    // passes vacuously in both directions. Normalise before looking.
+    const css = read('css/styles.css').replace(/\r\n/g, '\n');
+    const start = css.indexOf('@media (max-width: 640px) {\n  #jobs-table {');
+    expect(start).toBeGreaterThan(-1);
+    const phone = css.slice(start);
+    const at = phone.indexOf('#jobs-table td[data-col="created"]');
+    expect(at).toBeGreaterThan(-1);
+    expect(phone.slice(at, at + 160)).toContain('display: none !important');
+    expect(phone.slice(at, at + 160)).toContain('#jobs-table td[data-col="synced"]');
+    // and nothing gave either of them an order, which would contradict that
+    for (const key of ['created', 'synced']) {
+      const orderAt = phone.indexOf('#jobs-table td[data-col="' + key + '"] { order:');
+      expect(orderAt).toBe(-1);
+    }
+  });
+});
+
+describe('the two dates reach the client at all', () => {
+  const src = read('server/routes/job-routes.js');
+  const list = src.slice(src.indexOf("router.get('/', requireAuth"), src.indexOf("res.json({ jobs: result })"));
+
+  test('the list selects and returns them', () => {
+    expect(liveLine(list, 'j.bt_created_at, j.bt_synced_at,')).toBe(true);
+    for (const frag of ['bt_created_at: j.bt_created_at || null',
+      'bt_synced_at: j.bt_synced_at || null',
+      'created_at: j.created_at || null']) {
+      expect(liveLines(list, frag).length).toBe(1);
+    }
+  });
+
+  test('they are read off the COLUMN, never the blob', () => {
+    // The spread of j.data comes FIRST, so a copy that crept into the JSONB
+    // cannot shadow the column — same rule as bt_job_id beside it.
+    const spread = list.indexOf('...j.data');
+    expect(spread).toBeGreaterThan(-1);
+    expect(list.indexOf('bt_created_at: j.bt_created_at')).toBeGreaterThan(spread);
+  });
+
+  test('a bulk save cannot round-trip them back into the blob', () => {
+    // They ride OUT on the GET, so without this they ride back IN on the next
+    // save and a client could set any of the three to anything it liked.
+    //
+    // liveLine, not toContain: a commented-out `delete` still contains the
+    // text. Mutation-checked — toContain passed with the line disabled.
+    for (const key of ['bt_created_at', 'bt_synced_at', 'created_at']) {
+      expect(liveLine(src, 'delete jobBlob.' + key + ';')).toBe(true);
+    }
+  });
+
+  test('the leads list needs no such change — it selects l.*', () => {
+    const leads = read('server/routes/lead-routes.js');
+    expect(leads).toContain('l.*,');
+    // and bt_* is not in the editable allowlist, so a PUT cannot set it
+    const allow = leads.slice(leads.indexOf('const EDITABLE_FIELDS = ['), leads.indexOf('];', leads.indexOf('const EDITABLE_FIELDS = [')));
+    expect(allow).not.toContain('bt_');
+  });
+});

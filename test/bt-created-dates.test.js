@@ -22,6 +22,9 @@ const path = require('path');
 const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 const btMatch = require('../server/services/clickr/bt-match');
 const fieldMap = require('../server/services/clickr/field-map');
+// A needle that a COMMENTED-OUT line satisfies proves nothing about the code
+// that runs; see test/helpers/live-line.js.
+const { liveLine, liveLines } = require('./helpers/live-line');
 
 describe('reading a Buildertrend date', () => {
   const t = btMatch.btInstant;
@@ -64,21 +67,21 @@ describe('the three layers that were dropping the job’s date', () => {
   test('layer 2: the matcher’s enumerated job view carries it', () => {
     // That view is built by naming fields one at a time; a key missing from it
     // is read and thrown away again, which is what happened here.
-    const src = read('server/services/clickr/bt-match.js');
+    const src = read('server/services/clickr/bt-match.js').replace(/\r\n/g, '\n');
     const at = src.indexOf('projectedStart: str(v.projectedStart)');
     expect(at).toBeGreaterThan(-1);
-    expect(src.slice(at, at + 600)).toContain('createdDate: str(v.createdDate)');
+    expect(liveLines(src.slice(at, at + 600), 'createdDate: str(v.createdDate)').length).toBe(1);
   });
 
   test('layer 3: the applier writes it to a column', () => {
     const src = read('server/services/clickr/sync-apply.js');
-    expect(src).toContain('INSERT INTO jobs (id, owner_id, data, organization_id, bt_job_id, client_id, bt_created_at, bt_synced_at)');
-    expect(src).toContain('match.btInstant(bt.createdDate)');
+    expect(liveLines(src, 'INSERT INTO jobs (id, owner_id, data, organization_id, bt_job_id, client_id, bt_created_at, bt_synced_at)').length).toBe(1);
+    expect(liveLines(src, 'match.btInstant(bt.createdDate)').length).toBe(2);   // the job INSERT and the lead INSERT
   });
 
   test('a lead is written the same way', () => {
     const src = read('server/services/clickr/sync-apply.js');
-    expect(src).toContain('bt_lead_id, bt_created_at, bt_synced_at)');
+    expect(liveLines(src, 'bt_lead_id, bt_created_at, bt_synced_at)').length).toBe(1);
   });
 });
 
@@ -89,9 +92,9 @@ describe('repairing the records already imported', () => {
     const at = src.indexOf('async function healBtDates');
     expect(at).toBeGreaterThan(-1);
     const body = src.slice(at, at + 700);
-    expect(body).toContain('bt_created_at IS NULL');
+    expect(liveLines(body, 'bt_created_at IS NULL').length).toBe(1);
     // and it refuses to write anything when the date will not parse
-    expect(body).toContain('if (!iso) return;');
+    expect(liveLine(body, 'if (!iso) return;')).toBe(true);
   });
 
   test('it runs BEFORE the "nothing to correct" early return', () => {

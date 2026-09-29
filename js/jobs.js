@@ -38,6 +38,33 @@ function btWhereBadge(rec) {
     return window.p86BtBadge ? window.p86BtBadge.render(rec) : '';
 }
 
+// WHEN THE JOB WAS MADE, and when Buildertrend’s copy first reached us.
+// Created prefers Buildertrend’s own date because a job imported from it
+// has a created_at of the SYNC: 609 of 687 jobs carried 2026-09-25, the day
+// the big import ran, so ordering on that ranked jobs by the order we
+// happened to fetch them. A job made in Project 86 has no Buildertrend date
+// and its created_at IS its true creation, which is why the fallback exists
+// and why the two kinds sort together correctly in one list.
+function jobCreated(job) {
+    return (window.p86BtBadge && window.p86BtBadge.createdInstant(job)) || null;
+}
+function jobSynced(job) {
+    return (window.p86BtBadge && window.p86BtBadge.syncedInstant(job)) || null;
+}
+function jobDateText(v) {
+    return window.p86BtBadge ? window.p86BtBadge.fmtInstant(v) : '';
+}
+// An unknown date sorts LAST in BOTH directions rather than as 1970, which
+// would pin every job we have no date for to one end of the list.
+function jobDateCompare(a, b, get, dir) {
+    var av = window.p86BtBadge ? window.p86BtBadge.createdSortKey({ bt_created_at: get(a) }) : null;
+    var bv = window.p86BtBadge ? window.p86BtBadge.createdSortKey({ bt_created_at: get(b) }) : null;
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return (av - bv) * dir;
+}
+
 function btOpenBadge(job) {
     var s = job && job.btStatus ? String(job.btStatus).trim().toLowerCase() : '';
     if (s !== 'open') return '';
@@ -2292,6 +2319,10 @@ function renderJobsMain() {
                             return (getJobWIP(a.id).displayProfit - getJobWIP(b.id).displayProfit) * dir;
                         case 'margin':
                             return (getJobWIP(a.id).displayMargin - getJobWIP(b.id).displayMargin) * dir;
+                        case 'created':
+                            return jobDateCompare(a, b, jobCreated, dir);
+                        case 'synced':
+                            return jobDateCompare(a, b, jobSynced, dir);
                         default:
                             return 0;
                     }
@@ -2345,6 +2376,8 @@ function renderJobsMain() {
                     <td data-col="pctcomplete" style="text-align: right;"><div class="progress-bar" style="margin-bottom: 2px; height: 6px;"><div class="progress-fill" style="width: ${w.pctComplete}%"></div></div><span style="font-size: 12px;">${w.pctComplete.toFixed(1)}%</span></td>
                     <td data-col="profit" data-short="${jobsMoneyShort(w.displayProfit)}" style="text-align: right; color: ${w.displayProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(w.displayProfit)}</td>
                     <td data-col="margin" style="text-align: right;">${w.displayMargin.toFixed(1)}%</td>
+                    <td data-col="created"${jobSynced(job) ? ` title="Synced from Buildertrend ${escapeHTML(jobDateText(jobSynced(job)))}"` : ''}>${escapeHTML(jobDateText(jobCreated(job)))}</td>
+                    <td data-col="synced">${escapeHTML(jobDateText(jobSynced(job)))}</td>
                 `;
                 tbody.appendChild(row);
             });

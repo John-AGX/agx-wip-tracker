@@ -251,7 +251,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=330">
+    <link rel="stylesheet" href="css/styles.css?v=331">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=70">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -1002,6 +1002,13 @@
                                         <th class="sortable" data-col="pctcomplete" data-sort="pctcomplete" onclick="sortJobsTable('pctcomplete')" style="text-align: right;">% Complete</th>
                                         <th class="sortable" data-col="profit" data-sort="profit" onclick="sortJobsTable('profit')" style="text-align: right;">Gross Profit</th>
                                         <th class="sortable" data-col="margin" data-sort="margin" onclick="sortJobsTable('margin')" style="text-align: right;">Margin %</th>
+                                        <!-- WHEN THE JOB WAS MADE, and when Buildertrend’s copy reached us.
+                                             Created prefers bt_created_at: a job imported from Buildertrend has
+                                             a created_at of the SYNC, and 609 of 687 of them carried one day,
+                                             so sorting on that ranked jobs by import order. Hidden on a phone
+                                             (css/styles.css) — the card is a money-and-status card by design. -->
+                                        <th class="sortable" data-col="created" data-sort="created" onclick="sortJobsTable('created')">Created</th>
+                                        <th class="sortable" data-col="synced" data-sort="synced" onclick="sortJobsTable('synced')">Synced</th>
 
                                     </tr>
                                 </thead>
@@ -3577,14 +3584,14 @@
          internal scroll / persisted layout) for the Jobs, Estimates and
          Leads lists. Loads BEFORE those renderers so window.p86Tables is
          ready the first time they build their tables. -->
-    <script src="js/table-enhancements.js?v=15"></script>
+    <script src="js/table-enhancements.js?v=16"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
     <script src="js/job-finalize.js?v=8"></script>
     <script src="js/convert-picker.js?v=1"></script>
     <!-- Site Conditions panel (window.p86SiteConditions). Loads BEFORE
          leads.js, which delegates its weather host to it. -->
     <script src="js/site-conditions.js?v=2"></script>
-    <script src="js/bt-badge.js?v=3"></script>
+    <script src="js/bt-badge.js?v=4"></script>
     <script src="js/leads.js?v=106"></script>
     <script src="js/job-costs-import.js?v=17"></script>
     <script src="js/qb-costs-view.js?v=26"></script>
@@ -3713,7 +3720,7 @@
     <script src="js/progress-core.js?v=1"></script>
     <script src="js/co-completion.js?v=1"></script>
     <script src="js/progress.js?v=4"></script>
-    <script src="js/jobs.js?v=257"></script>
+    <script src="js/jobs.js?v=258"></script>
     <script src="js/doc-import.js?v=8"></script>
     <script src="js/job-workflow-ui.js?v=7"></script>
     <!-- Job sidebar Files + Photos tabs (renderJobFiles / renderJobPhotos).

@@ -245,8 +245,20 @@
     return isFinite(t) ? t : null;
   }
 
+  // How a provenance date PRINTS, in one place, so the jobs list and the
+  // leads list cannot drift apart on it. These three columns are always
+  // TIMESTAMPTZ instants, so they go through new Date() and land in the
+  // viewer’s own zone — unlike a DATE column, which must not shift (see
+  // fmtDate in js/leads.js, which handles both kinds for its own feed).
+  function fmtInstant(v) {
+    if (!v) return '';
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? '' : d.toLocaleDateString();
+  }
+
   window.p86BtBadge = {
     createdInstant: createdInstant,
+    fmtInstant: fmtInstant,
     syncedInstant: syncedInstant,
     createdSortKey: createdSortKey,
     state: state,
