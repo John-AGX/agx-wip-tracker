@@ -79,7 +79,7 @@ beforeAll(() => {
     lift('        function jobsListOrder(jobs, wipOf) {', '\n        }\n'),
     lift('        function syncJobsSortUI() {', '\n        }\n'),
     lift('        function jobsCsvCell(v) {', '\n        }\n'),
-    lift('        function jobsLocalDay(v) {', '\n        }\n'),
+    lift('        function fmtDayLocal(v) {', '\n        }\n'),
     lift('        function jobsCsv(jobs, wipOf) {', '\n        }\n'),
     lift('        function exportJobsToCSV() {', '\n        }\n'),
   ].join('\n');

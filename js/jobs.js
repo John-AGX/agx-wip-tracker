@@ -2427,8 +2427,11 @@ function renderJobsMain() {
             return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
         }
         // An instant as the viewer's own calendar day, 'YYYY-MM-DD' — the day
-        // the Created and Synced cells show, not the UTC day.
-        function jobsLocalDay(v) {
+        // the Created and Synced cells show, not the UTC day. Named fmtDay* so
+        // test/calendar-dates-vs-instants.test.js finds it: it is classified
+        // there as instants-only and run at 9:30pm Eastern, the hour a UTC-day
+        // bug would print tomorrow.
+        function fmtDayLocal(v) {
             if (v == null || v === '') return '';
             var d = new Date(v);
             if (isNaN(d.getTime())) return '';
@@ -2447,7 +2450,7 @@ function renderJobsMain() {
                     Number(w.totalIncome || 0), Math.round(Number(w.pctComplete || 0) * 10) / 10,
                     Number(w.displayProfit || 0), Math.round(Number(w.displayMargin || 0) * 10) / 10,
                     String(j.startDate || '').slice(0, 10),
-                    jobsLocalDay(jobCreated(j)), jobsLocalDay(jobSynced(j)),
+                    fmtDayLocal(jobCreated(j)), fmtDayLocal(jobSynced(j)),
                     j.address || [j.street_address, j.city, j.state, j.zip].filter(Boolean).join(', ')
                 ].map(jobsCsvCell).join(','));
             });
@@ -2462,7 +2465,7 @@ function renderJobsMain() {
             var blob = new Blob([String.fromCharCode(0xFEFF) + jobsCsv(jobs, wipOf)], { type: 'text/csv;charset=utf-8' });
             var a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = 'Jobs_' + jobsLocalDay(Date.now()) + '.csv';
+            a.download = 'Jobs_' + fmtDayLocal(Date.now()) + '.csv';
             document.body.appendChild(a);
             a.click();
             a.remove();
