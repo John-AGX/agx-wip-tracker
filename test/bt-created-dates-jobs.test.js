@@ -82,15 +82,20 @@ describe('what the cells read', () => {
 });
 
 describe('how the two columns sort', () => {
-  let cmp;
+  // The comparison moved into js/jobs-sort.js — the one sort behind the
+  // header, the toolbar select and the phone cards — and jobDateCompare went
+  // with it. These are its assertions, unchanged, run through that module
+  // with the SAME jobCreated the Created cell reads.
+  let S;
   let jobCreated;
   beforeAll(() => {
     window.eval(read('js/bt-badge.js'));
+    window.eval(read('js/jobs-sort.js'));
+    S = window.p86JobsSort;
     const src = read('js/jobs.js');
-    const sources = [extractFunction(src, 'jobCreated'), extractFunction(src, 'jobDateCompare')];
-    cmp = compile(sources, ['window'], [window], 'jobDateCompare');
-    jobCreated = compile(sources, ['window'], [window], 'jobCreated');
+    jobCreated = compile([extractFunction(src, 'jobCreated')], ['window'], [window], 'jobCreated');
   });
+  const order = (jobs, id) => S.sort(jobs, id, { created: jobCreated }).map((j) => j.id);
 
   test('imported jobs spread out instead of clumping on the import date', () => {
     // Three jobs from one sync. On created_at they are one instant apart at
@@ -102,22 +107,23 @@ describe('how the two columns sort', () => {
       { id: 'a', bt_created_at: '2024-12-12T13:09:42Z', created_at: synced },
       { id: 'b', bt_created_at: '2025-06-02T00:00:00Z', created_at: synced },
     ];
-    const asc = jobs.slice().sort((a, b) => cmp(a, b, jobCreated, 1)).map((j) => j.id);
-    expect(asc).toEqual(['a', 'b', 'c']);
-    expect(jobs.slice().sort((a, b) => cmp(a, b, jobCreated, -1)).map((j) => j.id)).toEqual(['c', 'b', 'a']);
+    expect(order(jobs, 'created-asc')).toEqual(['a', 'b', 'c']);
+    expect(order(jobs, 'created-desc')).toEqual(['c', 'b', 'a']);
     expect(new Set(jobs.map((j) => j.created_at)).size).toBe(1);
   });
 
   test('a job with no date sorts LAST in BOTH directions', () => {
     // The defect this replaces: an unknown read as 0 and every one of them
     // piled onto the oldest end ascending and the newest end descending.
-    const known = { bt_created_at: '2025-01-01T00:00:00Z' };
-    const unknown = {};
-    expect(cmp(known, unknown, jobCreated, 1)).toBeLessThan(0);
-    expect(cmp(unknown, known, jobCreated, 1)).toBeGreaterThan(0);
-    expect(cmp(known, unknown, jobCreated, -1)).toBeLessThan(0);
-    expect(cmp(unknown, known, jobCreated, -1)).toBeGreaterThan(0);
-    expect(cmp(unknown, {}, jobCreated, 1)).toBe(0);
+    const jobs = [{ id: 'unknown' }, { id: 'known', bt_created_at: '2025-01-01T00:00:00Z' }];
+    expect(order(jobs, 'created-asc')).toEqual(['known', 'unknown']);
+    expect(order(jobs, 'created-desc')).toEqual(['known', 'unknown']);
+  });
+
+  test('the Created header and "Newest first" in the select are the same sort', () => {
+    expect(S.headerNext('name-asc', 'created')).toBe('created-desc');
+    expect(S.spec('created-desc').label).toBe('Newest first');
+    expect(S.headerMark('created-desc')).toEqual({ th: 'created', dir: 'desc' });
   });
 });
 

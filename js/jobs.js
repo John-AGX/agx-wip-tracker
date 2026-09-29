@@ -54,16 +54,9 @@ function jobSynced(job) {
 function jobDateText(v) {
     return window.p86BtBadge ? window.p86BtBadge.fmtInstant(v) : '';
 }
-// An unknown date sorts LAST in BOTH directions rather than as 1970, which
-// would pin every job we have no date for to one end of the list.
-function jobDateCompare(a, b, get, dir) {
-    var av = window.p86BtBadge ? window.p86BtBadge.createdSortKey({ bt_created_at: get(a) }) : null;
-    var bv = window.p86BtBadge ? window.p86BtBadge.createdSortKey({ bt_created_at: get(b) }) : null;
-    if (av == null && bv == null) return 0;
-    if (av == null) return 1;
-    if (bv == null) return -1;
-    return (av - bv) * dir;
-}
+// Sorting by these (and by everything else) is js/jobs-sort.js: an unknown
+// date sorts LAST in BOTH directions there, rather than as 1970 — the rule
+// that used to live in a jobDateCompare here, now kept for every key.
 
 function btOpenBadge(job) {
     var s = job && job.btStatus ? String(job.btStatus).trim().toLowerCase() : '';
@@ -2280,76 +2273,27 @@ function renderJobsMain() {
             // and dashboard tiles always reflect the same set.
             let jobs = getFilteredJobs();
 
-            // Apply sorting
-            if (appState.sortColumn) {
-                const col = appState.sortColumn;
-                const dir = appState.sortDirection === 'asc' ? 1 : -1;
-                jobs = [...jobs].sort((a, b) => {
-                    let va, vb;
-                    switch(col) {
-                        case 'name':
-                            va = ((a.jobNumber || '') + ' ' + (a.title || '')).toLowerCase();
-                            vb = ((b.jobNumber || '') + ' ' + (b.title || '')).toLowerCase();
-                            return va.localeCompare(vb) * dir;
-                        case 'market':
-                            // Sort on the RESOLVED market name, not the raw
-                            // legacy text — otherwise a job assigned by
-                            // market_id (with no text) sorts as blank while
-                            // its chip clearly shows a market.
-                            va = marketName(a).toLowerCase();
-                            vb = marketName(b).toLowerCase();
-                            return va.localeCompare(vb) * dir;
-                        case 'status':
-                            va = (a.status || '').toLowerCase();
-                            vb = (b.status || '').toLowerCase();
-                            return va.localeCompare(vb) * dir;
-                        case 'client':
-                            va = (a.client || '').toLowerCase();
-                            vb = (b.client || '').toLowerCase();
-                            return va.localeCompare(vb) * dir;
-                        case 'pm':
-                            va = (a.pm || '').toLowerCase();
-                            vb = (b.pm || '').toLowerCase();
-                            return va.localeCompare(vb) * dir;
-                        case 'contract':
-                            return (getJobWIP(a.id).totalIncome - getJobWIP(b.id).totalIncome) * dir;
-                        case 'pctcomplete':
-                            return ((a.pctComplete || 0) - (b.pctComplete || 0)) * dir;
-                        case 'profit':
-                            return (getJobWIP(a.id).displayProfit - getJobWIP(b.id).displayProfit) * dir;
-                        case 'margin':
-                            return (getJobWIP(a.id).displayMargin - getJobWIP(b.id).displayMargin) * dir;
-                        case 'created':
-                            return jobDateCompare(a, b, jobCreated, dir);
-                        case 'synced':
-                            return jobDateCompare(a, b, jobSynced, dir);
-                        default:
-                            return 0;
-                    }
-                });
-            }
-
-            // Update sort indicator classes on headers
-            document.querySelectorAll('#jobs-table th.sortable').forEach(th => {
-                th.classList.remove('sort-asc', 'sort-desc');
-                if (th.dataset.sort === appState.sortColumn) {
-                    th.classList.add(appState.sortDirection === 'asc' ? 'sort-asc' : 'sort-desc');
-                }
-            });
-
-            jobs.forEach((job, index) => {
-                // The Jobs main row used to auto-recalc pctComplete here, but
-                // that runs without the node-graph compute step the detail
-                // view uses, so it produced different values than the metric
-                // strip and would clobber the correct stored value. Now we
-                // just read what's stored — the detail view (renderJobDetail)
-                // is the single source of truth for keeping job.pctComplete
-                // fresh. recalcSubCosts is still cheap and useful here for
-                // dollar columns.
+            // Sort — the rules live in js/jobs-sort.js, and one state
+            // (_jobsSortId) drives the toolbar select, the header chevrons and
+            // the phone cards. Derived numbers come FIRST so the sort reads what
+            // the rows will show: recalcSubCosts used to run inside the row
+            // loop, after the money sort, so a changed sub cost sorted one
+            // render stale. One getJobWIP per job, shared by the sort and the
+            // row (the old comparator ran it twice per comparison).
+            jobs.forEach(function(job) {
                 if (appData.phases.some(p => p.jobId === job.id) || appData.buildings.some(b => b.jobId === job.id)) {
                     recalcSubCosts(job.id);
                 }
-                const w = getJobWIP(job.id);
+            });
+            const wipOf = jobsWipCache();
+            jobs = jobsListOrder(jobs, wipOf);
+            syncJobsSortUI();
+
+            jobs.forEach((job) => {
+                // job.pctComplete is READ here, never recalculated: a row-level
+                // recalc ran without the node-graph step the detail view uses
+                // and clobbered the stored value. renderJobDetail keeps it fresh.
+                const w = wipOf(job);
                 const statusClass = jobStatusBadgeClass(job.status);
                 const typeLabel = job.jobType ? `<span style="font-size: 11px; color: var(--text-dim); font-weight: normal; margin-left: 6px;">${escapeHTML(job.jobType)}${job.market ? `<span style="margin-left: 8px; opacity: 0.7;">${escapeHTML(job.market)}</span>` : ''}</span>` : '';
 
@@ -2390,21 +2334,130 @@ function renderJobsMain() {
             syncJobsSelectAll(); updateJobsBulkBar();
         }
 
-        function sortJobsTable(column) {
-            if (appState.sortColumn === column) {
-                // Toggle direction, or clear if already desc
-                if (appState.sortDirection === 'asc') {
-                    appState.sortDirection = 'desc';
-                } else {
-                    appState.sortColumn = null;
-                    appState.sortDirection = null;
-                }
-            } else {
-                appState.sortColumn = column;
-                appState.sortDirection = 'asc';
-            }
+        // ── Sort ─────────────────────────────────────────────────────────
+        // One state for the toolbar select (the only way to sort on a phone —
+        // the header is hidden there), the desktop header chevrons and the
+        // phone cards; the rules are js/jobs-sort.js. Remembered per browser
+        // (localStorage p86_jobs_sort). A header click is two-state now, like
+        // Leads and Estimates: the old third click switched sorting OFF, which
+        // meant the server's heap order — no order at all.
+        var _jobsSortId = window.p86JobsSort ? window.p86JobsSort.load() : 'created-desc';
+        function setJobsSort(id) {
+            var S = window.p86JobsSort; if (!S) return;
+            _jobsSortId = S.spec(id).id;
+            S.save(_jobsSortId);
             renderJobsTable();
         }
+        window.jobsSetSort = setJobsSort;
+        function sortJobsTable(column) {
+            var S = window.p86JobsSort; if (!S) return;
+            setJobsSort(S.headerNext(_jobsSortId, column));
+        }
+        function jobsWipCache() {
+            var cache = {};
+            return function(job) { return cache[job.id] || (cache[job.id] = getJobWIP(job.id) || {}); };
+        }
+        // The PM the row shows, or '' when there is none. getJobOwnerName
+        // answers '—' for "nobody" — right in a cell, wrong as a sort key (it
+        // collates before every letter, so unassigned jobs led PM A–Z) and
+        // wrong in a spreadsheet.
+        function jobsOwnerText(job) {
+            var n = getJobOwnerName(job);
+            return n === '—' ? '' : (n || '');
+        }
+        function jobsListOrder(jobs, wipOf) {
+            var S = window.p86JobsSort;
+            return S ? S.sort(jobs, _jobsSortId, {
+                wip: wipOf, owner: jobsOwnerText, market: marketName, created: jobCreated, synced: jobSynced
+            }) : jobs;
+        }
+        // The select and the chevrons both follow the state, whichever of them
+        // changed it. A sort only a header can reach (Client, PM, Synced…) is
+        // added to the select while it is active, so the select never names a
+        // sort the list is not in.
+        function syncJobsSortUI() {
+            var S = window.p86JobsSort; if (!S) return;
+            var sel = document.getElementById('jobsSort');
+            if (sel) {
+                var list = S.menuFor(_jobsSortId);
+                var sig = list.map(function(o) { return o.id; }).join('|');
+                if (sel.getAttribute('data-sig') !== sig) {
+                    sel.innerHTML = list.map(function(o) {
+                        return '<option value="' + o.id + '">' + escapeHTML(o.label) + '</option>';
+                    }).join('');
+                    sel.setAttribute('data-sig', sig);
+                }
+                sel.value = _jobsSortId;
+                sel.title = 'Sort: ' + S.spec(_jobsSortId).label;
+            }
+            var mark = S.headerMark(_jobsSortId);
+            document.querySelectorAll('#jobs-table th.sortable').forEach(function(th) {
+                th.classList.remove('sort-asc', 'sort-desc');
+                th.removeAttribute('aria-sort');
+                if (mark && th.dataset.sort === mark.th) {
+                    th.classList.add(mark.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+                    th.setAttribute('aria-sort', mark.dir === 'asc' ? 'ascending' : 'descending');
+                }
+            });
+        }
+
+        // ── Export CSV: the jobs shown, in the order shown ───────────────
+        // This was a stub in js/app.js that only raised alert('Export to CSV')
+        // — which does nothing at all in the installed app — while the ⋯ menu
+        // promised a spreadsheet. Same filter and same sort as the list, so
+        // the file matches the screen.
+        function jobsCsvCell(v) {
+            if (v == null) return '';
+            if (typeof v === 'number') return isFinite(v) ? String(v) : '';
+            var s = String(v);
+            // A cell a spreadsheet would run as a formula is written as text.
+            if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+            return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+        }
+        // An instant as the viewer's own calendar day, 'YYYY-MM-DD' — the day
+        // the Created and Synced cells show, not the UTC day.
+        function jobsLocalDay(v) {
+            if (v == null || v === '') return '';
+            var d = new Date(v);
+            if (isNaN(d.getTime())) return '';
+            var p = function(n) { return (n < 10 ? '0' : '') + n; };
+            return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+        }
+        function jobsCsv(jobs, wipOf) {
+            var head = ['Job #', 'Name', 'Client', 'PM', 'Status', 'Type', 'Market', 'Total Income', '% Complete',
+                        'Gross Profit', 'Margin %', 'Start date', 'Created', 'Synced', 'Address'];
+            var lines = [head.map(jobsCsvCell).join(',')];
+            jobs.forEach(function(j) {
+                var w = wipOf(j);
+                lines.push([
+                    j.jobNumber || '', j.title || '', j.client || '', jobsOwnerText(j), j.status || '',
+                    j.jobType || getJobTypeLabel(getJobType(j.jobNumber)) || '', marketName(j) || '',
+                    Number(w.totalIncome || 0), Math.round(Number(w.pctComplete || 0) * 10) / 10,
+                    Number(w.displayProfit || 0), Math.round(Number(w.displayMargin || 0) * 10) / 10,
+                    String(j.startDate || '').slice(0, 10),
+                    jobsLocalDay(jobCreated(j)), jobsLocalDay(jobSynced(j)),
+                    j.address || [j.street_address, j.city, j.state, j.zip].filter(Boolean).join(', ')
+                ].map(jobsCsvCell).join(','));
+            });
+            return lines.join('\r\n') + '\r\n';
+        }
+        function exportJobsToCSV() {
+            var wipOf = jobsWipCache();
+            var jobs = jobsListOrder(getFilteredJobs(), wipOf);
+            if (!jobs.length) { if (typeof window.p86Toast === 'function') window.p86Toast('No jobs to export.', 'error'); return; }
+            // A byte-order mark so Excel reads the file as UTF-8 (names with
+            // accents, the em dash) instead of mangling it.
+            var blob = new Blob([String.fromCharCode(0xFEFF) + jobsCsv(jobs, wipOf)], { type: 'text/csv;charset=utf-8' });
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'Jobs_' + jobsLocalDay(Date.now()) + '.csv';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(function() { URL.revokeObjectURL(a.href); }, 4000);
+            if (typeof window.p86Toast === 'function') window.p86Toast('Exported ' + jobs.length + ' job' + (jobs.length === 1 ? '' : 's') + '.', 'success');
+        }
+        window.exportJobsToCSV = exportJobsToCSV;
 
         function filterJobs() {
             appState.currentStatusFilter = document.getElementById('statusFilter').value;

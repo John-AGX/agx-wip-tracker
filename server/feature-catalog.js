@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.76';
+const APP_VERSION = '1.77';
 
 const releases = [
+  {
+    version: '1.77',
+    date: '2026-09-29',
+    name: 'Sort the Jobs list, on a phone too',
+    summary: 'A Sort control for the Jobs list \u2014 newest or oldest, name, job number, start date, status, income, % complete or margin \u2014 that works on a phone, and Export CSV now really exports.',
+    changes: [
+      { type: 'new', text: 'A Sort control beside the filters on the Jobs list: Newest first, Oldest first, Name A\u2013Z and Z\u2013A, Job number, Start date (latest or earliest first), Status, Income, % complete and Margin. Newest and Oldest go by the Created date, so a job that came from Buildertrend sorts by the day it was made there. On a phone \u2014 where there are no column headings to click \u2014 it is the \u21c5 button next to \u22ef, and tapping it lists every sort. Your choice is remembered on that device.' },
+      { type: 'improved', text: 'Clicking a column heading and choosing from the Sort menu are now the same thing, and each shows what the other chose. A second click on a heading reverses it; a third click no longer switches sorting off, which used to leave the list in no particular order. The list now opens Newest first.' },
+      { type: 'fixed', text: 'Several sorts disagreed with what was on screen. % complete sorted by a stored figure that could differ from the percent on the row, PM by a stored name that could differ from the one shown (and jobs with no PM came first), and Name by the job number. RV999 sorted after RV2044, and Status sorted alphabetically. Each now sorts by what you see, and Status goes in its own order, New through Archived.' },
+      { type: 'fixed', text: 'Export CSV in the \u22ef menu did nothing. It now downloads the jobs shown, in the order shown, with their Created and Synced dates, ready to open in Excel.' },
+    ],
+  },
   {
     version: '1.76',
     date: '2026-09-29',

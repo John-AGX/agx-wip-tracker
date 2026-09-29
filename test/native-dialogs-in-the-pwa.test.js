@@ -273,7 +273,7 @@ const INVENTORY = {
   'js/admin-context-registry.js': { a: 2 },
   'js/admin.js': { a: 100, c: 5, p: 15 },
   'js/ai-panel.js': { a: 10, p: 1 },
-  'js/app.js': { a: 1, p: 2 },
+  'js/app.js': { p: 2 },   // the alert was the Export CSV stub; the real export lives in js/jobs.js
   'js/attachments.js': { a: 15, c: 2 },
   'js/bt-export.js': { a: 2 },
   'js/change-order-editor.js': { a: 12 },

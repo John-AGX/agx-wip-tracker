@@ -4217,9 +4217,9 @@
 
         // ==================== JOBS MAIN VIEW ====================
 
-function exportJobsToCSV() {
-            alert('Export to CSV');
-        }
+// exportJobsToCSV lives in js/jobs.js, beside the list it exports (same
+// filter, same sort). The stub that stood here only raised alert(), which
+// does nothing in the installed app.
 
         // ==================== START APP ====================
         document.addEventListener('DOMContentLoaded', initializeApp);

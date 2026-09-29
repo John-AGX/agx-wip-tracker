@@ -12484,7 +12484,8 @@ a.ci-store-v:hover { text-decoration: underline; }
 }
 .jobs-toolbar .jobs-more-btn { width: 30px; padding: 0; justify-content: center; }
 .jobs-toolbar #jobs-views-btn { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
-.jobs-toolbar .jobs-quick-select {
+.jobs-toolbar .jobs-quick-select,
+.jobs-toolbar .jobs-sort-select {
   width: auto;
   height: 28px;
   margin: 0;
@@ -12498,7 +12499,34 @@ a.ci-store-v:hover { text-decoration: underline; }
   color: var(--text);
   cursor: pointer;
 }
-.jobs-toolbar .jobs-quick-select:hover { border-color: rgba(255, 255, 255, 0.18); }
+.jobs-toolbar .jobs-quick-select:hover,
+.jobs-toolbar .jobs-sort-select:hover { border-color: rgba(255, 255, 255, 0.18); }
+/* ...plus a sort glyph, so it does not read as a third filter. It never takes
+   .is-set: that accent means "narrowing the list", and a sort narrows nothing. */
+.jobs-toolbar .jobs-sort-select {
+  padding-left: 27px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23aab4c3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 4v16M3.5 7.5 7 4l3.5 3.5M17 20V4M13.5 16.5 17 20l3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 8px center;
+  background-size: 14px 14px;
+}
+/* Wherever the toolbar is too narrow for the labelled select (~200px at its
+   longest label) to share the row — tablets, and a laptop with the sidebar
+   open — it becomes the icon the phone uses. A container query, not a media
+   query: the sidebar decides the toolbar's width, not the viewport. The native
+   picker still names every sort, and the select's title says which is on. */
+.jobs-toolbar { container-type: inline-size; }
+@container (max-width: 800px) {
+  .jobs-toolbar .jobs-sort-select {
+    width: 30px;
+    padding: 0;
+    color: transparent;
+    -webkit-appearance: none;
+    appearance: none;
+    background-position: center;
+  }
+  .jobs-toolbar .jobs-sort-select option { color: var(--text); background: var(--card-bg, #161a2b); }
+}
 /* A quick filter that is narrowing the list says so — same accent the
    Filter button takes when the drawer has something set (.pf-on). */
 .jobs-toolbar .jobs-quick-select.is-set {
@@ -12506,8 +12534,11 @@ a.ci-store-v:hover { text-decoration: underline; }
   background-color: rgba(79, 140, 255, 0.12);
   color: var(--accent, #4f8cff);
 }
-body.light-mode .jobs-toolbar .jobs-quick-select { background-color: #fff; }
-body.light-mode .jobs-toolbar .jobs-quick-select:hover { border-color: rgba(15, 23, 42, 0.25); }
+body.light-mode .jobs-toolbar .jobs-quick-select,
+body.light-mode .jobs-toolbar .jobs-sort-select { background-color: #fff; }
+body.light-mode .jobs-toolbar .jobs-quick-select:hover,
+body.light-mode .jobs-toolbar .jobs-sort-select:hover { border-color: rgba(15, 23, 42, 0.25); }
+body.light-mode .jobs-toolbar .jobs-sort-select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 4v16M3.5 7.5 7 4l3.5 3.5M17 20V4M13.5 16.5 17 20l3.5-3.5'/%3E%3C/svg%3E"); }
 
 .jobs-more-pop {
   position: fixed;
@@ -12572,12 +12603,38 @@ body.light-mode .jobs-more-ic { background: rgba(37, 99, 235, 0.1); color: #2563
     order: 10;
     /* A real basis, not 0: at basis 0 the first select "fits" in row
        one's leftover sliver and renders as a bare chevron. */
-    flex: 1 1 40%;
+    flex: 1 1 30%;
     min-width: 0;
     height: 38px;
     padding: 0 10px;
     font-size: 16px;
   }
+  /* Sort on a phone: the SAME select, as a 38px icon between the filters and
+     the ⋯ menu. Tapping it opens the native picker, which names every sort
+     and ticks the current one. A third labelled select would take a third
+     row. (The filters' basis dropped 40% -> 30% to make the room.) */
+  .jobs-toolbar .jobs-sort-select {
+    order: 10;
+    flex: 0 0 38px;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    font-size: 16px;
+    color: transparent;
+    -webkit-appearance: none;
+    appearance: none;
+    background-position: center;
+    background-size: 18px 18px;
+  }
+  .jobs-toolbar .jobs-sort-select option { color: var(--text); background: var(--card-bg, #161a2b); }
+  /* A hard line break before the filter row. A basis alone cannot hold it:
+     from ~488px up, row one's leftover fits a 30% select and Status jumped up
+     beside Map. The zero-height break adds a row-gap, which the row's -6px
+     top margin takes back. */
+  .jobs-toolbar::before { content: ''; order: 9; flex: 0 0 100%; height: 0; }
+  .jobs-toolbar .jobs-quick-select,
+  .jobs-toolbar .jobs-sort-select,
+  .jobs-toolbar .jobs-more-btn { margin-top: -6px; }
 }
 
 /* Jobs list → cards on a phone. Each row reflows into a three-line card:

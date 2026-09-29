@@ -251,7 +251,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=334">
+    <link rel="stylesheet" href="css/styles.css?v=335">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=70">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -970,6 +970,9 @@
                                 <option value="Mid-Tier Service">Mid-Tier Service</option>
                                 <option value="Renovation">Renovation</option>
                                 <option value="Work Order">Work Order</option>
+                            </select>
+                            <select id="jobsSort" class="jobs-sort-select" onchange="jobsSetSort(this.value)" aria-label="Sort jobs" title="Sort jobs">
+                                <option value="created-desc">Newest first</option>
                             </select>
                             <button class="ee-btn ghost" id="jobs-filter-btn" onclick="jobsOpenFilter()" title="Filter jobs" aria-label="Filter"></button>
                             <button class="ee-btn ghost" id="jobs-views-btn" onclick="jobsOpenViews(this)" title="Saved views">Views ▾</button>
@@ -3607,7 +3610,7 @@
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
     <script src="js/save-merge.js?v=5"></script>
-    <script src="js/app.js?v=162"></script>
+    <script src="js/app.js?v=163"></script>
     <!-- The visible signal for a write that has not reached the server.
          Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
     <script src="js/save-banner.js?v=3"></script>
@@ -3720,7 +3723,9 @@
     <script src="js/progress-core.js?v=1"></script>
     <script src="js/co-completion.js?v=1"></script>
     <script src="js/progress.js?v=4"></script>
-    <script src="js/jobs.js?v=258"></script>
+    <!-- The Jobs list sort rules (pure; read by js/jobs.js at load). -->
+    <script src="js/jobs-sort.js?v=1"></script>
+    <script src="js/jobs.js?v=259"></script>
     <script src="js/doc-import.js?v=8"></script>
     <script src="js/job-workflow-ui.js?v=7"></script>
     <!-- Job sidebar Files + Photos tabs (renderJobFiles / renderJobPhotos).
