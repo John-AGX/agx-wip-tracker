@@ -580,11 +580,23 @@ function estimatesOpenViews(anchor) {
     pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', async function(e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_estActiveViewId === id) setEstActiveView(null); return estLoadViews(); }).then(close); }); });
     var sv = pop.querySelector('#est-save-view');
     if (sv) sv.addEventListener('click', function() {
-        var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
-        window.p86Api.listViews.create({ page: 'estimates', name: name, config: { filters: _estDrawer || {} }, is_default: false })
-            .then(function(res) { setEstActiveView((res && res.view && res.view.id) || null); return estLoadViews(); })
-            .then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('View saved', 'success'); })
-            .catch(function() { if (typeof window.p86Toast === 'function') window.p86Toast('Could not save view', 'error'); });
+        // p86Prompt, not the native prompt(): in the installed app that returns
+        // undefined, the == null guard below read it as Cancel, and Save view did
+        // nothing on a phone without a word. The popover closes FIRST — it sits at
+        // z-index 100000, above the dialog (1100), and would cover the name box.
+        close();
+        var ask = (typeof window.p86Prompt === 'function')
+            ? window.p86Prompt({ title: 'Save this view', message: 'Saves the filters you have on now, so you can come back to them in one tap.', placeholder: 'View name' })
+            : Promise.resolve(window.prompt('Name this view:'));
+        ask.then(function(name) {
+            if (name == null) return;
+            name = String(name).trim();
+            if (!name) return;
+            return window.p86Api.listViews.create({ page: 'estimates', name: name, config: { filters: _estDrawer || {} }, is_default: false })
+                .then(function(res) { setEstActiveView((res && res.view && res.view.id) || null); return estLoadViews(); })
+                .then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('View saved', 'success'); })
+                .catch(function() { if (typeof window.p86Toast === 'function') window.p86Toast('Could not save view', 'error'); });
+        });
     });
 }
 window.estimatesOpenFilter = estimatesOpenFilter;

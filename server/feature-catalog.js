@@ -526,9 +526,18 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.78';
+const APP_VERSION = '1.79';
 
 const releases = [
+  {
+    version: '1.79',
+    date: '2026-09-29',
+    name: 'Saving a view works in the app',
+    summary: 'Save current filters as view did nothing on a phone or in the installed app. It now asks for the name in Project 86\u2019s own box, on every list that has it.',
+    changes: [
+      { type: 'fixed', text: 'On the Jobs, Leads, Estimates and Subs lists, and the Change Orders, Purchase Orders, RFIs, Submittals and Bills lists, \u201cSave current filters as view\u201d asked for a name with the browser\u2019s own pop-up. The installed app does not show those pop-ups, so the button did nothing and said nothing. It now asks in Project 86\u2019s own box, the same way everywhere, and the Views menu closes first so the box is never hidden behind it.' },
+    ],
+  },
   {
     version: '1.78',
     date: '2026-09-29',

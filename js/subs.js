@@ -175,10 +175,22 @@ function p86Ask(message, opts) {
       pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(function() { close(); }); }); });
       pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', async function(e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_activeViewId === id) setSubsActiveView(null); close(); }); }); });
       pop.querySelector('.sv-save').addEventListener('click', function() {
-        var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
-        window.p86Api.listViews.create({ page: 'subs', name: name, config: { filters: { trade: _state.trade, status: _state.status, search: _state.search, drawer: _state.drawer } }, is_default: false })
-          .then(function(res) { setSubsActiveView(res && res.view && res.view.id ? res.view.id : null); close(); })
-          .catch(function() { alert('Could not save view.'); });
+        // p86Prompt, not the native prompt(): in the installed app that returns
+        // undefined, the == null guard below read it as Cancel, and Save view did
+        // nothing on a phone without a word. The popover closes FIRST — it sits at
+        // z-index 100000, above the dialog (1100), and would cover the name box.
+        close();
+        var ask = (typeof window.p86Prompt === 'function')
+          ? window.p86Prompt({ title: 'Save this view', message: 'Saves the filters you have on now, so you can come back to them in one tap.', placeholder: 'View name' })
+          : Promise.resolve(window.prompt('Name this view:'));
+        ask.then(function(name) {
+          if (name == null) return;
+          name = String(name).trim();
+          if (!name) return;
+          return window.p86Api.listViews.create({ page: 'subs', name: name, config: { filters: { trade: _state.trade, status: _state.status, search: _state.search, drawer: _state.drawer } }, is_default: false })
+            .then(function(res) { setSubsActiveView(res && res.view && res.view.id ? res.view.id : null); close(); })
+            .catch(function() { alert('Could not save view.'); });
+        });
       });
     });
   }
