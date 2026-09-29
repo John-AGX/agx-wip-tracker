@@ -49,7 +49,13 @@ const GUEST_ENVELOPE_KEYS = ['task', 'photos', 'share', 'org_name', 'linked_labe
 // way: entity_type / entity_id are still withheld, only the composed string
 // ships.
 const GUEST_TASK_KEYS = ['title', 'notes', 'kind', 'status', 'priority',
-  'due_date', 'checklist', 'lat', 'lng', 'directions'].sort();
+  'due_date', 'checklist', 'lat', 'lng', 'directions',
+  // 2026-09-29: a supplier errand's own half — where to go, what to ask for,
+  // what to collect. A runner cannot do the job without it. It is null on
+  // every other kind of task, and the stored shape has NO PRICE FIELD, so
+  // this widens the whitelist by a projection that has nothing to leak
+  // (services/pickup-task.js publicPickup).
+  'pickup'].sort();
 
 // The tasks row as `SELECT *` really returns it.
 function taskRow(over) {

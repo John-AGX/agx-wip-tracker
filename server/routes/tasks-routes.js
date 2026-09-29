@@ -57,6 +57,10 @@ function newId() {
   return 'task_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
 }
 
+// A supplier errand: the shape of its supplier half, and the one rule that
+// makes it different from every other task — proof before collected.
+const pickupTask = require('../services/pickup-task');
+
 // Resolve the caller's organization_id. Returns null when the user has
 // no org assigned (shouldn't happen post-backfill, but defensive).
 function callerOrgId(req) {
@@ -68,7 +72,10 @@ function callerOrgId(req) {
 // Controlled vocabularies — values outside these sets are ignored on
 // write (the column default stands) rather than rejected, so a stale
 // client can never wedge a create/update.
-const KINDS      = new Set(['todo', 'punch', 'follow_up']);
+// 'pickup' (2026-09-29) is a supplier errand — see services/pickup-task.js
+// for why it is a task and not a work order. It is the only kind that is
+// held to a rule of its own: a pickup is not collected without a photo.
+const KINDS      = new Set(['todo', 'punch', 'follow_up', 'pickup']);
 const STATUSES   = new Set(['open', 'in_progress', 'blocked', 'done']);
 const PRIORITIES = new Set(['low', 'normal', 'high', 'urgent']);
 
@@ -482,7 +489,11 @@ router.get('/', requireAuth, async (req, res) => {
       params.push(String(req.query.due_after));
     }
     if (req.query.q) {
-      where.push('t.title ILIKE $' + (pn++));
+      // The title OR a pickup's order reference. "What was that Lowe's order
+      // number" is how somebody actually looks for an errand, and the number
+      // is never in the title. One bound value, matched twice.
+      const at = pn++;
+      where.push('(t.title ILIKE $' + at + " OR " + pickupTask.searchSql('t') + ' ILIKE $' + at + ')');
       params.push('%' + String(req.query.q).trim() + '%');
     }
 
@@ -665,6 +676,17 @@ router.post('/', requireAuth, async (req, res) => {
       cols.push('lng'); vals.push('$' + pn++); params.push(_glng);
       if (Number.isFinite(_gacc) && _gacc > 0) { cols.push('geo_accuracy'); vals.push('$' + pn++); params.push(_gacc); }
     }
+    // The supplier half of a pickup. Refused rather than dropped: the other
+    // vocabularies above ignore a bad value so a stale client cannot wedge a
+    // create, but a pickup with no supplier and nothing to collect is not a
+    // stale field — it is a task nobody can run, and saving it silently
+    // would leave somebody looking at a blank errand wondering what to fetch.
+    if (String(body.kind || '') === pickupTask.KIND) {
+      const v = pickupTask.validate(body.pickup);
+      if (!v.ok) return res.status(400).json({ error: v.error });
+      cols.push('pickup'); vals.push('$' + pn++ + '::jsonb'); params.push(JSON.stringify(v.pickup));
+    }
+
     // If created already-done, stamp completed_at.
     if (body.status === 'done') { cols.push('completed_at'); vals.push('NOW()'); }
 
@@ -871,6 +893,36 @@ router.patch('/:id', requireAuth, async (req, res) => {
 
       sets.push(key + ' = $' + (pn++));
       params.push(val);
+    }
+
+    // The supplier half of a pickup, merged over what is stored so a partial
+    // edit keeps the rest. Refused rather than dropped, for the reason the
+    // create door gives: an errand nobody can run is not a stale field.
+    if (has('pickup')) {
+      if (!pickupTask.isPickup(before)) return res.status(409).json({ error: pickupTask.MSG.notPickup });
+      const v = pickupTask.merge(before.pickup, body.pickup);
+      if (!v.ok) return res.status(400).json({ error: v.error });
+      sets.push('pickup = $' + (pn++) + '::jsonb');
+      params.push(JSON.stringify(v.pickup));
+    }
+
+    // A PICKUP IS NOT COLLECTED WITHOUT PROOF — a photo of the receipt or the
+    // pickup ticket. The rule itself lives in services/pickup-task.js so this
+    // door and the runner's share link cannot answer it differently; that is
+    // the mistake the work order's own photo rule made before 1.29.
+    //
+    // Asked only when the status is actually CROSSING into done, so a pickup
+    // already collected can still be edited, and re-saving one does not
+    // re-litigate a rule it already passed.
+    if (pickupTask.isPickup(before) && has('status') &&
+        String(body.status) === 'done' && before.status !== 'done') {
+      const proof = await pool.query(
+        "SELECT mime_type FROM attachments WHERE entity_type = 'task' AND entity_id = $1" +
+        '   AND organization_id = $2',
+        [String(before.id), orgId]
+      );
+      const verdict = pickupTask.mayComplete(before, proof.rows);
+      if (!verdict.ok) return res.status(409).json({ error: verdict.error, code: 'needs_proof' });
     }
 
     // completed_at bookkeeping — sync with status transitions.

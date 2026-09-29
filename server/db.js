@@ -4932,6 +4932,41 @@ async function initSchema() {
       ON tasks(service_ticket_id, updated_at DESC)
       WHERE service_ticket_id IS NOT NULL AND archived_at IS NULL;
 
+    -- ── PICKUPS: an errand is a task, not a work order ──────────────────
+    -- John, 2026-09-18, after 86 refused a service ticket for a Lowe's
+    -- collection: a work order needs a job or lead parent, and an errand has
+    -- neither. It also carries a scope, a punch list, photo-as-proof per
+    -- building and an approval, none of which a supplier run has. So a
+    -- pickup is a TASK with kind 'pickup' — tasks already have the due date,
+    -- the assignee, the OPTIONAL entity link (an errand can stand alone),
+    -- lat/lng with directions, attachments, and a share link an outside
+    -- runner uses with no login.
+    --
+    -- One column, because what is missing is only the supplier half:
+    --   { v, store, branch, order_ref, phone, address,
+    --     window_start, window_end, note, items:[{qty, unit, description, got}] }
+    --
+    -- THERE IS NO PRICE IN THAT SHAPE, deliberately and not as an omission.
+    -- The items are what to COLLECT. A pickup goes to a runner or a sub on a
+    -- forwardable link, and what the company pays for soffit vents is not
+    -- their business — so there is nowhere to put a price rather than a
+    -- field somebody is trusted to leave blank.
+    --
+    -- kind stays a free TEXT column with the vocabulary enforced in
+    -- routes/tasks-routes.js KINDS, as 'todo' / 'punch' / 'follow_up'
+    -- already are: a CHECK here would have to be migrated in lockstep with
+    -- that set, and the set is the thing people actually edit.
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pickup JSONB;
+    -- "What was that Lowe's order number" is how somebody looks for one of
+    -- these, so the reference is searchable on its own rather than only
+    -- through the title.
+    CREATE INDEX IF NOT EXISTS idx_tasks_pickup_ref
+      ON tasks((pickup->>'order_ref'))
+      WHERE pickup IS NOT NULL AND archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_tasks_org_pickup
+      ON tasks(organization_id, due_date)
+      WHERE kind = 'pickup' AND archived_at IS NULL;
+
     -- A PROPOSED change to a ticket, submitted by someone who is not allowed to
     -- change it directly. THIS IS WHAT "editing from the share screen" RESOLVES
     -- TO for a bearer token: the guest really does type into the scope and press

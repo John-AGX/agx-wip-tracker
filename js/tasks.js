@@ -67,10 +67,119 @@
     for (var i = 0; i < PRIORITIES.length; i++) if (PRIORITIES[i].v === p) return PRIORITIES[i];
     return PRIORITIES[2];
   }
+  // ── A PICKUP: the supplier half of an errand ─────────────────────────
+  // Shown only when the kind is Pickup, and it appears the moment the kind
+  // is switched, so somebody choosing Pickup is not left wondering where to
+  // type the order number. Every field but the supplier and the list is
+  // optional; the server refuses a pickup nobody could run rather than
+  // saving a blank errand (server/services/pickup-task.js).
+  //
+  // THERE IS NO PRICE BOX, and that is the design rather than an omission.
+  // The list is what to COLLECT, it travels down a share link to a runner
+  // or a sub, and what the company pays is not their business.
+  var _pickupItems = [];
+
+  function pickupRowHTML(it, i) {
+    return '<div class="p86-pu-row" data-i="' + i + '">' +
+      '<input class="p86-pu-qty" type="number" step="0.01" min="0" placeholder="Qty" value="' +
+        escAttr(it.qty == null ? '' : it.qty) + '" />' +
+      '<input class="p86-pu-unit" type="text" maxlength="24" placeholder="ea" value="' +
+        escAttr(it.unit || '') + '" />' +
+      '<input class="p86-pu-desc" type="text" maxlength="300" placeholder="What to collect" value="' +
+        escAttr(it.description || '') + '" />' +
+      '<button type="button" class="p86-pu-rm" title="Remove this line">&times;</button>' +
+    '</div>';
+  }
+
+  function pickupHTML(task) {
+    var p = (task && task.pickup && typeof task.pickup === 'object') ? task.pickup : {};
+    _pickupItems = Array.isArray(p.items) && p.items.length
+      ? p.items.map(function (i) { return { qty: i.qty, unit: i.unit, description: i.description, got: i.got }; })
+      : [{ qty: '', unit: '', description: '' }];
+    var on = task && task.kind === 'pickup';
+    return '<div class="p86-field p86-pu" id="tdPickup" style="margin-top:12px;"' + (on ? '' : ' hidden') + '>' +
+      '<span>Pickup</span>' +
+      '<div class="p86-pu-grid">' +
+        '<label>Supplier<input id="tdPuStore" type="text" maxlength="120" placeholder="Lowe\u2019s" value="' + escAttr(p.store || '') + '" /></label>' +
+        '<label>Branch / desk<input id="tdPuBranch" type="text" maxlength="120" placeholder="Plant City Pro Desk" value="' + escAttr(p.branch || '') + '" /></label>' +
+        '<label>Order / reference<input id="tdPuRef" type="text" maxlength="80" placeholder="300901261260239973" value="' + escAttr(p.order_ref || '') + '" /></label>' +
+        '<label>Phone<input id="tdPuPhone" type="tel" maxlength="40" placeholder="Pro Desk" value="' + escAttr(p.phone || '') + '" /></label>' +
+      '</div>' +
+      '<label class="p86-pu-addr">Pickup address' +
+        '<input id="tdPuAddr" type="text" maxlength="300" placeholder="Where to collect it" value="' + escAttr(p.address || '') + '" /></label>' +
+      '<div class="p86-pu-when">' +
+        '<label>From<input id="tdPuFrom" type="time" value="' + escAttr(p.window_start || '') + '" /></label>' +
+        '<label>Until<input id="tdPuTo" type="time" value="' + escAttr(p.window_end || '') + '" /></label>' +
+        '<span class="p86-pu-hint">On the due date. Leave either blank for an open end.</span>' +
+      '</div>' +
+      '<label class="p86-pu-note">For whoever collects it' +
+        '<textarea id="tdPuNote" rows="2" maxlength="2000" placeholder="Ask for Dwayne at the Pro Desk\u2026">' + esc(p.note || '') + '</textarea></label>' +
+      '<div class="p86-pu-items">' +
+        '<span class="p86-pu-itemshdr">What to collect</span>' +
+        '<div id="tdPuRows">' + _pickupItems.map(pickupRowHTML).join('') + '</div>' +
+        '<button type="button" id="tdPuAdd" class="ee-btn secondary">+ Add line</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // What the save sends, or null when this is not a pickup. Empty lines are
+  // dropped here so a half-typed row somebody abandoned does not become a
+  // refusal they have to go and find.
+  function pickupPayload(modal) {
+    var rows = Array.prototype.map.call(modal.querySelectorAll('#tdPuRows .p86-pu-row'), function (r) {
+      return {
+        qty: r.querySelector('.p86-pu-qty').value,
+        unit: r.querySelector('.p86-pu-unit').value,
+        description: r.querySelector('.p86-pu-desc').value,
+      };
+    }).filter(function (i) { return String(i.description || '').trim() || String(i.qty || '').trim(); });
+    return {
+      store: modal.querySelector('#tdPuStore').value,
+      branch: modal.querySelector('#tdPuBranch').value,
+      order_ref: modal.querySelector('#tdPuRef').value,
+      phone: modal.querySelector('#tdPuPhone').value,
+      address: modal.querySelector('#tdPuAddr').value,
+      window_start: modal.querySelector('#tdPuFrom').value,
+      window_end: modal.querySelector('#tdPuTo').value,
+      note: modal.querySelector('#tdPuNote').value,
+      items: rows,
+    };
+  }
+
+  function wirePickup(modal) {
+    var panel = modal.querySelector('#tdPickup');
+    var kindSel = modal.querySelector('#tdKind');
+    if (!panel || !kindSel) return;
+    // Switching the kind shows it at once — nobody should have to save and
+    // reopen to find out where the order number goes.
+    kindSel.addEventListener('change', function () { panel.hidden = kindSel.value !== 'pickup'; });
+
+    var rows = modal.querySelector('#tdPuRows');
+    var add = modal.querySelector('#tdPuAdd');
+    if (add) add.addEventListener('click', function () {
+      rows.insertAdjacentHTML('beforeend', pickupRowHTML({ qty: '', unit: '', description: '' }, rows.children.length));
+      var last = rows.lastElementChild;
+      if (last) last.querySelector('.p86-pu-desc').focus();
+    });
+    if (rows) rows.addEventListener('click', function (e) {
+      var rm = e.target && e.target.closest ? e.target.closest('.p86-pu-rm') : null;
+      if (!rm || !rows.contains(rm)) return;
+      var row = rm.closest('.p86-pu-row');
+      // Never leave none: an empty list is a pickup nobody can run, and the
+      // server would refuse the save with the panel looking fine.
+      if (rows.children.length > 1) row.remove();
+      else Array.prototype.forEach.call(row.querySelectorAll('input'), function (i) { i.value = ''; });
+    });
+  }
+
   var KINDS = [
     { v: 'todo', label: 'To-Do' },
     { v: 'punch', label: 'Punch item' },
-    { v: 'follow_up', label: 'Follow-up' }
+    { v: 'follow_up', label: 'Follow-up' },
+    // A supplier errand. It is a TASK and not a work order because a work
+    // order needs a job or lead parent and an errand has neither — see
+    // server/services/pickup-task.js for the whole argument.
+    { v: 'pickup', label: 'Pickup' }
   ];
   var STATUSES = [
     { v: 'open', label: 'Open' },
@@ -689,6 +798,7 @@
           '</div>' +
           '<label class="p86-field" style="margin-top:10px;"><span>Directions / access notes</span>' +
             '<textarea id="tdDirections" rows="2" placeholder="Gate code, where to park, which unit…">' + esc(task.directions || '') + '</textarea></label>' +
+          pickupHTML(task) +
           '<div class="p86-field" style="margin-top:10px;"><span>Photos</span>' +
             '<div id="tdPhotos" class="p86-task-photos" style="display:flex;gap:6px;flex-wrap:wrap;"></div>' +
             '<input id="tdPhotoInput" type="file" accept="image/*" capture="environment" multiple style="display:none;" />' +
@@ -736,6 +846,9 @@
       var inputs = h.modal.querySelectorAll('[data-cl-text]');
       if (inputs.length) inputs[inputs.length - 1].focus();
     });
+    // The pickup panel: show it the moment the kind is switched, and let its
+    // list of what to collect grow and shrink.
+    wirePickup(h.modal);
 
     // ── Geo pin: device location, manual edit, map picker, maps link ──
     // A task linked to a job DEFAULTS to that job's location; a task-specific
@@ -1049,6 +1162,9 @@
       // old value back, or null, is a write it refuses (409), and the title,
       // notes, due date, status, pin and checklist beside it die with it.
       if (!_isBldg) payload.assignee_user_id = (asgEl && asgEl.value) ? Number(asgEl.value) : null;
+      // The supplier half, only when this is one. Sent as a whole and merged
+      // over what is stored by the server, so a partial edit keeps the rest.
+      if (payload.kind === 'pickup') payload.pickup = pickupPayload(h.modal);
       var btn = h.modal.querySelector('#tdSave');
       btn.disabled = true; btn.textContent = 'Saving…';
       api().update(task.id, payload).then(function () {

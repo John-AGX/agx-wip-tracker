@@ -526,9 +526,22 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.75';
+const APP_VERSION = '1.76';
 
 const releases = [
+  {
+    version: '1.76',
+    date: '2026-09-29',
+    name: 'A pickup is a task, not a work order',
+    summary: 'Supplier errands \u2014 a Lowe\u2019s collection, a Pro Desk order \u2014 now have a shape of their own instead of being forced into a work order.',
+    changes: [
+      { type: 'new', text: 'Tasks have a new kind: Pickup. Choose it and the task grows a supplier panel \u2014 which store and branch, the order or reference number, the Pro Desk phone, where to collect it, a time window on the due date, a note for whoever goes, and a list of what to collect as quantity, unit and description. It is a task and not a work order on purpose: a work order needs a job or a lead behind it, and an errand has neither, so raising one used to mean inventing a parent job.' },
+      { type: 'new', text: 'A pickup can stand completely alone \u2014 no job, no lead, no work order \u2014 or be linked to a job like any other task. It keeps everything tasks already have: a due date, an assignee, a pin with directions, photos, and a share link you can send to a runner or a sub who has no login.' },
+      { type: 'new', text: 'THE LIST HAS NO PRICES, and there is no price box to leave blank \u2014 the errand travels down a forwardable link to whoever collects it, and what we pay is not their business.' },
+      { type: 'new', text: 'A pickup is not marked collected without a photo of the receipt or the pickup ticket, the same way a building is not finished without a completion photo. The office and the runner\u2019s link are held to exactly the same rule, and the runner can take the photo through their own link, so it is a step rather than a wall.' },
+      { type: 'improved', text: 'The order number is searchable. Typing it into the task search finds the errand even though the number is never in the title \u2014 which is how somebody actually looks for one of these.' },
+    ],
+  },
   {
     version: '1.75',
     date: '2026-09-29',

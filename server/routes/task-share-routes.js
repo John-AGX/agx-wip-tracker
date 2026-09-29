@@ -51,6 +51,9 @@ console.log('[task-share-routes] mounted at /api/tasks/:id/share + /api/task-sha
 
 const DEFAULT_TTL_DAYS = 14;
 const STATUSES = new Set(['open', 'in_progress', 'blocked', 'done']);
+// The supplier errand's one rule, asked here and at the office door from the
+// same place so the two can never drift.
+const pickupTask = require('../services/pickup-task');
 
 function genId(p) { return p + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8); }
 function genToken() { return crypto.randomBytes(32).toString('hex'); }
@@ -77,7 +80,13 @@ function publicTask(t) {
   return {
     title: t.title, notes: t.notes, kind: t.kind, status: t.status, priority: t.priority,
     due_date: t.due_date, checklist: Array.isArray(t.checklist) ? t.checklist : [],
-    lat: t.lat, lng: t.lng, directions: t.directions
+    lat: t.lat, lng: t.lng, directions: t.directions,
+    // A supplier errand's own half: where to go, what to ask for, what to
+    // collect. The runner cannot do the job without it. Projected through
+    // pickupTask.publicPickup rather than passed whole, by inclusion like
+    // the rest of this function — and the stored shape has no price field
+    // at all, so there is none to withhold (services/pickup-task.js).
+    pickup: pickupTask.publicPickup(t.pickup)
   };
 }
 
@@ -351,6 +360,24 @@ router.patch('/task-share/:token', loadShare, async (req, res) => {
     let doorResult = null;
     const statusIn = body.status && STATUSES.has(String(body.status)) ? String(body.status) : null;
     const flipsDone = !!statusIn && (statusIn === 'done') !== (req.task.status === 'done');
+
+    // A PICKUP IS NOT COLLECTED WITHOUT PROOF. The same question the office
+    // door asks, of the same module — services/pickup-task.js mayComplete —
+    // because a runner on a link and the office answering it differently is
+    // precisely how the work order's photo rule went wrong before 1.29.
+    //
+    // The runner CAN satisfy it: POST /api/task-share/:token/photo is on this
+    // router, so they photograph the receipt and then mark it collected. The
+    // refusal says which photo to take rather than just refusing.
+    if (pickupTask.isPickup(req.task) && statusIn === 'done' && req.task.status !== 'done') {
+      const proof = await pool.query(
+        "SELECT mime_type FROM attachments WHERE entity_type = 'task' AND entity_id = $1" +
+        '   AND organization_id = $2',
+        [String(req.task.id), req.task.organization_id]
+      );
+      const verdict = pickupTask.mayComplete(req.task, proof.rows);
+      if (!verdict.ok) return res.status(409).json({ error: verdict.error, code: 'needs_proof' });
+    }
     const actor = { kind: 'share', shareId: null, label: req.share.recipient_name || req.share.recipient_email || null };
     const building = !!statusIn && subtaskDoor.isWorkOrderSubtask(req.task);
     let ticket = null;
