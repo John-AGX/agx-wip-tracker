@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.74';
+const APP_VERSION = '1.75';
 
 const releases = [
+  {
+    version: '1.75',
+    date: '2026-09-29',
+    name: 'A building can come off a punch list',
+    summary: 'There was no way to remove a building from a work order once it had been added. Now there is.',
+    changes: [
+      { type: 'new', text: 'Open a building on a work order and there is a Remove this building link at the bottom of the card. A building added by mistake \u2014 a test, a duplicate, a unit that turned out not to need anything \u2014 could not be taken off at all before.' },
+      { type: 'improved', text: 'Nothing is deleted. The building leaves the punch list and its photos and notes are kept with it, the same way archiving a work order keeps the field work under it. The confirmation says so, counts the photos going with it, and warns you when it is the last building still open \u2014 because removing that one finishes the work order and tells its approvers.' },
+      { type: 'improved', text: 'It is the quietest control on the card and sits below everything else, so a thumb reaching for Take completion photo cannot hit it. It does not appear at all on an approved, closed or cancelled work order: reopen it first, which is the same rule that already governs adding a building.' },
+    ],
+  },
   {
     version: '1.74',
     date: '2026-09-29',

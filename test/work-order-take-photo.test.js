@@ -1661,3 +1661,155 @@ describe('crew link field report CSS: Take photo only for a finger, never on a W
     expect(displays(broken, el, TABLET)).toEqual(SHOWN);
   });
 });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * TAKING A BUILDING OFF THE PUNCH LIST
+ *
+ * John, 2026-09-29: "i need to be able to delete subtasks in the service
+ * tickets, right now there is no option, the unit999 on the latitude one was
+ * a test that i cant remove now."
+ *
+ * The DOOR has existed since 1.29 — DELETE /api/tasks/:id soft-archives a
+ * building through structureVerdict, writes a timeline line and recounts the
+ * work order. Only the control was missing. So what is pinned here is the
+ * control: that it exists, that it is not somewhere a thumb aiming at a
+ * photo button can hit it, what the confirm tells you before you commit, and
+ * that a refusal from the door is shown as the door worded it.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('removing a building', () => {
+  const rmOf = (card) => card.querySelector('.p86-wo-sub-rm');
+
+  async function office(opts) {
+    officeEnv(TICKETS_SRC, opts);
+    const d = await openTicket();
+    return { d, cards: Array.from(d.querySelectorAll('.p86-wo-sub')) };
+  }
+
+  test('every building card offers it when you can edit', async () => {
+    const { cards } = await office();
+    expect(cards).toHaveLength(2);
+    expect(cards.map((c) => rmOf(c) && rmOf(c).textContent.trim()))
+      .toEqual(['Remove this building', 'Remove this building']);
+  });
+
+  test('it is NOT in the row of photo buttons — that is where a thumb misfires', async () => {
+    const { cards } = await office();
+    expect(cards[0].querySelector('.p86-wo-sub-actions .p86-wo-sub-rm')).toBe(null);
+    // It sits in its own block, after the note box.
+    const body = cards[0].querySelector('.p86-wo-sub-body');
+    const kids = Array.from(body.children).map((n) => n.className);
+    expect(kids[kids.length - 1]).toContain('p86-wo-sub-remove');
+  });
+
+  test('a read-only viewer does not get it', async () => {
+    const { cards } = await office({ readOnly: true });
+    expect(cards.map(rmOf)).toEqual([null, null]);
+  });
+
+  test('and neither does anyone on a ticket whose punch list is LOCKED', async () => {
+    // The server says so — svc.subtaskStructureWritable, sent on the detail
+    // read as 'structure'. The browser does not carry its own copy of which
+    // statuses are locked, because that rule already lives in two places on
+    // the server and a third would be the one that drifts.
+    officeEnv(TICKETS_SRC);
+    const real = window.p86Api.serviceTickets.get;
+    window.p86Api.serviceTickets.get = jest.fn(() => real().then((r) => Object.assign(r, {
+      structure: { ok: false, reason: 'This work order is approved. Reopen it before changing its punch list.' },
+    })));
+    const d = await openTicket();
+    expect(Array.from(d.querySelectorAll('.p86-wo-sub')).map(rmOf)).toEqual([null, null]);
+  });
+
+  test('a read with no structure key at all still shows it — the door decides', async () => {
+    // An older payload, or a paint before the read landed. Hiding a control
+    // on a ticket that would have allowed it is the worse mistake; the door
+    // refuses either way.
+    const { cards } = await office();
+    expect(window.p86Api.serviceTickets.get.mock).toBeTruthy();
+    expect(rmOf(cards[0])).not.toBe(null);
+  });
+});
+
+describe('what it asks before it removes anything', () => {
+  async function ask(taskId, opts) {
+    officeEnv(TICKETS_SRC, opts);
+    window.p86Api.tasks = { remove: jest.fn(() => Promise.resolve({ ok: true })) };
+    const d = await openTicket();
+    const card = d.querySelector('.p86-wo-sub[data-task="' + taskId + '"]');
+    card.querySelector('.p86-wo-sub-rm').click();
+    await flush();
+    return { d, args: window.p86Confirm.mock.calls[0] && window.p86Confirm.mock.calls[0][0], remove: window.p86Api.tasks.remove };
+  }
+
+  test('it names the building, not "this item"', async () => {
+    const { args } = await ask('tk_784');
+    expect(args.title).toBe('Remove Bldg 784?');
+    expect(args.confirmText).toBe('Remove');
+    expect(args.danger).toBe(true);
+  });
+
+  test('it says nothing is deleted, and counts the photos going with it', async () => {
+    const { args } = await ask('tk_790');       // this one has a photo
+    expect(args.message).toContain('Nothing is deleted');
+    expect(args.message).toContain('its 1 photo and any notes are kept with it');
+  });
+
+  test('a building with no photos does not claim to have some', async () => {
+    const { args } = await ask('tk_784');
+    expect(args.message).toContain('any notes are kept with it');
+    expect(args.message).not.toMatch(/\d+ photo/);
+  });
+
+  test('and it warns when this is the last one still open', async () => {
+    // Removing the last unfinished building recounts the work order, which
+    // can finish it and tell the approvers. Somebody clearing up a mistake
+    // should know that BEFORE, not after.
+    officeEnv(TICKETS_SRC);
+    const real = window.p86Api.serviceTickets.get;
+    window.p86Api.serviceTickets.get = jest.fn(() => real().then((r) => {
+      r.tasks[1].status = 'done';               // only tk_784 still open
+      return r;
+    }));
+    window.p86Api.tasks = { remove: jest.fn(() => Promise.resolve({ ok: true })) };
+    const d = await openTicket();
+    d.querySelector('.p86-wo-sub[data-task="tk_784"] .p86-wo-sub-rm').click();
+    await flush();
+    expect(window.p86Confirm.mock.calls[0][0].message).toContain('last building still open');
+    expect(window.p86Confirm.mock.calls[0][0].message).toContain('approvers will be told');
+  });
+
+  test('with another still open it does NOT warn', async () => {
+    const { args } = await ask('tk_784');
+    expect(args.message).not.toContain('last building');
+  });
+
+  test('yes removes exactly that one', async () => {
+    const { remove } = await ask('tk_790');
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledWith('tk_790');
+  });
+
+  test('no removes nothing', async () => {
+    officeEnv(TICKETS_SRC);
+    window.p86Confirm = jest.fn(() => Promise.resolve(false));
+    window.p86Api.tasks = { remove: jest.fn(() => Promise.resolve({ ok: true })) };
+    const d = await openTicket();
+    d.querySelector('.p86-wo-sub[data-task="tk_784"] .p86-wo-sub-rm').click();
+    await flush();
+    expect(window.p86Api.tasks.remove).not.toHaveBeenCalled();
+  });
+
+  test('a refusal from the door is shown in the door\u2019s own words', async () => {
+    officeEnv(TICKETS_SRC);
+    const sentence = 'This work order is approved. Reopen it before changing its punch list.';
+    window.p86Api.tasks = { remove: jest.fn(() => Promise.reject(new Error(sentence))) };
+    const d = await openTicket();
+    const btn = d.querySelector('.p86-wo-sub[data-task="tk_784"] .p86-wo-sub-rm');
+    btn.click();
+    await flush();
+    expect(window.p86Toast).toHaveBeenCalledWith(sentence, 'error');
+    // …and the button comes back, so a ticket reopened in another tab can be
+    // tried again without a reload.
+    expect(btn.disabled).toBe(false);
+  });
+});

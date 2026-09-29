@@ -549,3 +549,36 @@ describe('the office read carries each line\'s kind', () => {
     expect(r.body.tasks.map((t) => t.kind)).toEqual([undefined, undefined]);
   });
 });
+
+// ── the structure flag: may the punch list SHAPE change? ────────────────
+// Added 2026-09-29 with the Remove control on a building. The rule (approved
+// / closed / cancelled are locked) already lives twice on this side —
+// svc.subtaskStructureWritable, and the door in
+// services/service-ticket-subtask-door.js that asks it — so the screen is
+// TOLD rather than deciding, because a third copy in the browser is the one
+// that would drift out of step and offer a control the door then refuses.
+describe('the read says whether the punch list may change shape', () => {
+  const svc = require('../server/services/service-tickets');
+
+  test('an in-progress work order: open, and the door agrees', async () => {
+    const r = await readTicket(ticketRouter, 'st_a');
+    expect(r.statusCode).toBe(200);
+    expect(r.body.structure).toEqual({ ok: true });
+    expect(svc.subtaskStructureWritable('in_progress')).toEqual({ ok: true });
+  });
+
+  test('a closed one: locked, and it carries the sentence the door would use', async () => {
+    const r = await readTicket(ticketRouter, 'st_cl');
+    expect(r.body.structure.ok).toBe(false);
+    expect(r.body.structure.reason).toBe('This work order is closed. Reopen it before changing its punch list.');
+  });
+
+  test('it is the SERVICE\u2019s answer, not a second copy of the list', async () => {
+    // Every status the read can carry, compared against the one definition.
+    for (const id of ['st_a', 'st_b', 'st_c', 'st_cl']) {
+      const r = await readTicket(ticketRouter, id);
+      const expected = svc.subtaskStructureWritable(r.body.ticket.status);
+      expect([id, r.body.structure]).toEqual([id, expected]);
+    }
+  });
+});

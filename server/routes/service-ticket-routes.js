@@ -1389,6 +1389,13 @@ router.get('/:id', requireAuth, async (req, res) => {
       }),
       events: events.rows,
       progress: svc.ticketProgress(ticket, tasks.rows),
+      // May the punch list's SHAPE change — a building added, moved off or
+      // removed? Sent rather than re-derived on the client, because the rule
+      // (approved / closed / cancelled are locked) already exists twice on
+      // this side — svc.subtaskStructureWritable and the door that asks it —
+      // and a third copy in the browser is the one that would drift. The
+      // screen shows or hides Remove from this; the door still decides.
+      structure: svc.subtaskStructureWritable(ticket.status),
       shares: shares.rows.map(function (r) {
         return Object.assign({}, r, { state: svc.shareLifecycle(r) });
       }),

@@ -1311,8 +1311,32 @@
               '<button type="button" class="ee-btn secondary p86-wo-note-go">Add note</button>' +
             '</div>'
           : '') +
+        // REMOVE, last and quiet. A building put on by mistake had no way off
+        // the punch list at all (John, 2026-09-29: a test "unit999" he could
+        // not get rid of) — the door has existed since 1.29, only the control
+        // was missing.
+        //
+        // It is at the BOTTOM of an opened card on purpose: destructive, so
+        // it should not sit in the row of photo buttons where a thumb aiming
+        // for "Take completion photo" can reach it, and opening the card is
+        // itself a small deliberate act. `structureOpen` is the SERVER's
+        // answer, not a second copy of the rule.
+        (canEdit && structureOpen(ctx)
+          ? '<div class="p86-wo-sub-remove">' +
+              '<button type="button" class="p86-wo-sub-rm">Remove this building</button>' +
+            '</div>'
+          : '') +
       '</div>' +
     '</div>';
+  }
+
+  // Whether the punch list's shape may change, as the detail read answered.
+  // Absent (an older payload, or a screen painted before the read landed) is
+  // treated as OPEN: the door refuses anyway, and hiding the control on a
+  // ticket that would have allowed it is the worse of the two mistakes.
+  function structureOpen(ctx) {
+    var s = ctx && ctx.r && ctx.r.structure;
+    return !s || s.ok !== false;
   }
 
   // Where the work is: job number and name, tap-to-navigate address, gate code.
@@ -2089,6 +2113,54 @@
     if (noteGo) noteGo.addEventListener('click', addNote);
     if (noteIn) noteIn.addEventListener('keydown', function (e) {
       if (e.key === 'Enter') { e.preventDefault(); addNote(); }
+    });
+
+    // ── take a building off the punch list ──────────────────────────────
+    // A SOFT archive: DELETE /api/tasks/:id sets archived_at, so the photos
+    // and notes on it are kept and go with it. The confirm says so, and says
+    // the other thing that can happen — removing the last unfinished
+    // building recounts the work order, which can finish it and tell the
+    // approvers. Somebody clearing up a mistake should know that before it
+    // happens, not after.
+    var rm = card.querySelector('.p86-wo-sub-rm');
+    if (rm) rm.addEventListener('click', function () {
+      var ctx = ctxNow();
+      var t = task();
+      var head = (ctx.parseSubtaskTitle ? ctx.parseSubtaskTitle(t.title || '').head : null) || t.title || 'this building';
+      var shots = photos().length;
+      // ctx.r.tasks is the list the screen was painted from; ctx.tasksById is
+      // the same rows keyed by id. Either would do — this one is the order
+      // the punch list is in.
+      var others = ((ctx.r && ctx.r.tasks) || []).filter(function (x) {
+        return x && !x.archived_at && String(x.id) !== String(taskId);
+      });
+      var lastOpen = t.status !== 'done' && others.every(function (x) { return x.status === 'done'; });
+      // p86Confirm, never native confirm() — it no-ops inside the installed PWA.
+      var ask = window.p86Confirm
+        ? window.p86Confirm({
+            title: 'Remove ' + head + '?',
+            message: 'It comes off this work order’s punch list. Nothing is deleted — ' +
+              (shots ? 'its ' + shots + ' photo' + (shots === 1 ? '' : 's') + ' and any notes are kept with it'
+                     : 'any notes are kept with it') + '.' +
+              (lastOpen ? ' It is the last building still open, so the work order will finish and its approvers will be told.' : ''),
+            confirmText: 'Remove', danger: true
+          })
+        : Promise.resolve(true);
+      return Promise.resolve(ask).then(function (yes) {
+        if (!yes) return undefined;
+        rm.disabled = true;
+        return window.p86Api.tasks.remove(taskId).then(function () {
+          delete _state.openSubs[taskId];
+          toast(head + ' removed');
+          return updateDetail(d, ctx.ticketId).catch(noop);
+        }, function (e) {
+          rm.disabled = false;
+          // The door's own sentence — "This work order is approved. Reopen it
+          // before changing its punch list." — is better than anything this
+          // screen could invent, so it is shown as it came.
+          toast(e && e.message ? e.message : 'Could not remove that building', 'error');
+        });
+      });
     });
   }
 

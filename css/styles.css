@@ -13710,6 +13710,22 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
 .p86-wo-note-by { display: block; font-size: 10.5px; color: var(--text-dim, #888); }
 .p86-wo-note-add { display: flex; gap: 6px; }
 .p86-wo-note-in { flex: 1 1 auto; }
+
+/* Take a building off the punch list. Deliberately the quietest thing on an
+   opened card: a plain word, dim until you point at it, on its own line
+   below everything else. It is destructive, so it must not read like a
+   sibling of the photo buttons — the danger colour arrives on hover, when
+   the pointer is already committed, rather than sitting there inviting a
+   thumb. The confirm is where the real guard is. */
+.p86-wo-sub-remove { display: flex; justify-content: flex-end; margin-top: 10px; }
+.p86-wo-sub-rm {
+  background: none; border: 0; padding: 6px 2px;
+  font: inherit; font-size: 12px;
+  color: var(--text-dim, #888); cursor: pointer;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.p86-wo-sub-rm:hover:not(:disabled) { color: var(--danger, #e5534b); }
+.p86-wo-sub-rm:disabled { opacity: 0.5; cursor: default; }
 @media (max-width: 760px) {
   .p86-wo-sub-body { padding-left: 10px; }
   .p86-wo-sub-head { flex-wrap: wrap; }
