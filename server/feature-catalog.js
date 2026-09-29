@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.70';
+const APP_VERSION = '1.71';
 
 const releases = [
+  {
+    version: '1.71',
+    date: '2026-09-29',
+    name: 'Synced records keep the date Buildertrend made them',
+    summary: 'Anything imported from Buildertrend was dated the moment it was imported, so sorting by age told you about the import and nothing about the work.',
+    changes: [
+      { type: 'fixed', text: 'A lead or job brought in from Buildertrend was stamped with the time of the sync rather than the date Buildertrend created it. Because most records arrive in one big import, hundreds of them ended up sharing a single date \u2014 609 of 687 jobs landed on the same day \u2014 and sorting a list oldest-first ranked them by the order we happened to fetch them. Buildertrend had been sending the real date all along; nothing was writing it down.' },
+      { type: 'new', text: 'Leads now show both. Created is the date the lead was raised, in whichever system raised it, and a new Synced column says when Buildertrend\u2019s copy first reached us. Sorting by Created is now a genuine chronology. A lead raised in Project 86 keeps its own date, so the two kinds sort together correctly.' },
+      { type: 'improved', text: 'Records imported before this change are repaired in place by the next sync, a few at a time, with no re-import \u2014 re-importing is the one thing that can create duplicates. A date is only ever filled in, never overwritten, and a record whose date Buildertrend cannot give us keeps showing the date we have rather than a made-up one.' },
+    ],
+  },
   {
     version: '1.70',
     date: '2026-09-28',

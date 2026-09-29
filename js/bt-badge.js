@@ -211,7 +211,44 @@
     '</div>';
   }
 
+  /* WHEN THE RECORD WAS MADE, and when we pulled it.
+   *
+   * A record imported from Buildertrend has a created_at of the SYNC, not of
+   * the work: on the live org 609 of 687 jobs carried one day, because that is
+   * when the import ran. Sorting a list by age therefore ranked records by
+   * when we happened to fetch them. bt_created_at is Buildertrend’s own date,
+   * and it is what a list should order and show.
+   *
+   * The fallback is NOT cosmetic: a record made in Project 86 has no
+   * Buildertrend date and its created_at IS its true creation, so the two
+   * kinds sort together correctly in one list. A record synced before these
+   * columns existed also has none yet, and falls back until the next sync
+   * heals it — which is why this must never invent a date of its own.
+   */
+  function createdInstant(rec) {
+    if (!rec) return null;
+    return rec.bt_created_at || rec.btCreatedAt || rec.created_at || rec.createdAt || null;
+  }
+
+  // When Buildertrend’s copy first reached us. Null for a record that has
+  // never been synced, which is the honest answer — not its creation date.
+  function syncedInstant(rec) {
+    if (!rec) return null;
+    return rec.bt_synced_at || rec.btSyncedAt || null;
+  }
+
+  // Sort key: an unknown date sorts LAST in either direction rather than
+  // pretending to be 1970, which would pin every unknown to one end.
+  function createdSortKey(rec) {
+    const v = createdInstant(rec);
+    const t = v ? Date.parse(v) : NaN;
+    return isFinite(t) ? t : null;
+  }
+
   window.p86BtBadge = {
+    createdInstant: createdInstant,
+    syncedInstant: syncedInstant,
+    createdSortKey: createdSortKey,
     state: state,
     localTitle: localTitle,
     render: render,

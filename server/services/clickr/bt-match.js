@@ -950,6 +950,10 @@ function matchJobs(btValues, p86Rows, ctx) {
       status: str(v.jobStatus), scope: btScope(v.jobStatus),
       street: str(v.street), city: str(v.city), state: str(v.state), zip: str(v.zip),
       projectedStart: str(v.projectedStart), contractPrice: v.contractPrice, approvedCOPrice: v.approvedCOPrice,
+      // The SECOND layer. The comment three lines down says a key missing
+      // from this view is read and thrown away again, and that is exactly
+      // what happened to the job’s creation date.
+      createdDate: str(v.createdDate),
       coLabel: pj.coLabel,
       contactIds: Array.isArray(v.contactIds) ? v.contactIds.map(str) : [],
       // Enumerated view: a key missing here is read and thrown away again.
@@ -1923,7 +1927,31 @@ function matchClients(btValues, p86Rows, ctx) {
   return rows;
 }
 
+// A Buildertrend creation timestamp as an ISO instant, or null.
+//
+// Buildertrend sends these under different keys per dataset (createdDate on
+// jobs/leads/bills, dateAdded on COs/POs/estimates). A value this cannot parse
+// comes back NULL and never as `new Date()`: falling back to "now" is
+// the defect the column exists to fix, and it would be invisible, because
+// "now" always looks like a plausible date.
+//
+// Refuses anything before 1990 or more than a day ahead: Buildertrend sends
+// 0001 and 1900 sentinels for "unset", and those pin themselves to the top of
+// an age-sorted list for ever.
+function btInstant(v) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const t = Date.parse(s);
+  if (!isFinite(t)) return null;
+  const d = new Date(t);
+  if (d.getUTCFullYear() < 1990) return null;
+  if (t > Date.now() + 86400000) return null;
+  return d.toISOString();
+}
+
 module.exports = {
+  btInstant,
   matchJobs, matchLeads, matchClients, p86ClientView, CLIENT_CUSTOM_FIELDS, JOB_CUSTOM_FIELDS, fieldText, clientCore, sameClientProperty, emailKey, phoneKey, notInBuildertrend, summarise, RATE_CLASSES,
   parseJobName, exactNumberKey, looseNumberKey, namesAgree, nameEvidence, placeEvidence, streetsMatchStrict, streetsAgree, samePlace,
   nearIndex, nearKey, nearTitles, bigrams, GENERIC,

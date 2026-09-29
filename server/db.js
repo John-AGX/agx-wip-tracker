@@ -1483,6 +1483,24 @@ async function initSchema() {
     -- re-matching on number, name and address. NULL = never linked. Unique per
     -- organization: one Buildertrend record links to at most one P86 record.
     ALTER TABLE jobs    ADD COLUMN IF NOT EXISTS bt_job_id TEXT;
+    -- WHEN BUILDERTREND MADE THE RECORD, and when we first pulled it.
+    --
+    -- Without these a synced record's created_at is the INSTANT OF THE SYNC:
+    -- measured on the live org, 609 of 687 jobs carried 2026-09-25 because
+    -- that is the day the big import ran. Sorting a list by age therefore
+    -- said nothing about the work, only about when we happened to import it.
+    --
+    -- Buildertrend supplies the real one (jobs.createdDate: non-empty on all
+    -- 729 records, 729 distinct values), and it was being read by
+    -- services/clickr/field-map.js and then dropped on the floor.
+    --
+    -- created_at is NOT repurposed. It still means "this row appeared in our
+    -- database", which is what an audit needs; bt_created_at is the record's
+    -- age in the system it was born in, and it is what lists sort on.
+    ALTER TABLE jobs  ADD COLUMN IF NOT EXISTS bt_created_at TIMESTAMPTZ;
+    ALTER TABLE jobs  ADD COLUMN IF NOT EXISTS bt_synced_at  TIMESTAMPTZ;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS bt_created_at TIMESTAMPTZ;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS bt_synced_at  TIMESTAMPTZ;
     ALTER TABLE leads   ADD COLUMN IF NOT EXISTS bt_lead_id TEXT;
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS bt_contact_id TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_org_bt_job_id       ON jobs(organization_id, bt_job_id)       WHERE bt_job_id IS NOT NULL;

@@ -157,6 +157,7 @@ router.get('/', requireAuth, async (req, res) => {
     const { rows } = await pool.query(`
       SELECT j.id, j.data, j.owner_id, j.created_at, j.updated_at,
              j.geocode_lat, j.geocode_lng, j.geocode_address, j.market_id, j.bt_job_id,
+             j.bt_created_at, j.bt_synced_at,
              COALESCE(ja.access_level, '') AS access_level
       FROM jobs j
       LEFT JOIN job_access ja ON ja.job_id = j.id AND ja.user_id = $1
@@ -187,7 +188,15 @@ router.get('/', requireAuth, async (req, res) => {
         // name (js/bt-badge.js). The COLUMN, never the blob: the Buildertrend
         // sync owns it, and a client-supplied copy would let anyone paint a
         // job as linked to Buildertrend when it is not. Stripped on save below.
-        bt_job_id: j.bt_job_id || null };
+        bt_job_id: j.bt_job_id || null,
+        // WHEN THE JOB WAS MADE, and when we pulled it. bt_created_at is
+        // Buildertrend's own date; created_at is when the row appeared here,
+        // which for an imported job is the instant of the sync. The client
+        // prefers the first and falls back to the second, so a job created in
+        // Project 86 still shows its own date.
+        bt_created_at: j.bt_created_at || null,
+        bt_synced_at: j.bt_synced_at || null,
+        created_at: j.created_at || null };
     });
     res.json({ jobs: result });
   } catch (e) {
@@ -1267,6 +1276,12 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), requireOrgId, 
         // round-trip it into the blob — where it would shadow the column and
         // could be set to anything by anyone. Same rule as market_id above.
         delete jobBlob.bt_job_id;
+        // Columns the SYNC owns, same rule as bt_job_id above: they ride out
+        // on the GET for the Created column and must not round-trip into the
+        // blob, where a client could set them to anything.
+        delete jobBlob.bt_created_at;
+        delete jobBlob.bt_synced_at;
+        delete jobBlob.created_at;
         // organization_id is the TENANT boundary and it lives on the column,
         // stamped from the caller's token below. A copy in the JSONB would be
         // client-supplied and would shadow the column for anything reading the

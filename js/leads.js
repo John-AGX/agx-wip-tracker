@@ -221,6 +221,7 @@ function p86Ask(message, opts) {
     { key: 'lost_reason', label: 'Lost Reason', sort: true },
     { key: 'notes', label: 'Notes', sort: false },
     { key: 'created_at', label: 'Created', sort: true },
+    { key: 'bt_synced_at', label: 'Synced', sort: true },
     { key: 'updated_at', label: 'Updated', sort: true },
     { key: 'id', label: 'Lead ID', sort: false }
   ];
@@ -267,6 +268,15 @@ function p86Ask(message, opts) {
 
   // Render one <td data-col> for a lead + column key. Used by both the list
   // (visible subset) and consistent across the app.
+  // Buildertrend’s date when we have it, ours otherwise — see
+  // p86BtBadge.createdInstant for why the fallback matters.
+  function leadCreated(l) {
+    return (window.p86BtBadge && window.p86BtBadge.createdInstant(l)) || l.created_at || null;
+  }
+  function leadSynced(l) {
+    return (window.p86BtBadge && window.p86BtBadge.syncedInstant(l)) || null;
+  }
+
   function leadCellFor(l, key) {
     switch (key) {
       case 'title': {
@@ -303,8 +313,18 @@ function p86Ask(message, opts) {
       case 'lost_at': return '<td data-col="lost_at">' + escapeHTML(l.lost_at ? fmtDate(l.lost_at) : '') + '</td>';
       case 'lost_reason': return '<td data-col="lost_reason">' + escapeHTML(l.lost_reason || '') + '</td>';
       case 'notes': return '<td data-col="notes" title="' + escapeAttr(l.notes || '') + '">' + escapeHTML((l.notes || '').slice(0, 60)) + '</td>';
-      case 'created_at': return '<td data-col="created_at">' + escapeHTML(l.created_at ? fmtDate(l.created_at) : '') + '</td>';
-      case 'updated_at': return '<td data-col="updated_at" title="created ' + escapeAttr(fmtDate(l.created_at)) + '">' + escapeHTML(fmtDate(l.updated_at || l.created_at)) + '</td>';
+      case 'created_at': {
+        // Shows when the lead was RAISED, in whichever system raised it. The
+        // tooltip names the other date rather than hiding it: for a synced
+        // lead the two differ, and 'when we pulled it' is a real question.
+        var made = leadCreated(l);
+        var syn = leadSynced(l);
+        var tip = syn ? 'Synced from Buildertrend ' + fmtDate(syn) : '';
+        return '<td data-col="created_at"' + (tip ? ' title="' + escapeAttr(tip) + '"' : '') + '>'
+          + escapeHTML(made ? fmtDate(made) : '') + '</td>';
+      }
+      case 'bt_synced_at': return '<td data-col="bt_synced_at">' + escapeHTML(leadSynced(l) ? fmtDate(leadSynced(l)) : '') + '</td>';
+      case 'updated_at': return '<td data-col="updated_at" title="created ' + escapeAttr(fmtDate(leadCreated(l))) + '">' + escapeHTML(fmtDate(l.updated_at || leadCreated(l))) + '</td>';
       case 'id': return '<td data-col="id" style="font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(l.id || '') + '</td>';
       default: return '<td data-col="' + escapeAttr(key) + '">' + escapeHTML(l[key] != null ? String(l[key]) : '') + '</td>';
     }
@@ -343,7 +363,29 @@ function p86Ask(message, opts) {
       bv = Number(revenueFromAttachedEstimates(b.id) || 0);
     } else if (key === 'confidence') {
       av = Number(a.confidence || 0); bv = Number(b.confidence || 0);
-    } else if (key === 'created_at' || key === 'updated_at') {
+    } else if (key === 'created_at') {
+      // THE POINT OF THE WHOLE CHANGE: order by when the lead was RAISED, not
+      // by when we imported it. Sorting on the raw created_at put every lead
+      // that arrived in a sync at the same instant, so an age sort ranked them
+      // by import order and told you nothing.
+      //
+      // A lead with no known date sorts to the BOTTOM in both directions, so
+      // the unknowns never masquerade as the oldest (0) or the newest.
+      var at = window.p86BtBadge ? window.p86BtBadge.createdSortKey(a) : null;
+      var bt = window.p86BtBadge ? window.p86BtBadge.createdSortKey(b) : null;
+      if (at == null && bt == null) return 0;
+      if (at == null) return 1;
+      if (bt == null) return -1;
+      av = at; bv = bt;
+    } else if (key === 'bt_synced_at') {
+      // Same rule: never synced is not "synced in 1970".
+      var as = leadSynced(a) ? new Date(leadSynced(a)).getTime() : null;
+      var bs = leadSynced(b) ? new Date(leadSynced(b)).getTime() : null;
+      if (as == null && bs == null) return 0;
+      if (as == null) return 1;
+      if (bs == null) return -1;
+      av = as; bv = bs;
+    } else if (key === 'updated_at') {
       av = a[key] ? new Date(a[key]).getTime() : 0;
       bv = b[key] ? new Date(b[key]).getTime() : 0;
     } else if (key === 'projected_sale_date') {
@@ -387,7 +429,7 @@ function p86Ask(message, opts) {
       // Default direction: dates and numerics descend (newest/biggest
       // first); text columns ascend. Projected-sale-date is the
       // exception — ascending puts the next-up sales first.
-      var descKeys = ['created_at', 'updated_at', 'revenue', 'confidence'];
+      var descKeys = ['created_at', 'bt_synced_at', 'updated_at', 'revenue', 'confidence'];
       _leadsSort.dir = descKeys.indexOf(key) !== -1 ? 'desc' : 'asc';
     }
     renderLeadsList();

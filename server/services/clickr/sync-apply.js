@@ -247,6 +247,35 @@ async function readDataset(org, kind, deps) {
     transport: deps.transport, limits: deps.limits, now: deps.now, baseUrl: deps.baseUrl });
 }
 
+/* BACKFILL THE BUILDERTREND DATES ON A ROW THAT ALREADY EXISTS.
+ *
+ * Every record imported before these columns existed carries NULL, and the
+ * live org has 687 jobs and 1,062 leads in exactly that state. Re-importing
+ * to fix a date is not an option — an import is the one operation that can
+ * create duplicates — so the ordinary sync heals them in passing.
+ *
+ * FILL-ONLY, and that is the whole safety argument:
+ *   • `bt_created_at IS NULL` in the predicate, so a date already recorded is
+ *     never rewritten, and a second pass over the same row writes nothing.
+ *   • nothing happens at all unless Buildertrend gave a date btInstant could
+ *     parse; a null stays null rather than becoming NOW().
+ *
+ * It runs BEFORE the "nothing to correct" early return further down. That
+ * return is taken by exactly the rows this is for — a job long since in step
+ * with Buildertrend has no field to apply, and would otherwise never be
+ * reached. It is provenance, not a correction, so it is deliberately not
+ * journalled and not reported as an applied field: it changes no figure and
+ * no one is being told their record was edited.
+ */
+async function healBtDates(db, table, orgId, id, btCreatedRaw) {
+  const iso = match.btInstant(btCreatedRaw);
+  if (!iso) return;
+  await db.query(
+    'UPDATE ' + table + ' SET bt_created_at = $1, bt_synced_at = COALESCE(bt_synced_at, NOW())'
+    + ' WHERE id = $2 AND organization_id = $3 AND bt_created_at IS NULL',
+    [iso, id, orgId]);
+}
+
 // ── jobs ─────────────────────────────────────────────────────────────────
 async function applyJob(db, orgId, row, mode, fields) {
   const btId = norm(row.bt.btId);
@@ -262,6 +291,8 @@ async function applyJob(db, orgId, row, mode, fields) {
   if (linkedTo && linkedTo !== btId) return { skipped: 'This P86 job is already linked to a different Buildertrend job.' };
   const taken = await db.query('SELECT id FROM jobs WHERE organization_id = $1 AND bt_job_id = $2 AND id <> $3', [orgId, btId, job.id]);
   if (taken.rows.length) return { skipped: 'Another P86 job is already linked to this Buildertrend job.' };
+
+  await healBtDates(db, 'jobs', orgId, job.id, row.bt.createdDate);
 
   const data = (job.data && typeof job.data === 'object') ? Object.assign({}, job.data) : {};
   const applied = [];
@@ -1437,6 +1468,10 @@ async function applyLead(db, orgId, row, mode, fields) {
   const lead = cur.rows[0];
   const linkedTo = norm(lead.bt_lead_id);
   if (linkedTo && linkedTo !== btId) return { skipped: 'This P86 lead is already linked to a different Buildertrend lead.' };
+
+  // Same fill-only backfill as a job — see healBtDates. The leads matcher has
+  // carried bt.createdDate since it was written; nothing ever recorded it.
+  await healBtDates(db, 'leads', orgId, lead.id, row.bt.createdDate);
   const taken = await db.query('SELECT id FROM leads WHERE organization_id = $1 AND bt_lead_id = $2 AND id <> $3', [orgId, btId, lead.id]);
   if (taken.rows.length) return { skipped: 'Another P86 lead is already linked to this Buildertrend lead.' };
 
@@ -1651,10 +1686,12 @@ async function createLead(db, orgId, row, user) {
   const val = (v) => (match.isBtBlank(v) ? null : norm(v));
   const id = genId('lead_');
   await db.query(
-    'INSERT INTO leads (id, created_by, organization_id, title, status, street_address, city, state, zip, source, confidence, client_id, salesperson_id, bt_lead_id) '
-    + 'VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
+    // Same two dates as a job — see createJob. The leads matcher has carried
+    // bt.createdDate since it was written; nothing ever wrote it down.
+    'INSERT INTO leads (id, created_by, organization_id, title, status, street_address, city, state, zip, source, confidence, client_id, salesperson_id, bt_lead_id, bt_created_at, bt_synced_at) '
+    + 'VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())',
     [id, user && user.id != null ? user.id : null, orgId, norm(bt.title), 'new', val(bt.street), val(bt.city), val(bt.state), val(bt.zip),
-      val(bt.source), Number.isFinite(conf) && conf > 0 ? Math.max(0, Math.min(100, Math.round(conf))) : null, clientId, salespersonId, btId]);
+      val(bt.source), Number.isFinite(conf) && conf > 0 ? Math.max(0, Math.min(100, Math.round(conf))) : null, clientId, salespersonId, btId, match.btInstant(bt.createdDate)]);
   return { created: id, notes, regeocode: val(bt.street) || val(bt.city) ? id : null };
 }
 
@@ -1722,8 +1759,16 @@ async function createJob(db, orgId, row, user) {
   const lat = bt.latitude; const lng = bt.longitude;
   const onMap = lat != null && lng != null && !(lat === 0 && lng === 0);
   if (onMap) data.geocodeSource = 'buildertrend';
-  await db.query('INSERT INTO jobs (id, owner_id, data, organization_id, bt_job_id, client_id) VALUES ($1, $2, $3::jsonb, $4, $5, $6)',
-    [id, user && user.id != null ? user.id : null, JSON.stringify(data), orgId, btId, client ? client.id : null]);
+  // WHEN BUILDERTREND MADE IT, and when we pulled it. Without the first,
+  // created_at is the instant of the sync and every imported job looks the
+  // same age: 609 of 687 landed on one day. btInstant returns null rather
+  // than guessing, so a job whose date Buildertrend cannot give us keeps a
+  // NULL here and falls back to created_at at the read, never to a wrong date.
+  const btCreated = match.btInstant(bt.createdDate);
+  await db.query(
+    'INSERT INTO jobs (id, owner_id, data, organization_id, bt_job_id, client_id, bt_created_at, bt_synced_at)'
+    + ' VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, NOW())',
+    [id, user && user.id != null ? user.id : null, JSON.stringify(data), orgId, btId, client ? client.id : null, btCreated]);
   if (mkt) await db.query('UPDATE jobs SET market_id = $1 WHERE id = $2 AND organization_id = $3', [mkt.id, id, orgId]);
   if (onMap) {
     // Born on the map, with no geocoding call spent on it.

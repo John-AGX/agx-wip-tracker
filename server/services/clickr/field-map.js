@@ -446,6 +446,10 @@ function readJob(rec) {
     btId: scalarText(r.jobId),
     jobName: scalarText(r.jobName),
     jobStatus: scalarText(r.jobStatus),
+    // When Buildertrend made the job. Allowlisted at the top of this file
+    // since the jobs dataset was declared, and never named here — so it was
+    // fetched, permitted, and then dropped, every sync, for every job.
+    createdDate: scalarText(r.createdDate),
     street: scalarText(r.street),
     city: scalarText(r.city),
     state: scalarText(r.state),
