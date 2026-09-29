@@ -19,6 +19,7 @@
 'use strict';
 
 const express = require('express');
+const background = require('../background-jobs');
 const { pool } = require('../db');
 const { firstPhotoSql: sharedFirstPhotoSql, viewerImageSql } = require('../services/photo-cover');
 const { requireAuth, requireCapability } = require('../auth');
@@ -593,7 +594,11 @@ async function backfillProjectGeocodes() {
 // does, lazily, to record project activity on an agent-written photo caption —
 // no longer hangs for nine seconds after its work is done waiting on a timer
 // whose callback then queries a closed database.
-setTimeout(function () { backfillProjectGeocodes(); }, 9000).unref();
+// The comment above is why this was unref'd. unref was half the answer: an
+// unref'd timer still fires while the process lives, so in a test run the
+// callback woke up anyway and queried the closed database the comment warns
+// about. Now it is not scheduled under test at all.
+background.after(9000, backfillProjectGeocodes, 'project-geocodes');
 
 // Expose recordActivity for sibling route modules (pairs, future
 // reports) so they can post into the same activity feed without

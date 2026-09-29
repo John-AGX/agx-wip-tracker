@@ -31,6 +31,16 @@ const fs = require('fs');
 const path = require('path');
 const C = require('./fixtures/live-money-canaries');
 
+// Blank out the random hex identifiers on the wire — stream keys, and the
+// hex tails on room and participant ids — so a money-canary scan cannot be
+// tripped by a key that happens to contain the canary's digits. Eight or
+// more hex characters in a row is an identifier here; no figure this suite
+// looks for is anywhere near that long. Driven directly by a test below, so
+// it cannot quietly widen into hiding a real leak.
+function maskIds(s) {
+  return String(s == null ? '' : s).replace(/[0-9a-f]{8,}/gi, '<id>');
+}
+
 let queries;
 let db;
 
@@ -644,9 +654,40 @@ describe('a guest never receives a hidden number in any response byte', () => {
     const run = await sweepGuest();
     expect(run.frames.some((f) => f.type === 'cursor')).toBe(false);
     expect(run.buffer).not.toContain('"cursor"');
-    expect(run.buffer).not.toContain('4242');
+
+    // THE SENTINEL IS SCANNED PAST THE RANDOM IDENTIFIERS, and that is not a
+    // weakening — it is what stops this assertion firing on nothing.
+    //
+    // 4242 is four hex digits, and the wire is full of random hex: a 64-char
+    // stream_key, plus the hex tails on room_id and participant_id. A full
+    // run on 2026-09-29 failed here on
+    // stream_key "81245f3a3148" + "4242" + "c82603f6…" — the guest had leaked
+    // nothing at all; the random key simply happened to contain the digits.
+    // Left alone this fires roughly one run in a few hundred, for ever, and
+    // every time it does somebody has to read a 10 KB buffer to find out it
+    // was noise.
+    //
+    // So the identifiers are masked first. Only runs of 8+ hex characters
+    // go, which no leaked figure in this fixture is — and maskIds is
+    // self-tested below against a planted leak, so the mask cannot quietly
+    // start hiding the thing it was written to let through.
+    expect(maskIds(run.buffer)).not.toContain('4242');
     // A null projection means DO NOT SEND, never "send null".
     expect(run.buffer).not.toContain('data: null');
+  });
+
+  test('…and the mask does not hide a real leak', () => {
+    // The guard on the guard. If maskIds ever widened enough to swallow a
+    // genuine figure, the assertion above would pass on a leak — so the two
+    // shapes that matter are driven here: an identifier is masked, and the
+    // sentinel sitting in ordinary payload is not.
+    const withId = '{"stream_key":"81245f3a31484242c82603f6ad74a936b863bc0e"}';
+    expect(maskIds(withId)).not.toContain('4242');
+
+    const leak = '{"cursor":[[1,4242,8181]],"amount":4242}';
+    expect(maskIds(leak)).toContain('4242');
+    // A figure embedded in prose is still a figure.
+    expect(maskIds('{"note":"the total came to 4242 dollars"}')).toContain('4242');
   });
 
   test('prose carrying a figure is scrubbed, not shipped', async () => {

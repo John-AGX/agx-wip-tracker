@@ -1476,10 +1476,21 @@ describe('text that is not UTF-8: decoded in bounded time and memory, and only w
     expect(text.length).toBe(buf.length);
     expect(text.charCodeAt(4)).toBe(0x2013);
     expect(text.charCodeAt(text.length - 1)).toBe(0x2013);
-    // About 100 ms and the 50 MB of the string itself on a quiet machine. The
-    // replace callback was 900 ms and 700 MB of heap, past the process's limit.
-    expect(ms).toBeLessThan(2500);
+    // THE MEMORY BOUND IS THE GUARD, and the time bound is only a tripwire.
+    //
+    // The regression this test exists for — a replace callback per byte —
+    // cost 900 ms and 700 MB. 900 ms was already INSIDE the old 2500 ms
+    // budget, so that assertion never caught the bug it was written for;
+    // the 300 MB bound did, by a factor of two. What the time budget caught
+    // instead was a busy machine: it failed a full run on 2026-09-29 at
+    // 2766 ms, on a box with 0.5 GB of RAM free, while the code was fine.
+    //
+    // So the heap bound keeps its original number, and the clock gets a
+    // number that only a PATHOLOGICAL regression reaches. About 100 ms on a
+    // quiet machine; 30 s means something is quadratic, not that the
+    // machine is loaded.
     expect(grew).toBeLessThan(300 * MiB);
+    expect(ms).toBeLessThan(30000);
 
     const a = att({ filename: 'dashes.csv', size_bytes: buf.length });
     const s = process.hrtime.bigint();
@@ -1505,8 +1516,9 @@ describe('text that is not UTF-8: decoded in bounded time and memory, and only w
     const before = process.memoryUsage().heapUsed;
     const t = process.hrtime.bigint();
     expect(M.decodeText(big).charCodeAt(0)).toBe(0x2013);
-    expect(msSince(t)).toBeLessThan(2500);
+    // Heap first, clock as a tripwire — the same reasoning as the test above.
     expect(process.memoryUsage().heapUsed - before).toBeLessThan(300 * MiB);
+    expect(msSince(t)).toBeLessThan(30000);
   }, 60000);
 
   test('one stray ANSI byte in a UTF-8 file costs that byte, not every 3/4 and dash — with a BOM or without', async () => {

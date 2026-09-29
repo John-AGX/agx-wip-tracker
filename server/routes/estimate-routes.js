@@ -1,4 +1,5 @@
 const express = require('express');
+const background = require('../background-jobs');
 const { pool } = require('../db');
 // requireOrgId — see the note in client-routes.js. /bulk/save is the estimate
 // CREATE door (INSERT ... ON CONFLICT DO UPDATE) and bound
@@ -160,7 +161,10 @@ async function backfillEstimateGeocodes() {
     if (rows.length) console.log('[estimates] geocode backfill: processed ' + rows.length + ' estimate(s)');
   } catch (e) { console.error('[estimates] geocode backfill error:', e && e.message); }
 }
-setTimeout(() => { backfillEstimateGeocodes(); }, 18000); // after boot settles (offset from leads/projects backfills)
+// After boot settles (offset from the leads/projects backfills). Not under
+// test: in a ten-minute run this fires in every worker that required this
+// file and geocodes against whatever database the suite happened to set up.
+background.after(18000, backfillEstimateGeocodes, 'estimate-geocodes');
 
 // GET /api/estimates - list all estimates (org-wide visibility for now;
 // per-user/per-job permissions come later when we move estimates into the ERP layer)

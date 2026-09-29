@@ -79,7 +79,7 @@
  *
  * So this pass changes three things:
  *   - the scan starts at the REPO ROOT and reads jest's own
- *     testPathIgnorePatterns out of package.json rather than re-stating them,
+ *     testPathIgnorePatterns out of jest.config.js rather than re-stating them,
  *     so the guard tracks the config instead of a copy of it;
  *   - the detector resolves ALIASES and computed access and covers every deadly
  *     method (exit / abort / reallyExit, and kill aimed at this process's own
@@ -110,15 +110,33 @@ const TEST_DIR = __dirname;
 const ROOT_DIR = path.resolve(TEST_DIR, '..');
 
 /* Read jest's ignore list out of the project config rather than restating it,
- * so this guard cannot drift away from what the runner actually does. */
+ * so this guard cannot drift away from what the runner actually does.
+ *
+ * IT READS jest.config.js, and it THROWS if it cannot. Both halves matter.
+ * The list used to come from package.json's \`jest\` key, and when that key
+ * moved into jest.config.js (2026-09-29, the flake fixes) the old lookup
+ * quietly fell through a try/catch to an EMPTY list — so the walk below
+ * stopped ignoring anything and started parsing node_modules, reporting ten
+ * "broken" files that were nothing to do with this repo.
+ *
+ * A guard that loses the config it is tracking must say so, not carry on
+ * with different behaviour. Silence there cost more than the original
+ * question was worth. */
 const IGNORE = (() => {
-  let pats = [];
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
-    pats = (pkg.jest && pkg.jest.testPathIgnorePatterns) || [];
-  } catch (e) { /* fall through to the floor below */ }
+  const cfgPath = path.join(ROOT_DIR, 'jest.config.js');
+  if (!fs.existsSync(cfgPath)) {
+    throw new Error('this guard tracks jest.config.js and it is not at ' + cfgPath +
+      ' — if the config moved, point this at the new home rather than letting the walk widen.');
+  }
+  // eslint-disable-next-line global-require, import/no-dynamic-require
+  const cfg = require(cfgPath);
+  const pats = cfg.testPathIgnorePatterns;
+  if (!Array.isArray(pats) || !pats.length) {
+    throw new Error('jest.config.js has no testPathIgnorePatterns — the walk below would ' +
+      'scan node_modules and report every un-parseable file in it.');
+  }
   // .git is not in jest's list because jest never looks at it; this walk does.
-  return pats.concat(['/\\.git/']).map((p) => new RegExp(p));
+  return pats.concat(['/\\\\.git/']).map((p) => new RegExp(p));
 })();
 
 function isIgnored(rel) {
@@ -126,8 +144,8 @@ function isIgnored(rel) {
   return IGNORE.some((re) => re.test(probe));
 }
 
-/* Jest's default testMatch, which is what this project runs on — package.json
- * sets only testPathIgnorePatterns. Kept as the real patterns rather than
+/* Jest's default testMatch, which is what this project runs on — jest.config.js
+ * sets no testMatch. Kept as the real patterns rather than
  * ".test.js", because `*.spec.cjs` and `__tests__/anything.js` are collected
  * too and would otherwise be a hole. */
 function isCollectedByJest(rel) {

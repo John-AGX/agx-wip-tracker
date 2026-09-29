@@ -18,6 +18,7 @@
 // hints in the UI, NOT for billing. Update when models change.
 
 const express = require('express');
+const background = require('../background-jobs');
 // The rollback switch for the tenant repairs on this router. See
 // server/tenant-scope-flag.js: two values, default enforce, loud on every use.
 const TENANT_SCOPE = require('../tenant-scope-flag');
@@ -4956,16 +4957,20 @@ async function backgroundRefreshAll() {
 // leans on; an instrument that can drop the failure it was run to find is worse
 // than a slow one.
 //
-// unref() says "do not keep the process alive FOR MY SAKE". In the server the
-// HTTP listener is what holds the loop open, so both timers still fire on
-// exactly their old schedule and nothing about the refresh sweep changes. In a
-// test worker, or any script that merely requires this file, there is no
-// listener — so the process is now free to exit when its work is done instead
-// of being killed while it is still writing.
-const _bootRefreshTimer = setTimeout(backgroundRefreshAll, 30 * 1000);
-const _periodicRefreshTimer = setInterval(backgroundRefreshAll, REFRESH_INTERVAL_MS);
-if (typeof _bootRefreshTimer.unref === 'function') _bootRefreshTimer.unref();
-if (typeof _periodicRefreshTimer.unref === 'function') _periodicRefreshTimer.unref();
+// unref() said "do not keep the process alive FOR MY SAKE", and that much
+// was right — but it was not enough, and the 2026-09-29 flake hunt showed
+// it. While the process IS alive, which in a ten-minute test run it is, an
+// unref'd timer still FIRES: this sweep woke up inside test workers, called
+// the Anthropic API, and logged into a console the suite that required this
+// file had already torn down ("Cannot log after tests are done"). It also
+// took CPU from the tests on a machine with none spare, which is how a test
+// needing half a second misses a five-second deadline.
+//
+// background.after / .every keep the unref AND do not schedule at all under
+// test. In the server nothing changes: both still fire on exactly their old
+// schedule. See server/background-jobs.js.
+const _bootRefreshTimer = background.after(30 * 1000, backgroundRefreshAll, 'agent-resync-boot');
+const _periodicRefreshTimer = background.every(REFRESH_INTERVAL_MS, backgroundRefreshAll, 'agent-resync');
 
 // ──────── Anthropic-side agent inspection & sync (Phase 2) ────────
 //

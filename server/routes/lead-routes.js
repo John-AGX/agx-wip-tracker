@@ -1,4 +1,5 @@
 const express = require('express');
+const background = require('../background-jobs');
 const { pool } = require('../db');
 // requireOrgId — see the note in client-routes.js. POST /api/leads bound
 // req.user.organization_id straight into the INSERT with no gate, on the plain
@@ -965,6 +966,8 @@ async function backfillLeadGeocodes(opts) {
   } catch (e) { console.error('[leads] geocode backfill error:', e && e.message); return 0; }
   finally { _geocodeBackfillRunning = false; }
 }
-setTimeout(() => { backfillLeadGeocodes(); }, 12000);   // after boot settles (offset from the projects backfill)
+// After boot settles (offset from the projects backfill). Not under test —
+// see server/background-jobs.js.
+background.after(12000, backfillLeadGeocodes, 'lead-geocodes');
 
 module.exports = router;
