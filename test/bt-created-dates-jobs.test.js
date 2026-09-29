@@ -187,45 +187,100 @@ describe('the two dates reach the client at all', () => {
 });
 
 describe('a new column has to reach the people who already use the list', () => {
-  /* THE TRAP THIS FILE'S OWN CODE NAMES.
+  /* THREE LAYERS, EACH OUT-RANKING THE LAST.
    *
-   * The Leads list keeps its visible columns in localStorage, and a saved set
-   * out-ranks the registry. Everyone who has ever opened the page has one. So
-   * adding Synced to LEAD_COLS shipped it to nobody — checked on the live
-   * list, where the column was in the code and not on the page. js/leads.js
-   * says this in as many words about the Market column, one block above.
+   * The registry (LEAD_COLS), the set saved in localStorage, and a saved VIEW
+   * that replaces that set wholesale on every page load. Adding Synced to the
+   * registry reached nobody. A one-time upgrade of the saved set ALSO reached
+   * nobody, because leadsLoadViews() applies the default view immediately
+   * afterwards and writes the view's own columns over it — checked on the
+   * live list both times: the flag was set and the column was not there.
    */
   const src = read('js/leads.js').replace(/\r\n/g, '\n');
-  const restore = src.slice(src.indexOf('function restoreLeadCols()'),
-    src.indexOf('var _isTerminalLead'));
+  let withSyncedCol;
+  let rememberSyncedChoice;
 
-  test('the registry alone is not enough — there is a one-time upgrade', () => {
-    expect(restore).toContain("_leadCols.indexOf('bt_synced_at') === -1");
-    expect(liveLines(restore, "_leadCols.splice(_leadCols.indexOf('created_at') + 1, 0, 'bt_synced_at')").length).toBe(1);
-    expect(liveLine(restore, 'persistLeadCols();')).toBe(true);
+  beforeEach(() => {
+    window.localStorage.clear();
+    const sources = ['var SYNC_OFF = ' + JSON.stringify('p86-leads-cols-syncoff') + ';',
+      extractFunction(src, 'syncedColOff'),
+      extractFunction(src, 'withSyncedCol'),
+      extractFunction(src, 'rememberSyncedChoice')];
+    withSyncedCol = compile(sources, ['localStorage'], [window.localStorage], 'withSyncedCol');
+    rememberSyncedChoice = compile(sources, ['localStorage'], [window.localStorage], 'rememberSyncedChoice');
   });
 
-  test('it runs ONCE, under its own flag, so removing the column sticks', () => {
-    // Without the flag the column comes back on every page load and the
-    // person can never get rid of it.
-    expect(restore).toContain("'p86-leads-cols-syncv1'");
-    expect(liveLines(restore, "localStorage.setItem('p86-leads-cols-syncv1', '1')").length).toBe(1);
-    // and it must not borrow the Market column's flag, which is already set
-    // for every existing user — the upgrade would never run at all.
-    const at = restore.indexOf("indexOf('bt_synced_at')");
-    expect(restore.slice(0, at)).toContain("!localStorage.getItem('p86-leads-cols-syncv1')");
+  test('it rides next to Created', () => {
+    expect(withSyncedCol(['title', 'created_at', 'updated_at']))
+      .toEqual(['title', 'created_at', 'bt_synced_at', 'updated_at']);
   });
 
-  test('only where Created is already shown, and never added to the defaults', () => {
-    // Synced answers a question about a date that is already on screen. In an
-    // organisation with no Buildertrend it is a column of blanks.
-    expect(restore).toContain("_leadCols.indexOf('created_at') >= 0");
-    const defaults = src.slice(src.indexOf('var LEADS_DEFAULT_COLS = '), src.indexOf('\n', src.indexOf('var LEADS_DEFAULT_COLS = ')));
-    expect(defaults).not.toContain('bt_synced_at');
+  test('it is never added where Created is not shown', () => {
+    // Synced answers a question about a date that is already on screen.
+    expect(withSyncedCol(['title', 'status', 'updated_at'])).toEqual(['title', 'status', 'updated_at']);
   });
 
-  test('the column is in the registry, so the picker can offer it', () => {
+  test('it is never added twice', () => {
+    const once = ['created_at', 'bt_synced_at'];
+    expect(withSyncedCol(once)).toEqual(once);
+  });
+
+  test('switching it off in the picker sticks, and is not a one-way door', () => {
+    // A set the person chose that keeps Created and drops Synced is them
+    // saying no. Without recording that, the next page load puts it back and
+    // they can never get rid of it.
+    rememberSyncedChoice(['title', 'created_at']);
+    expect(withSyncedCol(['title', 'created_at'])).toEqual(['title', 'created_at']);
+    // and ticking it on again forgets the refusal
+    rememberSyncedChoice(['title', 'created_at', 'bt_synced_at']);
+    expect(withSyncedCol(['title', 'created_at'])).toEqual(['title', 'created_at', 'bt_synced_at']);
+  });
+
+  test('a set with no Created column says nothing either way', () => {
+    // Otherwise "Reset columns" (the defaults carry no Created) would read as
+    // a refusal and silently switch the column off for ever.
+    rememberSyncedChoice(['title', 'created_at']);          // a real refusal
+    window.localStorage.clear();
+    rememberSyncedChoice(['title', 'status']);              // says nothing
+    expect(withSyncedCol(['title', 'created_at'])).toEqual(['title', 'created_at', 'bt_synced_at']);
+  });
+
+  test('a browser that refuses localStorage still renders the list', () => {
+    // Private windows throw out of getItem. The column is worth less than the
+    // page, so the accessor is wrapped and the default is "show it".
+    const boom = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } };
+    const sources = ['var SYNC_OFF = "p86-leads-cols-syncoff";',
+      extractFunction(src, 'syncedColOff'), extractFunction(src, 'withSyncedCol'), extractFunction(src, 'rememberSyncedChoice')];
+    const w = compile(sources, ['localStorage'], [boom], 'withSyncedCol');
+    const r = compile(sources, ['localStorage'], [boom], 'rememberSyncedChoice');
+    expect(w(['created_at'])).toEqual(['created_at', 'bt_synced_at']);
+    expect(() => r(['created_at'])).not.toThrow();
+  });
+
+  test('BOTH places the column set comes from run it', () => {
+    // restoreLeadCols alone is not enough: applyLeadsView overwrites what it
+    // produced, on every load, for anyone with a default view. That is the
+    // bug this replaces, and a test that only looked at restoreLeadCols would
+    // have passed straight through it.
+    const restore = src.slice(src.indexOf('function restoreLeadCols()'), src.indexOf('var _isTerminalLead'));
+    expect(liveLine(restore, '_leadCols = withSyncedCol(_leadCols);')).toBe(true);
+    const view = src.slice(src.indexOf('function applyLeadsView(v)'), src.indexOf('window.leadsOpenViews'));
+    expect(liveLines(view, 'withSyncedCol(cfg.columns.slice())').length).toBe(1);
+  });
+
+  test('the picker records the choice on every path that sets the columns', () => {
+    const picker = src.slice(src.indexOf("pop.querySelectorAll('.lc-box')"), src.indexOf('#leads-save-view'));
+    // the per-checkbox handler and "All"
+    expect(liveLines(picker, 'rememberSyncedChoice(set);').length).toBe(1);
+    expect(liveLines(picker, 'rememberSyncedChoice(_leadCols);').length).toBe(1);
+    // and "Reset" clears it rather than recording a refusal
+    expect(liveLines(picker, 'localStorage.removeItem(SYNC_OFF);').length).toBe(1);
+  });
+
+  test('it is in the registry and in no default', () => {
     const cols = src.slice(src.indexOf('var LEAD_COLS'), src.indexOf('var LEADS_DEFAULT_COLS'));
     expect(cols).toContain("{ key: 'bt_synced_at', label: 'Synced', sort: true }");
+    const defaults = src.slice(src.indexOf('var LEADS_DEFAULT_COLS = '), src.indexOf('\n', src.indexOf('var LEADS_DEFAULT_COLS = ')));
+    expect(defaults).not.toContain('bt_synced_at');
   });
 });

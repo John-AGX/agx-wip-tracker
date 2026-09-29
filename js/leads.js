@@ -241,6 +241,50 @@ function p86Ask(message, opts) {
     });
   }
   function persistLeadCols() { try { localStorage.setItem('p86-leads-cols', JSON.stringify(_leadCols || LEADS_DEFAULT_COLS)); } catch (e) {} }
+
+  /* THE SYNCED COLUMN, AND WHY IT IS NOT A ONE-TIME UPGRADE.
+   *
+   * Three things decide which columns this list shows, and each one out-ranks
+   * the last: the registry below, the set saved in localStorage, and a saved
+   * VIEW, which replaces that set wholesale every time it is applied. The
+   * Market column above handles the middle one with a one-time flag, and that
+   * is as far as anyone had needed to go.
+   *
+   * It is not far enough. Shipped with only that flag and checked on the live
+   * list: the flag was set, the column was not there. leadsLoadViews() runs
+   * right after restoreLeadCols(), applies the default view, and writes the
+   * view's own columns over the upgraded set — so for anyone who uses views a
+   * one-time upgrade can never win, no matter when it runs.
+   *
+   * So it is applied wherever the set COMES FROM (both are restores of a set
+   * that predates the column), and switched off only by the person, in the
+   * column picker, which is recorded on purpose.
+   *
+   * Only beside Created, and in no default: Synced answers "when did
+   * Buildertrend's copy reach us", a question about a date already on screen.
+   * Next to a list with no Created column, or in an organisation with no
+   * Buildertrend, it is a column of blanks.
+   */
+  var SYNC_OFF = 'p86-leads-cols-syncoff';
+  function syncedColOff() { try { return localStorage.getItem(SYNC_OFF) === '1'; } catch (e) { return false; } }
+  function withSyncedCol(keys) {
+    if (!Array.isArray(keys) || syncedColOff()) return keys;
+    var at = keys.indexOf('created_at');
+    if (at < 0 || keys.indexOf('bt_synced_at') >= 0) return keys;
+    var out = keys.slice();
+    out.splice(at + 1, 0, 'bt_synced_at');
+    return out;
+  }
+  // The person's own choice, from the column picker. Recorded so the two
+  // restores above stop adding it back — and cleared the moment they tick it
+  // on again, so this is a preference and not a one-way door.
+  function rememberSyncedChoice(set) {
+    try {
+      if (set.indexOf('created_at') < 0) return;      // says nothing either way
+      if (set.indexOf('bt_synced_at') >= 0) localStorage.removeItem(SYNC_OFF);
+      else localStorage.setItem(SYNC_OFF, '1');
+    } catch (e) {}
+  }
   function restoreLeadCols() {
     try {
       var s = JSON.parse(localStorage.getItem('p86-leads-cols') || 'null');
@@ -262,25 +306,7 @@ function p86Ask(message, opts) {
         localStorage.setItem('p86-leads-cols-mktv1', '1');
       }
     } catch (e) {}
-    // The SAME trap, for the Synced column. Adding it to LEAD_COLS alone
-    // shipped it to nobody: every person who has ever opened this list has a
-    // saved set, and a saved set out-ranks the registry. Checked on the live
-    // list — the column was in the code and not on the page.
-    //
-    // Only where Created is already shown, and never added to the defaults.
-    // Synced answers "when did Buildertrend's copy reach us", which is a
-    // question about a date that is already on screen; beside a list with no
-    // Created column, and in an organisation with no Buildertrend at all, it
-    // is a column of blanks. Flagged, so removing it keeps it removed.
-    try {
-      if (!localStorage.getItem('p86-leads-cols-syncv1')) {
-        if (_leadCols && _leadCols.indexOf('created_at') >= 0 && _leadCols.indexOf('bt_synced_at') === -1) {
-          _leadCols.splice(_leadCols.indexOf('created_at') + 1, 0, 'bt_synced_at');
-          persistLeadCols();
-        }
-        localStorage.setItem('p86-leads-cols-syncv1', '1');
-      }
-    } catch (e) {}
+    _leadCols = withSyncedCol(_leadCols);
   }
   var _isTerminalLead = function (l) { return ['sold', 'lost', 'no_opportunity'].indexOf(l.status) !== -1; };
   var _overdueDate = function (val, active) { if (!val) return false; var t = new Date(val).getTime(); return active && !isNaN(t) && t < Date.now() - 86400000; };
@@ -591,7 +617,10 @@ function p86Ask(message, opts) {
     setLeadsActiveView(v.id);
     var cfg = v.config || {};
     _leadsDrawer = (cfg.filters && Object.keys(cfg.filters).length) ? cfg.filters : null;
-    _leadCols = (Array.isArray(cfg.columns) && cfg.columns.length) ? cfg.columns.slice() : null;
+    // withSyncedCol here as well as in restoreLeadCols: a view replaces the
+    // saved set outright, and it was saved before this column existed. Without
+    // this, applying a view is what made the column disappear again.
+    _leadCols = (Array.isArray(cfg.columns) && cfg.columns.length) ? withSyncedCol(cfg.columns.slice()) : null;
     persistLeadCols();
     updateLeadsFilterBtn(); updateLeadsViewsBtn(); renderLeadsList();
   }
@@ -633,13 +662,16 @@ function p86Ask(message, opts) {
       cb.addEventListener('change', function() {
         var set = []; pop.querySelectorAll('.lc-box').forEach(function(x) { if (x.checked) set.push(x.getAttribute('data-key')); });
         if (!set.length) { cb.checked = true; return; }
+        rememberSyncedChoice(set);
         _leadCols = set; setLeadsActiveView(null); persistLeadCols(); updateLeadsViewsBtn(); renderLeadsList();
       });
     });
     var lcAll = pop.querySelector('#lc-all');
-    if (lcAll) lcAll.addEventListener('click', function(e) { e.preventDefault(); _leadCols = leadAllColKeys(); setLeadsActiveView(null); persistLeadCols(); updateLeadsViewsBtn(); renderLeadsList(); pop.querySelectorAll('.lc-box').forEach(function(x) { x.checked = true; }); });
+    if (lcAll) lcAll.addEventListener('click', function(e) { e.preventDefault(); _leadCols = leadAllColKeys(); rememberSyncedChoice(_leadCols); setLeadsActiveView(null); persistLeadCols(); updateLeadsViewsBtn(); renderLeadsList(); pop.querySelectorAll('.lc-box').forEach(function(x) { x.checked = true; }); });
     var lcReset = pop.querySelector('#lc-reset');
-    if (lcReset) lcReset.addEventListener('click', function(e) { e.preventDefault(); _leadCols = LEADS_DEFAULT_COLS.slice(); setLeadsActiveView(null); persistLeadCols(); updateLeadsViewsBtn(); renderLeadsList(); pop.querySelectorAll('.lc-box').forEach(function(x) { x.checked = LEADS_DEFAULT_COLS.indexOf(x.getAttribute('data-key')) >= 0; }); });
+    // Reset means the shipped behaviour, so it forgets a Synced switched off
+    // too — the defaults carry no Created column, so it changes nothing today.
+    if (lcReset) lcReset.addEventListener('click', function(e) { e.preventDefault(); try { localStorage.removeItem(SYNC_OFF); } catch (err) {} _leadCols = LEADS_DEFAULT_COLS.slice(); setLeadsActiveView(null); persistLeadCols(); updateLeadsViewsBtn(); renderLeadsList(); pop.querySelectorAll('.lc-box').forEach(function(x) { x.checked = LEADS_DEFAULT_COLS.indexOf(x.getAttribute('data-key')) >= 0; }); });
     var sv = pop.querySelector('#leads-save-view');
     if (sv) sv.addEventListener('click', function() {
       var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;

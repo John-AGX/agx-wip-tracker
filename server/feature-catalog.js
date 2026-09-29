@@ -535,7 +535,8 @@ const releases = [
     name: 'The Synced column on Leads actually appears',
     summary: '1.71 said the leads list had a new Synced column. It did not — the column existed in the code and reached nobody.',
     changes: [
-      { type: 'fixed', text: 'The leads list remembers which columns you have chosen, and what you have chosen outranks anything added later — so a new column ships to people who have never opened the list, which is nobody who uses it. Synced now appears once, next to Created, for anyone whose list already shows Created. Hide it and it stays hidden; it is not forced back on the next time you load the page.' },
+      { type: 'fixed', text: 'Three things decide which columns the leads list shows, and each one overrides the last: what the app ships with, the columns you have chosen, and a saved view, which replaces your choice every time the page loads. A column added to the app reached none of them. Synced now appears next to Created wherever Created is shown — including inside a view you saved before the column existed, which is where it kept disappearing.' },
+      { type: 'improved', text: 'Untick it in the column chooser and it stays gone, on every page load and through any view. Tick it again and it comes back; Reset columns forgets the whole preference.' },
     ],
   },
   {
