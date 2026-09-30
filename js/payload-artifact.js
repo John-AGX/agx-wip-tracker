@@ -77,6 +77,17 @@
       'border-radius:6px;padding:10px 12px;font-family:ui-monospace,Menlo,' +
       'Consolas,monospace;font-size:11px;color:rgba(255,255,255,0.78);' +
       'line-height:1.55;max-height:280px;overflow:auto;white-space:pre-wrap;',
+    // The errand block is the preview's type at the card's own weight: it is
+    // read, not expanded, so it is brighter and has no max-height to hide a
+    // line in. Monospace because the thing being checked is an order number.
+    errand:
+      // Neutral rail, NOT the Approve button's green: this is the thing to
+      // check before approving, and a green bar beside a green button reads
+      // as something already confirmed.
+      'background:rgba(0,0,0,0.20);border-left:2px solid rgba(255,255,255,0.22);' +
+      'border-radius:4px;padding:7px 10px;margin:2px 0 0;font-family:ui-monospace,' +
+      'Menlo,Consolas,monospace;font-size:11px;color:var(--text,rgba(255,255,255,0.88));' +
+      'line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;',
   };
 
   function statusBadge(status) {
@@ -140,6 +151,17 @@
       const line = [it.qty, it.unit, it.description].filter((x) => x !== undefined && x !== null && x !== '').join(' ');
       if (line) out.push(line);
     });
+    return out;
+  }
+
+  // Every errand in the bundle, one block each, for the card body.
+  function pickupTargets(targets) {
+    if (!Array.isArray(targets)) return [];
+    const out = [];
+    for (const t of (targets || [])) {
+      const lines = pickupLines(t && t.ops && t.ops.fields && t.ops.fields.pickup);
+      if (lines.length) out.push(lines.join('\n'));
+    }
     return out;
   }
 
@@ -365,6 +387,25 @@
       e.style.color = 'rgba(255,180,173,0.85)';
       e.textContent = '✗ ' + payload.apply_error;
       card.appendChild(e);
+    }
+
+    // THE ERRAND, ON THE CARD ITSELF — not behind ⏷ Preview. For a pickup
+    // that button is one click too many: the store, the order number and the
+    // list were read off a photograph by 86, Approve sits right beside
+    // Preview, and a plausible wrong order number sends somebody to a Pro
+    // Desk for nothing. Here it is read whether or not anybody expands
+    // anything — and whether or not the Scribe supplied a changeset, which
+    // is the other way the preview can come up without these lines in it.
+    // Only while the card is still ready: once applied, the task is the
+    // record and the card is history.
+    if ((payload.status || 'ready') === 'ready') {
+      const errands = pickupTargets(payload.targets);
+      if (errands.length) {
+        const e = document.createElement('pre');
+        e.style.cssText = CARD_CSS.errand;
+        e.textContent = errands.join('\n\n');
+        card.appendChild(e);
+      }
     }
 
     // Expandable preview block
