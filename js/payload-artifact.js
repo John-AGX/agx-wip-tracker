@@ -118,6 +118,31 @@
     return targets.length;
   }
 
+  // A SUPPLIER ERRAND IS READ OFF A PHOTO of the order confirmation, so the
+  // one thing the approver has to check is the transcription: a plausible
+  // order number that is not the one on the slip sends somebody to a Pro Desk
+  // for nothing. Every other target shows its op keys and nothing else — this
+  // one also shows the store, the reference and the list, so the card can be
+  // held up against the picture. Plain text: the preview is set by
+  // textContent, and nothing here is trusted enough for anything else.
+  function pickupLines(p) {
+    if (!p || typeof p !== 'object') return [];
+    const out = [];
+    const where = [p.store, p.branch].filter(Boolean).join(' — ');
+    if (where) out.push(where);
+    const ref = [];
+    if (p.order_ref) ref.push('order ' + p.order_ref);
+    if (p.window_start || p.window_end) ref.push((p.window_start || '?') + '–' + (p.window_end || '?'));
+    if (p.phone) ref.push(p.phone);
+    if (ref.length) out.push(ref.join(' · '));
+    (Array.isArray(p.items) ? p.items : []).forEach((it) => {
+      if (!it || typeof it !== 'object') return;
+      const line = [it.qty, it.unit, it.description].filter((x) => x !== undefined && x !== null && x !== '').join(' ');
+      if (line) out.push(line);
+    });
+    return out;
+  }
+
   function summarizeOps(targets) {
     if (!Array.isArray(targets)) return '';
     const lines = [];
@@ -138,7 +163,9 @@
       const opSummary = opKeys.length
         ? opKeys.map((k) => '    • ' + k).join('\n')
         : '    (no ops)';
-      lines.push(head + '\n' + opSummary);
+      const errand = pickupLines(t.ops && t.ops.fields && t.ops.fields.pickup);
+      lines.push(head + '\n' + opSummary +
+        (errand.length ? '\n' + errand.map((l) => '      ' + l).join('\n') : ''));
     });
     return lines.join('\n\n');
   }

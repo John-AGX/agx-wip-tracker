@@ -214,6 +214,24 @@ function codeKey(key) {
   return String(key).slice(0, 64);
 }
 
+// A SUPPLIER ERRAND'S qty IS A COUNT OF SOFFIT VENTS, not half of an amount.
+// `qty` is on the money list because qty × unit cost IS the amount — but in a
+// pickup the other half does not exist: the shape (services/pickup-task.js)
+// has NO price field at all, not one left blank, and its validator deletes
+// every key that is not in the shape before anything is written.
+//
+// ONLY THE COUNT IS EXEMPT. A price, cost, total or amount a confused model
+// puts inside the block still cards the payload by name — that is the case
+// this sweep exists for, and it is the one that must keep working. And the
+// exemption costs no safety even if it were wrong: 'task' is not in
+// AUTO_APPLY_TYPES (ai-routes.js), so a pickup renders a card and waits for a
+// click either way. What it buys is a card that does not announce a money
+// field in the one record type that is guaranteed not to have one.
+const ERRAND_COUNT_TOKENS = new Set(['qty', 'quantity', 'quantities']);
+function isErrandCount(tokens, c, entityCtx) {
+  return entityCtx === 'pickup' && tokens.length === 1 && ERRAND_COUNT_TOKENS.has(c);
+}
+
 // The shape-blind rules, shared by both layers so the same key yields the same
 // reason code wherever it is found (which is what lets the line account for it).
 function keyRiskCodes(key, value, entityCtx) {
@@ -227,7 +245,9 @@ function keyRiskCodes(key, value, entityCtx) {
   // An id is an ADDRESS, not an amount: invoice_id and pay_application_id name
   // a record. Whether pointing at a different one matters is the link rule's
   // question, asked where the key is a field (bagKeyCodes), not here.
-  else if (!isIdKey(key) && isMoneyKey(tokens, c)) codes.push('money:' + codeKey(key));
+  else if (!isIdKey(key) && isMoneyKey(tokens, c) && !isErrandCount(tokens, c, entityCtx)) {
+    codes.push('money:' + codeKey(key));
+  }
   // `state` included, on EVERY money-bearing entity — a lead's too, although
   // LEAD_EDITABLE_FIELDS lists it as the address state between city and zip.
   // John's rule names status / stage / state, and isHighRiskPayload cards it
@@ -292,7 +312,13 @@ const BAGS = {
     'title', 'starts_at', 'ends_at', 'all_day', 'location', 'notes', 'color', 'status',
     'recurrence', 'reminder_minutes', 'entity_type',
   ], lowIds: ['entity_id'] }),
-  task: bagSpec({ low: ['title', 'notes', 'kind', 'status', 'priority', 'due_date', 'entity_type'],
+  // `pickup` is a SUPPLIER ERRAND's own half (kind 'pickup', services/
+  // pickup-task.js): where to go, what to collect, and a time window. It is
+  // low because there is nothing else in it — no money (the shape has no
+  // price field at all), no link, no owner. It reads as "pickup (details)" on
+  // the one-liner; the expanded card lists the store, the order number and
+  // every item, which is what gets held up against the photo it was read off.
+  task: bagSpec({ low: ['title', 'notes', 'kind', 'status', 'priority', 'due_date', 'entity_type', 'pickup'],
     lowIds: ['entity_id', 'assignee_user_id'] }),
   todo: bagSpec({ low: ['title', 'notes', 'kind', 'status', 'priority', 'due_date', 'entity_type'],
     lowIds: ['entity_id'] }),
@@ -1112,6 +1138,11 @@ function contextType(type, path) {
   for (let i = path.length - 1; i >= 0; i--) {
     if (CONTAINER_TYPES[path[i]]) return CONTAINER_TYPES[path[i]];
   }
+  // Inside a task's `pickup` blob the money question has its own answer —
+  // see isErrandCount. A record array above it still wins: the loop returns
+  // first, so a pickup key that somehow appeared under change_orders[] would
+  // read as a change order, which is the safe direction.
+  if (type === 'task' && path.indexOf('pickup') !== -1) return 'pickup';
   return type;
 }
 

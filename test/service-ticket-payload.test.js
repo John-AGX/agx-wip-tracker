@@ -1461,6 +1461,61 @@ describe('task_adds', () => {
     const t = one('SELECT * FROM tasks');
     expect([t.title, t.assignee_user_id, t.service_ticket_id]).toEqual(['Order the trim', 11, null]);
   });
+
+  // ── A PICKUP OFF A PHOTO OF THE ORDER CONFIRMATION ──────────────────
+  // The second of John's four pickup parts (2026-09-18). 86 reads a Pro
+  // Desk slip with view_attachment_image and emits this; what is checked
+  // here is the leg after that — that the payload really lands as a
+  // pickup, and that nothing it carries can put a price on the record.
+  test('86 writes a supplier errand, and it lands as a pickup', async () => {
+    const r = await drive(REAL_MOD(), [{ entity_type: 'task', ops: { op: 'create', fields: {
+      title: "Pick up 49 soffit vents — Lowe's Plant City",
+      kind: 'pickup',
+      due_date: '2026-10-02',
+      pickup: {
+        store: "Lowe's", branch: 'Plant City Pro Desk', order_ref: '300901261260239973',
+        phone: '(813) 555-0100', window_start: '08:00', window_end: '12:00',
+        items: [{ qty: 49, unit: 'ea', description: '96" aluminium soffit vent' }],
+      },
+    } } }], JOHN);
+    expect(r.stage).toBe('applied');
+    const t = one('SELECT * FROM tasks');
+    expect(t.kind).toBe('pickup');
+    const p = typeof t.pickup === 'string' ? JSON.parse(t.pickup) : t.pickup;
+    expect(p.store).toBe("Lowe's");
+    expect(p.order_ref).toBe('300901261260239973');
+    expect(p.items).toEqual([{ qty: 49, unit: 'ea', description: '96" aluminium soffit vent', got: false }]);
+    // An errand stands alone — no job invented to hang it on.
+    expect([t.entity_type, t.entity_id, t.service_ticket_id]).toEqual([null, null, null]);
+  });
+
+  test('a price the model sent is NOT on the record it wrote', async () => {
+    // The stored shape has no price field, so this cannot be stored — but
+    // the errand travels to a runner on a forwardable link, so it is worth
+    // proving against the row rather than trusting the validator's word.
+    const r = await drive(REAL_MOD(), [{ entity_type: 'task', ops: { op: 'create', fields: {
+      title: 'Grab caulk', kind: 'pickup',
+      pickup: { store: 'Home Depot', total: 2035,
+        items: [{ qty: 4, unit: 'tube', description: 'White exterior caulk', price: 8.97, extended: 35.88 }] },
+    } } }], JOHN);
+    expect(r.stage).toBe('applied');
+    const t = one('SELECT * FROM tasks');
+    const raw = typeof t.pickup === 'string' ? t.pickup : JSON.stringify(t.pickup);
+    expect(raw).not.toMatch(/8\.97|35\.88|2035|price|total|cost/i);
+  });
+
+  test('the kind and the block travel together, and neither half writes alone', async () => {
+    const bad = [
+      [{ title: 'x', kind: 'pickup' }, 'missing_field'],
+      [{ title: 'x', pickup: { store: 'Lowe\'s', items: [{ qty: 1, description: 'v' }] } }, 'wrong_kind'],
+      [{ title: 'x', kind: 'pickup', pickup: { store: '', items: [] } }, 'invalid_value'],
+    ];
+    for (const [fields, code] of bad) {
+      const r = await drive(REAL_MOD(), [{ entity_type: 'task', ops: { op: 'create', fields } }], JOHN);
+      expect([code, r.stage, r.detail.code]).toEqual([code, 'emit', code]);
+    }
+    expect(eng.count('SELECT 1 FROM tasks')).toBe(0);
+  });
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════

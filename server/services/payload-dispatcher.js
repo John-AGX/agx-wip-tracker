@@ -215,9 +215,18 @@ const CALENDAR_EVENT_STATUSES = new Set(['confirmed', 'tentative', 'canceled']);
 //              owner_user_id stamped) — NOT assignable.
 //   reminder → PERSONAL timed nudge in the reminders table (its own list),
 //              source='assistant'.
+// A supplier errand's supplier half: the same validator the HTTP door uses,
+// so a payload cannot write a shape a person could not.
+const pickupTask = require('./pickup-task');
+
 const TASK_FIELDS = new Set([
   'title', 'notes', 'kind', 'status', 'priority', 'due_date',
   'assignee_user_id', 'entity_type', 'entity_id',
+  // A SUPPLIER ERRAND's own half, legal only with kind 'pickup' — see
+  // services/pickup-task.js. This is the field 86 fills from a photo of an
+  // order confirmation, which is the whole point: reading a Pro Desk slip
+  // and typing it in again is the errand nobody wants.
+  'pickup',
 ]);
 const TODO_FIELDS = new Set([
   'title', 'notes', 'kind', 'status', 'priority', 'due_date',
@@ -232,7 +241,7 @@ const REMINDER_FIELDS = new Set([
 // a property/relationship (the Assistant defaults to CLIENT when an event
 // concerns a property, JOB for active work).
 const SCHEDULE_LINK_ENTITY_TYPES = new Set(['client', 'job', 'lead', 'project']);
-const TASK_KINDS = new Set(['todo', 'punch', 'follow_up']);
+const TASK_KINDS = new Set(['todo', 'punch', 'follow_up', 'pickup']);
 const TASK_STATUSES = new Set(['open', 'in_progress', 'blocked', 'done']);
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent']);
 
@@ -458,6 +467,14 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     //           status?, priority?, assignee_user_id? (in-org user; defaults
     //           to the actor) }. An ORG task — org-wide visible. org + creator
     //           stamped from ctx.
+    //
+    //           kind 'pickup' is a SUPPLIER ERRAND and takes one more field,
+    //           fields.pickup: { store, items:[{qty, unit?, description}],
+    //           branch?, order_ref?, phone?, address?, window_start? ('HH:MM'),
+    //           window_end?, note? }. NO PRICES — the list is what to COLLECT
+    //           and it travels to whoever fetches it. The two move together:
+    //           the kind without the block, or the block without the kind, is
+    //           refused by name.
     allowedTopKeys: new Set(['op', 'fields']),
   },
   todo: {
@@ -1186,6 +1203,41 @@ function validateOps(entityType, ops) {
           'search_entities entity_type "user" (each row shows "user #N"). Leave it out to assign the task to the approving user. Nothing was saved.',
           { code: 'wrong_type', field_path: 'task.ops.fields.assignee_user_id', expected: 'positive integer user id', received: v,
             suggestion: 'Resolve the person to their numeric user id (search_entities entity_type "user" prints "user #N"), or omit assignee_user_id to assign it to the approving user.' }
+        );
+      }
+    }
+    // A PICKUP AND ITS SUPPLIER HALF TRAVEL TOGETHER, both ways. A pickup
+    // with no supplier and nothing to collect is an errand nobody can run; a
+    // pickup block on an ordinary to-do is a field that would be stored and
+    // never read. Both refusals name the other half rather than saying
+    // "invalid", so the model's next move is obvious from the sentence.
+    const hasPickup = Object.prototype.hasOwnProperty.call(fields, 'pickup');
+    if (fields.kind === 'pickup' || hasPickup) {
+      if (fields.kind !== 'pickup') {
+        throw new PayloadValidationError(
+          `${entityType}.ops.fields.pickup is only for kind 'pickup' (got ${JSON.stringify(fields.kind || null)}). ` +
+          "Set kind: 'pickup' as well, or drop the pickup block. Nothing was saved.",
+          { code: 'wrong_kind', field_path: `${entityType}.ops.fields.kind`, expected: 'pickup', received: fields.kind || null }
+        );
+      }
+      if (!hasPickup) {
+        throw new PayloadValidationError(
+          `${entityType}.ops.fields.kind 'pickup' also needs fields.pickup: { store, ` +
+          'items:[{qty, unit?, description}], branch?, order_ref?, phone?, address?, ' +
+          'window_start?, window_end?, note? }. A pickup with no supplier and nothing ' +
+          'to collect is an errand nobody can run. Nothing was saved.',
+          { code: 'missing_field', field_path: `${entityType}.ops.fields.pickup`, expected: 'pickup detail object' }
+        );
+      }
+      // The SAME validator the HTTP door uses, so a payload cannot write a
+      // shape a person could not. It also strips anything outside the shape,
+      // and the shape has no price field at all — a pickup goes out on a
+      // forwardable link to whoever collects it.
+      const v = pickupTask.validate(fields.pickup);
+      if (!v.ok) {
+        throw new PayloadValidationError(
+          `${entityType}.ops.fields.pickup: ${v.error} Nothing was saved.`,
+          { code: 'invalid_value', field_path: `${entityType}.ops.fields.pickup`, received: fields.pickup }
         );
       }
     }
@@ -4677,6 +4729,16 @@ async function dispatchTask(dbClient, target, refTable, ctx) {
   for (const k of Object.keys(fields)) {
     if (!TASK_FIELDS.has(k) || k === 'assignee_user_id') continue;
     cols.push(k);
+    // The supplier half is validated again here and stored as the shape that
+    // comes BACK, not whatever the model sent: the check above proves it
+    // parses, this decides what is written. Serialised explicitly rather
+    // than left to the driver's guess at an object's column type.
+    if (k === 'pickup') {
+      const v = pickupTask.validate(fields.pickup);
+      if (!v.ok) throw new Error('task.fields.pickup: ' + v.error);
+      vals.push(JSON.stringify(v.pickup));
+      continue;
+    }
     vals.push(fields[k]);
   }
   const placeholders = cols.map((_, i) => '$' + (i + 1)).join(', ');

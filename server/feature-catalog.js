@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.81';
+const APP_VERSION = '1.82';
 
 const releases = [
+  {
+    version: '1.82',
+    date: '2026-09-30',
+    name: 'Send 86 a photo of the order and get the pickup',
+    summary: 'Photograph the Pro Desk slip, ask for a pickup, and 86 reads the order number and the list off it instead of you typing them in again.',
+    changes: [
+      { type: 'new', text: 'Send 86 a picture of an order confirmation, a Pro Desk slip or a will-call receipt and ask for a pickup. It reads the picture — the store and branch off the header, the order or reference number, the desk phone, and one line per item with its quantity and unit — and hands back a pickup task to approve. Reading a slip and typing it in again is the errand nobody wants.' },
+      { type: 'new', text: 'The approval card shows the errand before you approve it: the store, the order number, the collection window and every line. Hold it up against the photo — a wrong order number is the one mistake that sends somebody to a Pro Desk for nothing, and this is the last place to catch it.' },
+      { type: 'improved', text: '86 is told to copy, not guess. If the photo is too blurry to read the order number it leaves the field out and says which one it could not read, rather than filling in a plausible number.' },
+      { type: 'improved', text: 'A pickup 86 writes is held to exactly the same rules as one typed in by hand — the same store-and-at-least-one-item check, and STILL NO PRICES: there is no price field for 86 to fill, whatever the slip says, because the list travels down a forwardable link to whoever collects it.' },
+    ],
+  },
   {
     version: '1.81',
     date: '2026-09-30',
