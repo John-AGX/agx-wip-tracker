@@ -526,9 +526,18 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.80';
+const APP_VERSION = '1.81';
 
 const releases = [
+  {
+    version: '1.81',
+    date: '2026-09-30',
+    name: 'Admin: the prompt preview really does list recent jobs',
+    summary: 'The job picker on the AI prompt preview was in no particular order, and it only ever showed 80 jobs \u2014 so the one you wanted was often missing.',
+    changes: [
+      { type: 'fixed', text: 'On Admin \u203a AI \u203a prompt preview, the \u201cEntity \u2014 recent jobs\u201d dropdown was not sorted at all: it was reading a last-updated field the jobs list does not send, so every job looked the same age. It then kept only the first 80, which on hundreds of jobs meant an effectively random 80 and no way to reach the rest. It now really is the 80 most recently updated jobs, newest first. The estimate pickers beside it were always correct and are unchanged.' },
+    ],
+  },
   {
     version: '1.80',
     date: '2026-09-29',

@@ -8284,6 +8284,22 @@ function p86Ask(message, opts) {
     var surfaceSel = document.getElementById('preview-surface');
     var entitySel = document.getElementById('preview-entity-id');
     var entityLabel = document.getElementById('preview-entity-label');
+    // WHEN A JOB WAS LAST TOUCHED, read off the key GET /api/jobs actually
+    // sends. A job row carries the row's updated_at as `_updatedAt`
+    // (server/routes/job-routes.js) and never as `updated_at`; the blob's own
+    // stamp is camelCase `updatedAt`, written by only some client paths, so it
+    // is the fallback and not the first choice. Estimates, change orders and
+    // purchase orders DO send a real `updated_at` column and sort on it
+    // directly — jobs are the odd one out, which is how this was missed.
+    function jobRecencyKey(j) {
+      return (j && (j._updatedAt || j.updatedAt)) || '';
+    }
+    // Newest first. Both keys are ISO-8601 UTC strings, so comparing them as
+    // text is the same order as comparing them as dates.
+    function jobsByRecency(a, b) {
+      return jobRecencyKey(b).localeCompare(jobRecencyKey(a));
+    }
+
     function populateEntityList(surface) {
       _previewSurface = surface;
       if (surface === 'client' || surface === 'admin') {
@@ -8312,7 +8328,10 @@ function p86Ask(message, opts) {
         if (window.p86Api && window.p86Api.jobs && typeof window.p86Api.jobs.list === 'function') {
           window.p86Api.jobs.list().then(function(resp) {
             var rows = (resp && resp.jobs) || [];
-            rows.sort(function(a, b) { return (b.updated_at || '').localeCompare(a.updated_at || ''); });
+            // Sorting on `updated_at` compared '' with '' on every pair, so this
+            // was server heap order — and since it then keeps only the first 80
+            // of ~700, the job you wanted was often not in the list at all.
+            rows.sort(jobsByRecency);
             rows = rows.slice(0, 80);
             entitySel.innerHTML = '<option value="">— Pick a job —</option>' +
               rows.map(function(j) {
