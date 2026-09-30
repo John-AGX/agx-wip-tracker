@@ -122,6 +122,7 @@
   var active = null;          // in-flight drag/resize gesture state
   var suppressClick = false;  // swallow the trailing header click after a drag/resize
   var resizeHandlerInstalled = false;
+  var pressGuardInstalled = false;
   var menuEl = null;          // floating reset menu
   // IntersectionObservers attached to list-wrapper elements that may
   // be removed from the DOM by their parent renderer (leads.js +
@@ -372,6 +373,28 @@
         recomputeHeight(table.parentElement);
       }
     });
+  }
+
+  // LET GO OF THE SWALLOWED CLICK. suppressClick exists to eat the ONE click a
+  // drag or resize leaves behind, and the thead's own capture listener clears it
+  // again — but only when that click actually lands on the thead. A click fires
+  // on the nearest common ancestor of the press and the release, so a drag let
+  // go anywhere but the header (over the rows, the page margin, another pane —
+  // which is where a sideways drag usually ends) sends its click to <body>, and
+  // nothing clears the flag. It is ONE global shared by every enhanced table, so
+  // the next header click on jobs, estimates, leads or a job-hub list was
+  // swallowed instead: no sort, no explanation, works on the second try.
+  //
+  // A new press is a new interaction, and a click always follows one — while
+  // nothing presses between a drag's mouseup and its trailing click. So clearing
+  // here releases a stuck flag without weakening the swallow it exists for.
+  // Capture phase, because startResize stops propagation on its own mousedown,
+  // and document-level so it also covers the frozen column, which is never
+  // wired for reorder.
+  function installPressGuard() {
+    if (pressGuardInstalled) return;
+    pressGuardInstalled = true;
+    document.addEventListener('mousedown', function () { suppressClick = false; }, true);
   }
 
   function installResizeHandler() {
@@ -630,6 +653,7 @@
     wireHeader(key, table);
     setupScroll(table);
     installResizeHandler();
+    installPressGuard();
 
     // Re-measure once layout settles (covers tab-show after display:none).
     requestAnimationFrame(function () { recomputeHeight(table.parentElement); });

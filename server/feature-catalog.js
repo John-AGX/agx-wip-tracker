@@ -526,9 +526,18 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.79';
+const APP_VERSION = '1.80';
 
 const releases = [
+  {
+    version: '1.80',
+    date: '2026-09-29',
+    name: 'A column drag no longer eats your next click',
+    summary: 'After dragging or resizing a column, the next click on a column heading did nothing. It sorts now.',
+    changes: [
+      { type: 'fixed', text: 'Dragging a column to move it, or dragging its edge to resize it, and letting go anywhere except on the heading row left the list deaf to one click: the next click on ANY column heading \u2014 on that list or another one \u2014 did nothing at all, and clicking again worked. The list deliberately ignores the click a drag leaves behind, so that moving a column does not also re-sort it; it was just never letting go of that afterwards. It does now.' },
+    ],
+  },
   {
     version: '1.79',
     date: '2026-09-29',
