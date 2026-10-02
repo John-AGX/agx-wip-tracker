@@ -772,8 +772,9 @@ function p86Ask(message, opts) {
           '<th style="text-align:right;padding:8px 10px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;font-size:10px;letter-spacing:0.4px;">Lines</th>' +
           '<th style="text-align:right;padding:8px 10px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;font-size:10px;letter-spacing:0.4px;">Total</th>' +
         '</tr></thead><tbody>';
+      var hasSheet = jobsWithSheetFor(_lastParse.reportDate);
       m.matched.forEach(function(x) {
-        var existing = sheetExistsForJob(x.job.id, _lastParse.reportDate);
+        var existing = !!hasSheet[x.job.id];
         html += '<tr style="border-top:1px solid var(--border,#2a2a32);">' +
           '<td style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:#4f8cff;">' + escapeHTML(x.job.jobNumber || '') +
             // A match made ACROSS a padding difference is shown, never
@@ -881,14 +882,36 @@ function p86Ask(message, opts) {
   // Quick check: does this job already have a sheet named for this
   // report date? Used to badge the row "will overwrite" in the
   // preview, and to decide whether to confirm before commit.
-  function sheetExistsForJob(jobId, reportDate) {
+  // WHICH JOBS ALREADY HAVE A SHEET FOR THIS DATE — computed ONCE.
+  //
+  // This was sheetExistsForJob(jobId, reportDate), called per matched row
+  // from two different loops. Each call did
+  // JSON.parse(localStorage.getItem('p86-workspaces')) — and that key is the
+  // biggest thing in the store (~9MB on this profile; the importer is what
+  // grows it, a sheet per job per import date, which is how it once hit the
+  // quota and killed the write path in 6a7d6488).
+  //
+  // So a 436-project import read and parsed nine megabytes about four
+  // hundred times, synchronously, before the preview could paint. The tab
+  // locks for MINUTES with no spinner and no error — which from the outside
+  // is indistinguishable from an import that silently did nothing. One read,
+  // one parse, one pass.
+  function jobsWithSheetFor(reportDate) {
+    var out = {};
     try {
       var allWs = JSON.parse(localStorage.getItem('p86-workspaces') || '{}');
-      var ws = allWs[jobId];
-      if (!ws || !ws.sheets) return false;
       var name = 'QB Costs ' + reportDate;
-      return ws.sheets.some(function(s) { return s.name === name; });
-    } catch (e) { return false; }
+      Object.keys(allWs).forEach(function(jobId) {
+        var ws = allWs[jobId];
+        if (ws && ws.sheets && ws.sheets.some(function(s) { return s.name === name; })) {
+          out[jobId] = true;
+        }
+      });
+    } catch (e) {
+      // An unreadable cache costs the overwrite badges, nothing else. The
+      // server is the source of truth and re-importing cannot double-count.
+    }
+    return out;
   }
 
   // ─── Stub job creation from preview ──────────────────────────────
@@ -1040,9 +1063,11 @@ function p86Ask(message, opts) {
     var m = matchJobs(_lastParse.jobs);
     if (!m.matched.length) return;
 
-    // Confirm overwrite if any job already has a sheet for this date.
+    // Confirm overwrite if any job already has a sheet for this date. One
+    // read of the workspaces cache for the whole check, not one per job.
+    var alreadyHasSheet = jobsWithSheetFor(_lastParse.reportDate);
     var overwriteCount = m.matched.filter(function(x) {
-      return sheetExistsForJob(x.job.id, _lastParse.reportDate);
+      return !!alreadyHasSheet[x.job.id];
     }).length;
     if (overwriteCount > 0) {
       var msg = overwriteCount + ' job' + (overwriteCount === 1 ? '' : 's') +
