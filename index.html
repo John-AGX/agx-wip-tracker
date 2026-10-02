@@ -969,6 +969,7 @@
                                 <option value="Service">Service</option>
                                 <option value="Mid-Tier Service">Mid-Tier Service</option>
                                 <option value="Renovation">Renovation</option>
+                                <option value="Residential">Residential</option>
                                 <option value="Work Order">Work Order</option>
                             </select>
                             <select id="jobsSort" class="jobs-sort-select" onchange="jobsSetSort(this.value)" aria-label="Sort jobs" title="Sort jobs">
@@ -2257,6 +2258,7 @@
                         <option value="Service">Service</option>
                         <option value="Mid-Tier Service">Mid-Tier Service</option>
                         <option value="Renovation">Renovation</option>
+                        <option value="Residential">Residential</option>
                         <option value="Work Order">Work Order</option>
                     </select>
                 </div>
@@ -2735,6 +2737,7 @@
                         <option value="Service">Service</option>
                         <option value="Mid-Tier Service">Mid-Tier Service</option>
                         <option value="Renovation">Renovation</option>
+                        <option value="Residential">Residential</option>
                         <option value="Work Order">Work Order</option>
                     </select>
                 </div>
@@ -3010,7 +3013,7 @@
                    branding.job_types on every editor open and unions in
                    whatever the lead already carries, so a legacy
                    'Service & Repair' lead is never rewritten by being opened. -->
-              <div><label style="display:block;">Project Type</label><select id="leadEditor_project_type"><option value="">— Select —</option><option value="Service">Service</option><option value="Mid-Tier Service">Mid-Tier Service</option><option value="Renovation">Renovation</option><option value="Work Order">Work Order</option></select></div>
+              <div><label style="display:block;">Project Type</label><select id="leadEditor_project_type"><option value="">— Select —</option><option value="Service">Service</option><option value="Mid-Tier Service">Mid-Tier Service</option><option value="Renovation">Renovation</option><option value="Residential">Residential</option><option value="Work Order">Work Order</option></select></div>
               <div>
                 <label style="display:block;">Salesperson</label>
                 <select id="leadEditor_salesperson_id">
@@ -3589,14 +3592,14 @@
          ready the first time they build their tables. -->
     <script src="js/table-enhancements.js?v=18"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
-    <script src="js/job-finalize.js?v=8"></script>
+    <script src="js/job-finalize.js?v=9"></script>
     <script src="js/convert-picker.js?v=1"></script>
     <!-- Site Conditions panel (window.p86SiteConditions). Loads BEFORE
          leads.js, which delegates its weather host to it. -->
     <script src="js/site-conditions.js?v=2"></script>
     <script src="js/bt-badge.js?v=5"></script>
     <script src="js/leads.js?v=110"></script>
-    <script src="js/job-costs-import.js?v=17"></script>
+    <script src="js/job-costs-import.js?v=18"></script>
     <script src="js/qb-costs-view.js?v=26"></script>
     <script src="js/insights.js?v=14"></script>
     <script src="js/schedule.js?v=55"></script>
@@ -3610,7 +3613,7 @@
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
     <script src="js/save-merge.js?v=5"></script>
-    <script src="js/app.js?v=163"></script>
+    <script src="js/app.js?v=164"></script>
     <!-- The visible signal for a write that has not reached the server.
          Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
     <script src="js/save-banner.js?v=3"></script>
@@ -3725,7 +3728,7 @@
     <script src="js/progress.js?v=4"></script>
     <!-- The Jobs list sort rules (pure; read by js/jobs.js at load). -->
     <script src="js/jobs-sort.js?v=1"></script>
-    <script src="js/jobs.js?v=262"></script>
+    <script src="js/jobs.js?v=263"></script>
     <script src="js/doc-import.js?v=8"></script>
     <script src="js/job-workflow-ui.js?v=7"></script>
     <!-- Job sidebar Files + Photos tabs (renderJobFiles / renderJobPhotos).

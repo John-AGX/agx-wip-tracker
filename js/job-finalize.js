@@ -49,6 +49,7 @@
     { key: 'service', label: 'Service', prefix: 'S', pad: 4 },
     { key: 'mid_tier_service', label: 'Mid-Tier Service', prefix: 'M', pad: 4 },
     { key: 'renovation', label: 'Renovation', prefix: 'RV', pad: 4 },
+    { key: 'residential', label: 'Residential', prefix: 'R', pad: 4 },
     { key: 'work_order', label: 'Work Order', prefix: 'WO', pad: 4 }
   ];
   function defaults() { return _defaults.slice(); }

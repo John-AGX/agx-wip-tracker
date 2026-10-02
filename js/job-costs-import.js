@@ -345,6 +345,29 @@ function p86Ask(message, opts) {
     return parseAoa(picked.aoa, picked.name);
   }
 
+  // ─── THE TWO SIDES SPELL THE SAME NUMBER DIFFERENTLY ─────────────
+  //
+  // A job number is a letter prefix plus a number, and Project 86 pads that
+  // number to the type's width while the accounting system does not. So the
+  // 2026-10-01 export carried WO4, WO5, WO8, WO9, WO27, WO32, WO70, WO80,
+  // WO719 and WO24-2 against jobs numbered WO0004, WO0005, WO0008 … and an
+  // exact string compare missed ten of thirteen work orders — $3,866.28 —
+  // on the leading zeros alone. The three that did match (WO1928, WO1929,
+  // WO1932) matched only because they happen to already be four digits.
+  //
+  // The loose key is the letter RUN, then the digits with leading zeros
+  // stripped, then whatever follows: WO0024-2 and WO24-2 both become
+  // "WO|24|-2". Matching the letter run as a unit is what keeps R2006 away
+  // from RV2006 — they are different series and different jobs ("Goetz
+  // Residential Paint" vs "Fairway Paint & Gutters"), and collapsing them
+  // would post five figures of cost to the wrong job.
+  function looseNumberKey(code) {
+    var s = String(code == null ? '' : code).toUpperCase().trim();
+    var m = s.match(/^([A-Z]*)0*(\d+)(.*)$/);
+    if (!m) return '';               // no digits at all — nothing to unpad
+    return m[1] + '|' + m[2] + '|' + m[3];
+  }
+
   // ─── Match parsed jobs against appData.jobs by jobNumber ─────────
   function matchJobs(parsed) {
     // `typeof window` guard only so the matcher can be exercised under
@@ -352,15 +375,37 @@ function p86Ask(message, opts) {
     // browser this is the same expression it always was.
     var jobs = (typeof window !== 'undefined' && window.appData && window.appData.jobs) || [];
     var byNumber = {};
+    var byLoose = {};
     jobs.forEach(function(j) {
       var num = (j.jobNumber || '').toUpperCase().trim();
-      if (num) byNumber[num] = j;
+      if (!num) return;
+      byNumber[num] = j;
+      var lk = looseNumberKey(num);
+      if (lk) (byLoose[lk] = byLoose[lk] || []).push(j);
     });
     var matched = [];
     var unmatched = [];
     parsed.forEach(function(p) {
+      // EXACT ALWAYS WINS. The loose key only ever runs for a code that
+      // found nothing, so no padding rule can take a project away from the
+      // job whose number it literally is.
       var hit = p.code ? byNumber[p.code] : null;
-      if (hit) matched.push({ parsed: p, job: hit });
+      var padded = false;
+      p.ambiguousPadding = null;
+      if (!hit && p.code) {
+        var cands = byLoose[looseNumberKey(p.code)] || [];
+        if (cands.length === 1) {
+          hit = cands[0];
+          padded = true;
+        } else if (cands.length > 1) {
+          // Two jobs differing only by leading zeros. That is a numbering
+          // problem in Project 86, and the importer must not pick one —
+          // guessing here posts real money to a coin flip. Left unmatched
+          // and NAMED, so the fix is obvious.
+          p.ambiguousPadding = cands.map(function(j) { return j.jobNumber; });
+        }
+      }
+      if (hit) matched.push({ parsed: p, job: hit, padded: padded });
       else unmatched.push(p);
     });
     // jobNumbers is what the unmatched classifier learns the org's
@@ -535,11 +580,39 @@ function p86Ask(message, opts) {
   // Group unmatched projects by cause for the preview summary, keeping
   // count + dollars per cause so the loud unmatched-money warning stays
   // loud while naming the right fix for each group.
+  // A FIFTH CAUSE THE CODE ALONE CANNOT SEE.
+  //
+  // classifyUnmatchedCode judges the string. An ambiguous padding is a fact
+  // about the JOB LIST — two jobs whose numbers differ only by leading zeros
+  // — so the string looks like a perfectly good, missing job number and gets
+  // classified 'missing-job'. That tells John to create it, and creating a
+  // THIRD WO24 is the worst available move.
+  //
+  // This is the same trap 9a25db88 was written to close ("two different
+  // failures used to wear one sentence, and it led with the wrong one"), so
+  // the padding tolerance gets its own cause rather than borrowing one.
+  function unmatchedCause(p, shape) {
+    if (p && p.ambiguousPadding && p.ambiguousPadding.length > 1) return 'ambiguous';
+    return classifyUnmatchedCode(p && p.code, shape);
+  }
+
+  // The per-ROW sentence, project-aware for the same reason. unmatchedReason
+  // below still takes a bare code — it judges the string and nothing else —
+  // so the ambiguity, which is a fact about the job list, is answered here.
+  function unmatchedReasonFor(p, shape) {
+    if (p && p.ambiguousPadding && p.ambiguousPadding.length > 1) {
+      return 'Not sent — two jobs match this code bar the leading zeros (' +
+        p.ambiguousPadding.join(' and ') + '). Nothing was guessed. Renumber one of ' +
+        'them in Project 86 so the code points at a single job, then re-import.';
+    }
+    return unmatchedReason(p && p.code, shape);
+  }
+
   function groupUnmatched(unmatched, shape) {
-    var order = ['missing-job', 'qb-autonumber', 'no-code', 'unclear'];
+    var order = ['ambiguous', 'missing-job', 'qb-autonumber', 'no-code', 'unclear'];
     var buckets = {};
     (unmatched || []).forEach(function(p) {
-      var cause = classifyUnmatchedCode(p && p.code, shape);
+      var cause = unmatchedCause(p, shape);
       if (!buckets[cause]) {
         buckets[cause] = {
           cause: cause, count: 0, total: 0, codes: [],
@@ -570,6 +643,11 @@ function p86Ask(message, opts) {
         ' you want ' + (one ? 'it' : 'them') + ' to carry, then re-import.';
     }
     switch (group.cause) {
+      case 'ambiguous':
+        // NOT "create the job". Two already exist; a third would make it
+        // worse and the money would still have nowhere to go.
+        return lead + ' match' + (one ? 'es' : '') + ' TWO jobs each, differing only by leading zeros' + named +
+          '. Nothing was guessed. Renumber the duplicates in Project 86 so each code points at one job, then re-import.';
       case 'missing-job':
         return lead + ' name' + (one ? 's' : '') + ' a job number that does not exist in Project 86 yet' + named +
           '. Create ' + (one ? 'that job' : 'those jobs') + ' (the “+ Create stub job” button' + (one ? '' : 's') +
@@ -697,7 +775,16 @@ function p86Ask(message, opts) {
       m.matched.forEach(function(x) {
         var existing = sheetExistsForJob(x.job.id, _lastParse.reportDate);
         html += '<tr style="border-top:1px solid var(--border,#2a2a32);">' +
-          '<td style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:#4f8cff;">' + escapeHTML(x.job.jobNumber || '') + '</td>' +
+          '<td style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:#4f8cff;">' + escapeHTML(x.job.jobNumber || '') +
+            // A match made ACROSS a padding difference is shown, never
+            // silent: this is the one row where the job the money lands on
+            // is not the string QuickBooks printed, and John should be able
+            // to see that reconciliation rather than take it on trust.
+            (x.padded
+              ? '<span style="color:var(--text-dim,#888);font-weight:400;" title="Matched across leading zeros — QuickBooks calls this project ' +
+                escapeHTML(x.parsed.code) + '"> ← ' + escapeHTML(x.parsed.code) + '</span>'
+              : '') +
+          '</td>' +
           '<td style="padding:8px 10px;color:var(--text,#fff);">' + escapeHTML(x.job.title || x.parsed.name) +
             (existing ? ' <span style="color:#fbbf24;font-size:11px;margin-left:6px;" title="A sheet for this date already exists and will be overwritten">⚠ will overwrite</span>' : '') +
           '</td>' +
@@ -724,11 +811,24 @@ function p86Ask(message, opts) {
       m.unmatched.forEach(function(p, idx) {
         html += '<tr style="border-top:1px solid var(--border,#2a2a32);">' +
           '<td style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:#fbbf24;">' + escapeHTML(p.code || '(none)') + '</td>' +
-          '<td style="padding:8px 10px;color:var(--text,#fff);">' + escapeHTML(p.name) + '</td>' +
+          '<td style="padding:8px 10px;color:var(--text,#fff);">' + escapeHTML(p.name) +
+            // Two jobs differing only by leading zeros. Not guessed at, and
+            // not reported as "no such job" either — that would send John
+            // off to create a third one.
+            (p.ambiguousPadding
+              ? '<div style="color:#fbbf24;font-size:11px;margin-top:2px;">Two jobs could be this: ' +
+                escapeHTML(p.ambiguousPadding.join(' and ')) +
+                '. Renumber one of them so the code is unambiguous.</div>'
+              : '') +
+          '</td>' +
           '<td style="text-align:right;padding:8px 10px;font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);">' + fmtMoney(p.computedTotal) + '</td>' +
           '<td style="text-align:right;padding:6px 10px;">' +
             '<button class="ee-btn primary" style="padding:4px 10px;font-size:11px;" onclick="qbCostsCreateStub(' + p86Code(idx) + ')"' +
-              (p.code ? '' : ' disabled title="No job code parsed; cannot create a stub job"') +
+              // Not offered when TWO jobs already carry this number bar the
+              // zeros — a third would deepen the problem, not fix it.
+              (p.ambiguousPadding
+                ? ' disabled title="Two jobs already match this code; creating a third would not help"'
+                : (p.code ? '' : ' disabled title="No job code parsed; cannot create a stub job"')) +
             '>+ Create stub job</button>' +
           '</td>' +
         '</tr>';
@@ -1151,6 +1251,12 @@ function p86Ask(message, opts) {
     var written = srv ? (Number(srv.inserted) || 0) : 0;
     var dupes = srv ? (Number(srv.updated) || 0) : 0;
     var rejected = srv ? (Number(srv.skipped) || 0) : 0;
+    // Lines that are a genuine REPEAT of an identical line in the same file —
+    // QuickBooks really does print seven identical $50 permit charges. They
+    // used to collapse onto one content hash and vanish ($4,848.01 on the
+    // 2026-10-01 export) while the receipt filed them under "already on file".
+    // They are stored now, and counted out loud so the distinction is visible.
+    var repeats = srv ? (Number(srv.repeats) || 0) : 0;
     var cleaned = srv ? (Number(srv.cleaned) || 0) : 0;
     var received = srv && srv.received != null ? Number(srv.received) : null;
     var unmatchedLines = r.unmatched.reduce(function(s, p) { return s + p.lines.length; }, 0);
@@ -1202,7 +1308,11 @@ function p86Ask(message, opts) {
       html += '<div style="display:flex;gap:8px;align-items:center;background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.35);border-radius:8px;padding:10px 13px;margin-bottom:16px;font-size:12px;color:var(--text,#fff);">' +
         '<span style="font-size:14px;line-height:1;">&#10003;</span>' +
         '<span>Confirmed by the server: <strong>' + written + '</strong> new cost line' + (written === 1 ? '' : 's') +
-        ' written' + (dupes ? ', <strong>' + dupes + '</strong> already on file (updated in place, not duplicated)' : '') + '.</span>' +
+        ' written' + (dupes ? ', <strong>' + dupes + '</strong> already on file (updated in place, not duplicated)' : '') + '.' +
+        (repeats
+          ? ' <strong>' + repeats + '</strong> of them ' + (repeats === 1 ? 'was a line QuickBooks printed' : 'were lines QuickBooks printed') +
+            ' more than once — kept, not collapsed.'
+          : '') + '</span>' +
       '</div>';
     }
 
@@ -1271,7 +1381,7 @@ function p86Ask(message, opts) {
           '<td style="padding:8px 10px;color:var(--text,#fff);">' + escapeHTML((p.code || '(no code)') + ' ' + (p.name || '')) +
             ' <span style="color:var(--text-dim,#888);">' + fmtMoney(p.computedTotal) + '</span></td>' +
           '<td style="text-align:right;padding:8px 10px;font-family:\'SF Mono\',monospace;color:#fbbf24;">' + p.lines.length + '</td>' +
-          '<td style="padding:8px 10px;color:#fbbf24;">' + escapeHTML(unmatchedReason(p.code, rShape)) + '</td>' +
+          '<td style="padding:8px 10px;color:#fbbf24;">' + escapeHTML(unmatchedReasonFor(p, rShape)) + '</td>' +
         '</tr>';
       });
       html += '</tbody></table></div>';
@@ -1410,13 +1520,25 @@ function p86Ask(message, opts) {
       orgJobNumberShape: orgJobNumberShape,
       classifyUnmatchedCode: classifyUnmatchedCode,
       unmatchedReason: unmatchedReason,
+      unmatchedReasonFor: unmatchedReasonFor,
+      unmatchedCause: unmatchedCause,
       groupUnmatched: groupUnmatched,
       unmatchedGroupSentence: unmatchedGroupSentence,
       matchJobs: matchJobs,
+      // Padding tolerance: the accounting system writes WO4, Project 86
+      // writes WO0004. Exported so the key itself can be pinned, including
+      // the case that must NOT collapse (R2006 vs RV2006).
+      looseNumberKey: looseNumberKey,
       // The result screen is part of the fix, not decoration: an import
       // that wrote nothing used to look exactly like one that worked.
       // Exported so the numbers it prints can be pinned under jsdom.
-      renderCommitReceipt: renderCommitReceipt
+      renderCommitReceipt: renderCommitReceipt,
+      // Same argument for the PREVIEW. It is where a padded match is
+      // disclosed ("WO0004 ← WO4") and where an ambiguous one is named
+      // instead of guessed at — both are the fix, not a decoration on it.
+      // __setLastParse is the one piece of state it reads; test-only.
+      renderPreview: renderPreview,
+      __setLastParse: function(p) { _lastParse = p; }
     };
   }
 })();

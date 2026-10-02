@@ -252,7 +252,7 @@ describe('POST /api/org/next-job-number claims M atomically from the M counter',
     expect(res.statusCode).toBe(200);
     expect(res.body.jobNumber).toBe('M0001');
     // …and the seeded registry is PERSISTED, so the counter really advanced.
-    expect(fake.branding.job_types.map((t) => t.prefix)).toEqual(['S', 'M', 'RV', 'WO']);
+    expect(fake.branding.job_types.map((t) => t.prefix)).toEqual(['S', 'M', 'RV', 'R', 'WO']);
   });
 
   test('an unknown type is still refused', async () => {
@@ -271,7 +271,7 @@ describe('introducing M renumbers nothing', () => {
     const prefixes = fake.branding.job_types.map((t) => t.prefix);
     expect(prefixes).toContain('M');
     // Placed next to Service rather than dumped at the end.
-    expect(prefixes).toEqual(['S', 'M', 'RV', 'WO']);
+    expect(prefixes).toEqual(['S', 'M', 'RV', 'R', 'WO']);
     // Every pre-existing entry is byte-identical.
     AGX_REGISTRY_BEFORE_M.forEach((before) => {
       const after = fake.branding.job_types.find((t) => t.prefix === before.prefix);
@@ -292,7 +292,7 @@ describe('introducing M renumbers nothing', () => {
     // The org decides it doesn't want Mid-Tier Service and removes it.
     fake.branding.job_types = fake.branding.job_types.filter((t) => t.prefix !== 'M');
     await jobTypes.backfill(pool);
-    expect(fake.branding.job_types.map((t) => t.prefix)).toEqual(['S', 'RV', 'WO']);
+    expect(fake.branding.job_types.map((t) => t.prefix)).toEqual(['S', 'RV', 'R', 'WO']);
   });
 
   test('an org that already has an M prefix is left alone', async () => {
@@ -303,7 +303,44 @@ describe('introducing M renumbers nothing', () => {
     const m = fake.branding.job_types.find((t) => t.prefix === 'M');
     expect(m.label).toBe('Maintenance');
     expect(m.next).toBe(77);
-    expect(fake.branding.job_types.length).toBe(mine.length);
+    // The org's own M is untouched. Length grows by exactly one because this
+    // registry also predates R — "left alone" is about the entry that already
+    // exists, not about the registry never changing.
+    expect(fake.branding.job_types.length).toBe(mine.length + 1);
+    expect(fake.branding.job_types.filter((t) => t.prefix === 'M').length).toBe(1);
+  });
+
+  // THE BUG THE SECOND UPGRADE EXPOSED. backfill() read
+  // INTRODUCED_BY_VERSION[JOB_TYPES_VERSION] once, outside the org loop, which
+  // was indistinguishable from correct while there had only ever been one
+  // upgrade. At v3 an org still on v1 would be handed ['R'] alone, stamped v3,
+  // and skipped forever — silently losing M, with no error and nothing to
+  // notice. The set has to come from the version THAT ORG is on.
+  test('an org two versions behind gets BOTH new types, not just the newest', async () => {
+    fake = makeFakeDb({ job_types: AGX_REGISTRY_BEFORE_M, job_types_v: 1 }, AGX_JOBS);
+    global.__jtFake = fake;
+    await jobTypes.backfill({ query: (sql, params) => fake.client.query(sql, params) });
+    expect(fake.branding.job_types.map((t) => t.prefix)).toEqual(['S', 'M', 'RV', 'R', 'WO']);
+    expect(fake.branding.job_types_v).toBe(jobTypes.JOB_TYPES_VERSION);
+  });
+
+  test('an org already on the newest version is not touched at all', async () => {
+    const current = [{ key: 'service', label: 'Service', prefix: 'S', pad: 4, next: 1 }];
+    fake = makeFakeDb({ job_types: current, job_types_v: jobTypes.JOB_TYPES_VERSION }, AGX_JOBS);
+    global.__jtFake = fake;
+    await jobTypes.backfill({ query: (sql, params) => fake.client.query(sql, params) });
+    // Still just Service — a current org that deleted M and R keeps them gone.
+    expect(fake.branding.job_types.map((t) => t.prefix)).toEqual(['S']);
+  });
+
+  test('a hand-typed R number seeds the R counter, and RV jobs do not feed it', async () => {
+    // The seed query is ^R([0-9]+)$ — RV2044 must not be read as R-number 2044
+    // and push the counter to 2045. Same letter-run rule the matchers use.
+    fake = makeFakeDb({ job_types: AGX_REGISTRY_BEFORE_M },
+      AGX_JOBS.concat([{ jobNumber: 'R1122' }, { jobNumber: 'RV2044' }]));
+    global.__jtFake = fake;
+    await jobTypes.backfill({ query: (sql, params) => fake.client.query(sql, params) });
+    expect(fake.branding.job_types.find((t) => t.prefix === 'R').next).toBe(1123);
   });
 
   test('a hand-typed M number seeds the counter above it instead of colliding', async () => {

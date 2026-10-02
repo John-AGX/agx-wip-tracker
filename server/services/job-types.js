@@ -39,6 +39,18 @@ const DEFAULT_JOB_TYPES = [
   { key: 'service', label: 'Service', prefix: 'S', pad: 4 },
   { key: 'mid_tier_service', label: 'Mid-Tier Service', prefix: 'M', pad: 4 },
   { key: 'renovation', label: 'Renovation', prefix: 'RV', pad: 4 },
+  // Residential — homeowner work, numbered R#### in the accounting system
+  // for years (R1089 Kampsen, R2006 Goetz, R2010 Tabbalat) with no type here
+  // to carry it. Eleven projects and $18,161.49 of real cost had nowhere to
+  // land on the 2026-10-01 QB import for want of this one row.
+  //
+  // R ALONGSIDE RV IS SAFE, and it is worth saying why rather than leaving
+  // the next reader to worry: every prefix lookup in this codebase extracts
+  // the whole leading LETTER RUN and matches it exactly — prefixForNumber
+  // here, the mirror in js/job-finalize.js, and the ^PREFIX(\d+)$ counter
+  // scan in js/admin.js. 'RV2006' yields 'RV' and can never resolve to 'R'.
+  // There is no longest-prefix ordering hazard to get wrong.
+  { key: 'residential', label: 'Residential', prefix: 'R', pad: 4 },
   { key: 'work_order', label: 'Work Order', prefix: 'WO', pad: 4 },
 ];
 
@@ -46,12 +58,12 @@ const DEFAULT_JOB_TYPES = [
 // branding.job_types_v so the introduction runs exactly once — an org that
 // then DELETES the type keeps it deleted instead of having it resurrected on
 // the next boot.
-const JOB_TYPES_VERSION = 2;
+const JOB_TYPES_VERSION = 3;
 
 // Which prefixes v2 introduces. Kept explicit rather than "every default that
 // is missing" for that same reason: re-asserting the whole default set would
 // undelete every type an org had deliberately removed.
-const INTRODUCED_BY_VERSION = { 2: ['M'] };
+const INTRODUCED_BY_VERSION = { 2: ['M'], 3: ['R'] };
 
 // Normalize a registry array → [{key,label,prefix,pad,next}], de-duped on
 // prefix, capped. Anything unrecognized is dropped. This is the shape every
@@ -194,8 +206,24 @@ function addMissingTypes(storedTypes, prefixes, seeds) {
 // One-shot, per-org introduction of the types a new registry version adds.
 // Idempotent via branding.job_types_v. Never touches an existing entry's
 // label, prefix, pad or counter, and never touches a jobs row.
+// EVERY type introduced after `from`, not just the newest version's.
+//
+// This used to read INTRODUCED_BY_VERSION[JOB_TYPES_VERSION] once, outside the
+// loop, which was correct only while there had ever been one upgrade. At v3 an
+// org still sitting on v1 would be handed ['R'], stamped v3, and skipped
+// forever — silently losing 'M'. The jump is per-org, so the set has to be
+// computed per-org from the version that org is actually on.
+function introducedSince(from) {
+  var out = [];
+  for (var v = Math.max(0, Number(from) || 0) + 1; v <= JOB_TYPES_VERSION; v++) {
+    (INTRODUCED_BY_VERSION[v] || []).forEach(function (p) {
+      if (out.indexOf(p) < 0) out.push(p);
+    });
+  }
+  return out;
+}
+
 async function backfill(pool) {
-  var introduced = INTRODUCED_BY_VERSION[JOB_TYPES_VERSION] || [];
   var orgs;
   try {
     orgs = (await pool.query('SELECT id, branding FROM organizations')).rows || [];
@@ -207,7 +235,9 @@ async function backfill(pool) {
   for (var i = 0; i < orgs.length; i++) {
     var row = orgs[i];
     var b = (row.branding && typeof row.branding === 'object') ? row.branding : {};
-    if (Number(b.job_types_v || 0) >= JOB_TYPES_VERSION) continue;
+    var atVersion = Number(b.job_types_v || 0);
+    if (atVersion >= JOB_TYPES_VERSION) continue;
+    var introduced = introducedSince(atVersion);
     var stored = normJobTypes(b.job_types);
     var patch = { job_types_v: JOB_TYPES_VERSION };
     // An org with NO registry is left to seed itself from the defaults (which

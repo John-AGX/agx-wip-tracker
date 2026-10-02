@@ -3278,6 +3278,17 @@
                 window.p86Api.invoices.list().catch(function() { return { invoices: [] }; })
             ]).then(function(results) {
                 appData.qbCostLines = (results[2] && results[2].lines) || [];
+                // The org-wide cost read is capped server-side. Until it said
+                // so, the row after the cap simply did not exist as far as
+                // every Actual Cost in this app was concerned — silently, and
+                // with nothing on screen. Carry the flag so the figures
+                // computed from this array can admit they are low.
+                appData.qbCostLinesTruncated = !!(results[2] && results[2].truncated);
+                if (appData.qbCostLinesTruncated) {
+                    console.error('[qb-costs] the cost snapshot was TRUNCATED at ' +
+                        ((results[2] && results[2].cap) || '?') + ' lines — every actual-cost ' +
+                        'figure on the jobs list and WIP is low until this read is paged.');
+                }
                 appData.subsDirectory = (results[3] && results[3].subs) || [];
                 appData.knownTrades = (results[3] && results[3].trades) || [];
                 appData.jobPurchaseOrders = (results[4] && results[4].purchase_orders) || [];

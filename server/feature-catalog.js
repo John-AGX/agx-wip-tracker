@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.82';
+const APP_VERSION = '1.83';
 
 const releases = [
+  {
+    version: '1.83',
+    date: '2026-10-01',
+    name: 'The QuickBooks cost import stops losing money',
+    summary: 'Four separate things were quietly dropping cost: repeated QuickBooks rows, work-order numbers that differ only by leading zeros, residential jobs with no job type, and a 5,000-row ceiling on the figures behind every Actual Cost.',
+    changes: [
+      { type: 'fixed', text: 'QuickBooks prints the same charge more than once — seven separate $50 City of Tampa permit expenses on one job, same date, same memo. Each cost line is identified by its contents, so all seven counted as one and six were thrown away. On the 1 October export that was 42 rows and $4,848.01. Small against $3.26M, but concentrated where it shows: one job was missing 8.5% of its cost, another 8.2%. Every copy is now kept, and the import receipt says how many repeats it found instead of filing them under “already on file”.' },
+      { type: 'fixed', text: 'Project 86 writes work-order numbers padded to four digits (WO0004); QuickBooks writes WO4. The import compared them letter for letter, so ten of thirteen work orders missed — $3,866.28 — on the leading zeros alone. They match now, and the preview shows the reconciliation on the row (“WO0004 ← WO4”) so you can see it rather than take it on trust. If TWO jobs could be the same code, nothing is guessed: both are named and you are asked to renumber one.' },
+      { type: 'new', text: 'Residential is a job type, numbered R####. Eleven projects worth $18,161.49 — Goetz, Nazarenus, Gunning, Kampsen, Tabbalat — have been numbered that way in QuickBooks for years with nothing here to carry them. R sits alongside RV safely: R2006 and RV2006 are different jobs and the app has never confused the two.' },
+      { type: 'fixed', text: 'The jobs list, the WIP and the cost buckets all read from one request that returned at most 5,000 cost lines and gave no sign when it hit the limit — so every actual cost would simply have started reading low, by an unknown amount, with nothing on screen. We were at about 3,693 lines and adding 137 a week. The limit is now 50,000, matching the bills alongside it, and if it is ever reached the job says “INCOMPLETE — cost snapshot was truncated, this is low” instead of showing a confident wrong number.' },
+    ],
+  },
   {
     version: '1.82',
     date: '2026-09-30',

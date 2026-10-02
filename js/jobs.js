@@ -711,6 +711,11 @@ function renderJobsMain() {
                 pctComplete, revenueEarned, actualCosts, jtdProfit, jtdMargin,
                 displayProfit, displayMargin,
                 qbActualCosts, qbCostLineCount, qbCostsAsOf, qbSubMatch, qbAccrual,
+                // The org-wide cost snapshot this was computed from hit the
+                // server's row cap, so qbActualCosts is LOW and there is no
+                // way to tell by how much. Carried out of here so the screens
+                // that print the number can say so instead of looking certain.
+                qbCostsTruncated: !!(window.appData && appData.qbCostLinesTruncated),
                 invoiced, unbilled, arPaid, arOutstanding, backlog, remainingCosts,
                 accruedCosts, poAccrued, billedCost, projectedCost, projectedProfit
             };
@@ -4127,7 +4132,12 @@ function renderJobsMain() {
                 if (w.qbActualCosts > 0) {
                     _qbNote.textContent = 'QuickBooks: ' + formatCurrency(w.qbActualCosts) +
                         ' · ' + w.qbCostLineCount + ' line' + (w.qbCostLineCount === 1 ? '' : 's') +
-                        (w.qbCostsAsOf ? ' · as of ' + w.qbCostsAsOf : '');
+                        (w.qbCostsAsOf ? ' · as of ' + w.qbCostsAsOf : '') +
+                        // A truncated snapshot makes this figure LOW by an
+                        // unknown amount. Say it on the number itself — a
+                        // console warning is not a disclosure.
+                        (w.qbCostsTruncated ? ' · INCOMPLETE — cost snapshot was truncated, this is low' : '');
+                    _qbNote.style.color = w.qbCostsTruncated ? '#fbbf24' : '';
                     _qbNote.style.display = '';
                 } else {
                     _qbNote.textContent = '';

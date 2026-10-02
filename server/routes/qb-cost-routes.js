@@ -115,6 +115,12 @@ function normDate(v) {
 
 const IMPORT_CHUNK_ROWS = 200;
 const IMPORT_MAX_ATTEMPTS = 4;   // 1 attempt + 3 retries
+
+// Row cap on the ORG-WIDE cost read (GET /api/qb-costs with no jobId). Matches
+// the bills fetch that loads beside it at boot. Exported so the client and the
+// tests use the same number instead of each carrying a copy. The per-job read
+// is deliberately uncapped — a single job cannot be large enough to matter.
+const QB_LINES_CAP = 50000;
 const IMPORT_BACKOFF_MS = 25;    // doubles per retry, plus jitter
 // Exactly the two "re-run me" errors. Anything else is a real fault and
 // is surfaced immediately rather than hammered at.
@@ -246,8 +252,16 @@ router.post('/import',
       const stats = {
         received: jobs.reduce((n, j) => n + (j && Array.isArray(j.lines) ? j.lines.length : 0), 0),
         inserted: 0, updated: 0, skipped: 0, cleaned: 0, failed: 0,
+        // How many lines in this submission were a REPEAT of an identical
+        // line — same job, vendor, date, type, num, account, memo, amount.
+        // Before the occurrence index these were silently discarded, so the
+        // count is reported rather than buried: it is the difference between
+        // "already on file" and "we dropped your money".
+        repeats: 0,
         rejected: [], byJob: {}
       };
+      // base content id → how many times seen so far in this submission.
+      const dupSeen = new Map();
       const reject = (jobId, lines, reason) => {
         stats.skipped += lines;
         stats.rejected.push({ jobId: jobId || null, lines, reason });
@@ -316,13 +330,30 @@ router.post('/import',
             continue;
           }
 
-          const id = hashLineId(jobId, line);
+          // QB prints genuinely repeated rows — seven identical $50 permit
+          // expenses on one job, one date, blank Num. Content alone keys them
+          // all to one id, so only the first was ever stored. Count the
+          // repeats across the WHOLE submission (the base id already carries
+          // the job, so one map covers every job) and hand the index to the
+          // hash. Occurrence 0 keeps the original hash, so nothing already in
+          // the table moves; see qb-line-id.js for why this is also
+          // order-independent and stable across re-imports.
+          const baseId = hashLineId(jobId, line);
+          const dupIndex = dupSeen.get(baseId) || 0;
+          dupSeen.set(baseId, dupIndex + 1);
+          const id = dupIndex === 0 ? baseId : hashLineId(jobId, line, dupIndex);
+          if (dupIndex > 0) stats.repeats++;
+
           const txnDate = normDate(line.date);
           // Credits carry the id their pre-fix $0.00 twin was stored
           // under, so the chunk can retire it right after writing the
           // corrected row. Computed here (no DB work) to keep the
           // transaction down to pure writes.
-          const staleId = amount < 0 ? staleZeroLineId(jobId, line) : null;
+          //
+          // Zeroth occurrence only: the pre-fix parser had no occurrence
+          // index, so a repeat cannot have a phantom twin to retire, and
+          // asking for one would hand the DELETE the FIRST copy's id.
+          const staleId = (amount < 0 && dupIndex === 0) ? staleZeroLineId(jobId, line) : null;
 
           work.push({
             jobId,
@@ -476,16 +507,37 @@ router.get('/',
         );
         rows = r.rows;
       } else {
+        // ── THE ORG-WIDE READ IS CAPPED, SO IT HAS TO SAY WHEN IT CAPS ──
+        // This one query is the SOLE source of Actual Cost on the jobs list,
+        // the WIP and the cost buckets (js/app.js boot → appData.qbCostLines).
+        // The old LIMIT 5000 returned no signal at all, so the row after the
+        // five-thousandth simply did not exist as far as every cost figure in
+        // the app was concerned — silently, with nothing on screen to say so.
+        // AGX was at ~3,693 rows growing ~137 a week: about nine weeks from
+        // every job quietly reading low.
+        //
+        // Cap raised to match the bills fetch beside it, and the overshoot
+        // row makes truncation a FACT rather than an inference from
+        // `rows.length === cap` (which cannot tell a full page from an exact
+        // fit). The client refuses to trust a truncated snapshot — see
+        // hydrateQbCostLines in js/app.js.
         const r = await pool.query(
           `SELECT q.* FROM qb_cost_lines q
              LEFT JOIN jobs j ON j.id = q.job_id
             WHERE (j.organization_id = $1 OR j.organization_id IS NULL)
-            ORDER BY q.txn_date DESC NULLS LAST, q.amount DESC LIMIT 5000`,
-          [orgId]
+            ORDER BY q.txn_date DESC NULLS LAST, q.amount DESC LIMIT $2`,
+          [orgId, QB_LINES_CAP + 1]
         );
         rows = r.rows;
+        if (rows.length > QB_LINES_CAP) {
+          rows = rows.slice(0, QB_LINES_CAP);
+          console.error('[qb-costs] org ' + orgId + ' has more than ' + QB_LINES_CAP +
+            ' cost lines — the org-wide read is TRUNCATED and every actual-cost ' +
+            'figure computed from it is low. Raise QB_LINES_CAP or page this read.');
+          return res.json({ lines: rows, truncated: true, cap: QB_LINES_CAP });
+        }
       }
-      res.json({ lines: rows });
+      res.json({ lines: rows, truncated: false, cap: jobId ? null : QB_LINES_CAP });
     } catch (e) {
       console.error('GET /api/qb-costs error:', e);
       res.status(500).json({ error: 'Server error' });
@@ -689,5 +741,9 @@ router.delete('/:id',
     }
   }
 );
+
+// The cap is part of the route's contract (the client branches on `truncated`,
+// the tests assert the boundary), so it is published rather than copied.
+router.QB_LINES_CAP = QB_LINES_CAP;
 
 module.exports = router;
