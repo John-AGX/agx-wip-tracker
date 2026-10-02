@@ -526,9 +526,22 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.89';
+const APP_VERSION = '1.90';
 
 const releases = [
+  {
+    version: '1.90',
+    date: '2026-10-02',
+    name: 'You hear when something lands on your job',
+    summary: 'A subcontractor uploading a document, and a cost logged in the Cost Inbox — two things that happened silently until now.',
+    changes: [
+      { type: 'new', text: 'When a subcontractor uploads a document into a folder you shared with them, you hear about it. It goes to whoever runs the job — or sells the lead — that the folder hangs on, and to whoever shared it. Until now a sub could send a file through the portal and the only way to find out was to go and look.' },
+      { type: 'new', text: 'When somebody logs a cost in the Cost Inbox against a job you run, you hear about that too. Both switches live under Arrivals in My Account → Notifications, separately, because wanting to know about subcontractor paperwork is not the same as wanting to know about every receipt.' },
+      { type: 'improved', text: 'The cost message tells you the truth about what it knows. It shows the amount as captured and says plainly that it may not have been checked — the figure is read off the photo by the AI and the Cost Inbox labels it unconfirmed on screen for the same reason. It does not mention a photo either, because at the moment the cost is saved the picture has not finished uploading.' },
+      { type: 'improved', text: 'A stack of receipts does not become a stack of emails. Capture a dozen in one go and the person who runs that job gets a handful, not a dozen — and quieting one person’s run never quiets anybody else’s.' },
+      { type: 'fixed', text: 'A subcontractor’s upload used to be able to reach nobody at all. The obvious person to tell is whoever shared the folder, but most folders are shared automatically when a purchase order goes out — and an automatic share records no person, so there was nobody for the message to find. It now goes to the job’s manager first, which is a person every job has.' },
+    ],
+  },
   {
     version: '1.89',
     date: '2026-10-02',

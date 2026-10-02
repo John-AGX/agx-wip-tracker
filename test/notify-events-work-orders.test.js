@@ -37,6 +37,13 @@ const MONEY_KEYS = ['estimate_decided', 'po_status', 'bill_approval', 'bill_deci
 // them — a case the heading renderer had never met. See the adjacency test.
 const DEADLINE_KEYS = ['lead_followup', 'invoice_past_due', 'bill_payment_due', 'workflow_overdue'];
 
+// The arrival notices (server/services/arrival-notices.js). FOURTH group,
+// kept apart from Deadlines on purpose: a deadline is something you are late
+// for, an arrival is something that turned up, and one switch for both would
+// force somebody who wants to hear about a cost landing to take a list of
+// overdue invoices with it.
+const ARRIVAL_KEYS = ['sub_document_uploaded', 'receipt_logged'];
+
 describe('the catalog', () => {
   test('every row, in order — a new notification is a new settings toggle', () => {
     const keys = events.NOTIFY_EVENTS.map((e) => e.key);
@@ -48,6 +55,7 @@ describe('the catalog', () => {
       'job_assignment',
       ...MONEY_KEYS,
       ...DEADLINE_KEYS,
+      ...ARRIVAL_KEYS,
       'password_reset',
     ]);
   });
@@ -71,19 +79,19 @@ describe('the catalog', () => {
     }
   });
 
-  test('the grouped rows are exactly those three groups, each contiguous', () => {
+  test('the grouped rows are exactly those four groups, each contiguous', () => {
     // Contiguity is what makes one heading correct: My Account prints the
     // heading above the first row of a group and a rule after its last, so a
     // row that strays out of its run would print a second heading.
     const grouped = events.NOTIFY_EVENTS.filter((e) => e.group).map((e) => e.key);
-    expect(grouped).toEqual([...WORK_ORDER_KEYS, ...MONEY_KEYS, ...DEADLINE_KEYS]);
+    expect(grouped).toEqual([...WORK_ORDER_KEYS, ...MONEY_KEYS, ...DEADLINE_KEYS, ...ARRIVAL_KEYS]);
     const runs = [];
     for (const e of events.NOTIFY_EVENTS) {
       if (!e.group) { runs.push(null); continue; }
       if (!runs.length || runs[runs.length - 1] !== e.group) runs.push(e.group);
     }
     const names = runs.filter(Boolean);
-    expect(names).toEqual(['Work orders', 'Money', 'Deadlines']);
+    expect(names).toEqual(['Work orders', 'Money', 'Deadlines', 'Arrivals']);
   });
 
   test('labels and descriptions as worded', () => {
@@ -151,7 +159,7 @@ describe('My Account prints the group heading', () => {
   test('one heading above the six work-order rows, a rule after them', () => {
     const { pane } = render(events.NOTIFY_EVENTS);
     const headings = Array.from(pane.querySelectorAll('.p86-pref-group'));
-    expect(headings.map((h) => h.textContent)).toEqual(['Work orders', 'Money', 'Deadlines']);
+    expect(headings.map((h) => h.textContent)).toEqual(['Work orders', 'Money', 'Deadlines', 'Arrivals']);
     const children = Array.from(pane.children);
     const at = children.indexOf(headings[0]);
     const titles = children.slice(at + 1, at + 7).map((el) => el.querySelector('.p86-pref-title').textContent);
@@ -186,7 +194,7 @@ describe('My Account prints the group heading', () => {
     const { pane } = render(events.NOTIFY_EVENTS);
     const children = Array.from(pane.children);
     const headings = Array.from(pane.querySelectorAll('.p86-pref-group'));
-    expect(headings.map((h) => h.textContent)).toEqual(['Work orders', 'Money', 'Deadlines']);
+    expect(headings.map((h) => h.textContent)).toEqual(['Work orders', 'Money', 'Deadlines', 'Arrivals']);
 
     const deadlines = headings.find((h) => h.textContent === 'Deadlines');
     const at = children.indexOf(deadlines);
@@ -194,12 +202,23 @@ describe('My Account prints the group heading', () => {
     expect(children[at - 1].querySelector('.p86-pref-title').textContent).toBe('Bill decisions');
     const titles = children.slice(at + 1, at + 5).map((el) => el.querySelector('.p86-pref-title').textContent);
     expect(titles).toEqual(['Leads to follow up', 'Invoices owed to you', 'Bills to pay', 'RFIs and submittals waiting']);
-    expect(children[at + 5].className).toBe('p86-pref-group-end');
-    expect(children[at + 6].querySelector('.p86-pref-title').textContent).toBe('Password resets');
 
-    // Three groups, but only TWO rules: a rule is printed where a group ENDS
-    // at an ungrouped row, and Money ends at another group.
-    expect(pane.querySelectorAll('.p86-pref-group')).toHaveLength(3);
+    // THREE groups now run back to back — Money, Deadlines, Arrivals — so the
+    // run that ends at an ungrouped row is Arrivals, and it is the only one
+    // that prints a rule.
+    const arrivals = headings.find((h) => h.textContent === 'Arrivals');
+    const aAt = children.indexOf(arrivals);
+    expect(children[aAt - 1].querySelector('.p86-pref-title').textContent).toBe('RFIs and submittals waiting');
+    const aTitles = children.slice(aAt + 1, aAt + 3).map((el) => el.querySelector('.p86-pref-title').textContent);
+    expect(aTitles).toEqual(['Subcontractor uploads', 'Costs logged on your jobs']);
+    expect(children[aAt + 3].className).toBe('p86-pref-group-end');
+    expect(children[aAt + 4].querySelector('.p86-pref-title').textContent).toBe('Password resets');
+
+    // Four groups, TWO rules. A rule is printed only where a group ends at an
+    // UNGROUPED row, and there are exactly two such places: Work orders ends at
+    // job_assignment, and Arrivals ends at password_reset. Money and Deadlines
+    // each end at another group's heading, which separates them by itself.
+    expect(pane.querySelectorAll('.p86-pref-group')).toHaveLength(4);
     expect(pane.querySelectorAll('.p86-pref-group-end')).toHaveLength(2);
   });
 

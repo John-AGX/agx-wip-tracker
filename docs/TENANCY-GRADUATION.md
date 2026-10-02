@@ -192,7 +192,33 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**590** occurrences of `organization_id IS NULL` across `server/`.
+**595** occurrences of `organization_id IS NULL` across `server/`.
+
+590 → 595: the arrival notices. Five arms, all in
+`services/arrival-notices.js`, all READS, and all five in one function —
+`parentOwner`, which answers "who is responsible for the record this thing
+landed on" for each of the five entity types a folder grant may name
+(`attachment_folder_grants.entity_type` CHECKs job | lead | estimate | client
+| sub).
+
+Each arm is the one its own table already carries everywhere else — the job
+read copies `assertJobInOrg`, the lead read copies the one in
+`services/money-notices.js`, and so on. No arm is looser than its neighbours,
+and the test for this file asserts exactly that: every occurrence sits beside
+an `organization_id = $2`, so a future edit cannot quietly turn one of them
+into a bare tolerance.
+
+Worth recording WHY the count went up two slices after it went down. The
+deadline digest could avoid these entirely because it had a users row to join
+against — `<record>.organization_id = u.organization_id` needs no tolerance,
+because it compares two stamps rather than testing one. `parentOwner` has no
+such join: it is handed an id by a subcontractor’s upload and must resolve it
+against one tenant, which is the shape every arm in this document exists for.
+The two notices are also the first to reach records a SUB touched, and the
+sub-portal upload path has landed `attachments.organization_id` NULL since it
+shipped — so the rows these reads walk are exactly the unbackfilled ones.
+
+When this item closes, all five retire with the reads they copied.
 
 595 → 590: the deadline digest. **THE FIRST SLICE TO MOVE THIS NUMBER
 DOWN**, and it did so without a migration, a backfill or a judgement call —

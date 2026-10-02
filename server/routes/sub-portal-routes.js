@@ -28,6 +28,20 @@ const multer = require('multer');
 const sharp = require('sharp');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, signToken } = require('../auth');
+const inflight = require('../services/inflight');
+
+// The upload is committed before the notice runs (this route opens no
+// transaction), so the promise goes to services/inflight.js and a deploy waits
+// for it. A notice that cannot even START must never fail a subcontractor's
+// upload — the file is the thing they came to do.
+function trackNotice(label, start) {
+  try {
+    return inflight.track(start(), label);
+  } catch (e) {
+    console.warn('[sub-portal] ' + label + ' failed to start:', e && e.message);
+    return null;
+  }
+}
 const { sendEmail, isEnabled: emailIsEnabled } = require('../email');
 // Sender identity helpers — a separate, never-mocked module (see its header).
 const emailSender = require('../email-sender');
@@ -671,6 +685,33 @@ router.post('/sub-portal/attachments',
         ]
       );
       res.json({ attachment: ins.rows[0] });
+
+      // Tell the person whose record this landed on. ONLY from this handler:
+      // `attachments` has a dozen INSERT sites, the office cert upload is one
+      // of them, and the login-less crew-link photo door already notifies the
+      // same table under ticket_crew_activity — so anything broader than this
+      // route double-mails. If the TODO above to extract a shared persist
+      // helper is ever done, this must NOT travel with it.
+      //
+      // The org is resolved from the SUB record inside the notifier: not from
+      // parentOrgId (which legitimately lands NULL above) and not from the
+      // caller's own user row, whose org can be NULL for a portal login.
+      //
+      // That sentence names the caller's org in words rather than in code on
+      // purpose. test/create-doors-org-gate.test.js greps this whole tail for
+      // that expression and cannot tell prose from a read — which is the right
+      // way round for a guard whose job is to keep a guest's own tenant out of
+      // this handler.
+      trackNotice('sub document notice', function () {
+        return require('../services/arrival-notices').notifySubDocumentUploaded(pool, {
+          subId: subId,
+          entityType: entity_type,
+          entityId: entity_id,
+          folder: folder,
+          filename: req.file.originalname,
+          actorIds: [req.user.id],
+        });
+      });
     } catch (e) {
       console.error('POST /api/sub-portal/attachments error:', e);
       res.status(500).json({ error: 'Server error: ' + e.message });

@@ -14,7 +14,20 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+const { requireAuth, requireCapability, getAttributedUserId } = require('../auth');
+const inflight = require('../services/inflight');
+
+// This route opens no transaction, so the receipt is committed by the time the
+// notice runs. The promise goes to services/inflight.js so a deploy waits for
+// it, and a notice that cannot even START must not fail the capture.
+function trackNotice(label, start) {
+  try {
+    return inflight.track(start(), label);
+  } catch (e) {
+    console.warn('[receipt-routes] ' + label + ' failed to start:', e && e.message);
+    return null;
+  }
+}
 const { Anthropic } = require('@anthropic-ai/sdk');
 // Per-user AI-spend limiters (20/min, 200/hr; skip SYSTEM_ADMIN) — the OCR
 // route makes a real vision call, so it must be bounded like /api/ai/* (SEC A2).
@@ -1008,6 +1021,24 @@ router.post('/', requireAuth, async (req, res) => {
        store.store_phone_kind]
     );
     res.json({ receipt: rows[0] });
+
+    // A cost landing on a job is news to whoever runs it. Fired HERE and
+    // nowhere else: two bulk writers re-point receipts outside any create route
+    // (a lead→job conversion in job-routes.js, a client merge in
+    // services/client-merge.js) and `receipts` is on the clickr polymorphic
+    // reconcile list, so a notice hung off the TABLE would mail all of them.
+    //
+    // Both ids are dropped: callerUserId is the real caller, and an act-as
+    // session attributes the work to somebody else.
+    trackNotice('receipt notice', function () {
+      return require('../services/arrival-notices').notifyReceiptLogged(pool, {
+        receipt: rows[0],
+        orgId: orgId,
+        actorIds: [callerUserId(req), getAttributedUserId(req)],
+        actorName: req.user && (req.user.name || req.user.email),
+      });
+    });
+
     // Record OCR-suggestion-vs-saved accuracy (fire-and-forget; after response).
     if (b.ocr) {
       logOcrFeedback(orgId, id, b.ocr, {
