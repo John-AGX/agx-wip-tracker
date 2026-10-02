@@ -7279,7 +7279,10 @@ async function init() {
     console.error('[init] markets backfill failed (non-fatal):', e && e.message);
   }
   // Job numbering: introduce the job types a new registry version adds (v2 =
-  // M, Mid-Tier Service) into each org's branding.job_types. APPEND ONLY — it
+  // M, Mid-Tier Service; v3 = R, Residential) into each org's
+  // branding.job_types. An org several versions behind gets EVERY type
+  // introduced since the version it is on, not just the newest one's — see
+  // introducedSince(). APPEND ONLY — it
   // never touches an existing type's label/prefix/pad/counter and never reads
   // or rewrites a jobs row, so no job is renumbered or reclassified. Guarded
   // per-org by branding.job_types_v so it runs exactly once: an org that then
