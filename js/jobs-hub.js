@@ -60,7 +60,10 @@ function p86Ask(message, opts) {
     // Detailed Costs is not a list of records like its neighbours: it is an
     // index of JOBS by what they have cost, and one job's own cost detail
     // opened in place. `job` is which job is open ('' = the index).
-    costs:             { status: 'all', job: '', q: '' }
+    // `sort` is '<key>-<dir>'; the filters are each '' for "everything".
+    // viewId is which saved view is applied, so the button can name it.
+    costs:             { status: 'all', job: '', q: '', type: '', pm: '', market: '',
+                         sort: 'counted-desc', viewId: null, _viewInit: false }
   };
 
   function esc(v) {
@@ -1395,7 +1398,132 @@ function p86Ask(message, opts) {
 
   function costsMatch(row, q) {
     if (!q) return true;
-    return jobLabelFor(row.jobId).toLowerCase().indexOf(q) !== -1;
+    var j = costJob(row.jobId) || {};
+    // Search the things somebody actually types: the label, and now the PM,
+    // the type and the client — "Cluster" found five jobs, "Hernandez" found
+    // none, and the second is the more common question at a WIP meeting.
+    var hay = [jobLabelFor(row.jobId), j.pm, j.jobType, j.client, j.market]
+      .filter(Boolean).join(' ').toLowerCase();
+    return hay.indexOf(q) !== -1;
+  }
+
+  // ── Detailed Costs: filters, sort and saved views ──────────────────────
+  //
+  // John, 2026-10-02: "on the detailed cost tab, we need to add views and
+  // filters for sorting by job type, PM etc". The rows here are COST
+  // aggregates keyed by job id, so every one of those words — type, PM,
+  // status, market — has to be fetched off the job record; none of it is on
+  // the cost line. appData.jobs is already in memory for the whole app.
+  var _costJobIx = null;
+  function costJob(jobId) {
+    var jobs = (window.appData && window.appData.jobs) || [];
+    if (!_costJobIx || _costJobIx._n !== jobs.length) {
+      _costJobIx = { _n: jobs.length };
+      jobs.forEach(function (j) { if (j && j.id) _costJobIx[j.id] = j; });
+    }
+    return _costJobIx[jobId] || null;
+  }
+
+  // The job TYPE, which is a free label on the blob that can disagree with
+  // the number's prefix. The prefix is the one the registry mints, so it
+  // wins, and the label is the fallback — the same order jobTypeDisplay uses.
+  function costJobType(j) {
+    if (!j) return '';
+    if (window.p86JobFinalize && typeof window.p86JobFinalize.labelForNumber === 'function') {
+      var byNum = window.p86JobFinalize.labelForNumber(j.jobNumber || '');
+      if (byNum) return byNum;
+    }
+    return String(j.jobType || '').trim();
+  }
+
+  // Every value actually present on the rows in front of you — not every
+  // value the org has ever used. A filter offering twelve PMs when five have
+  // costs is a filter that mostly produces an empty table.
+  function costFacets(rows) {
+    var types = {}, pms = {}, markets = {}, statuses = {};
+    (rows || []).forEach(function (r) {
+      var j = costJob(r.jobId);
+      if (!j) return;
+      var t = costJobType(j); if (t) types[t] = true;
+      var p = String(j.pm || '').trim(); if (p) pms[p] = true;
+      var m = String(j.market || '').trim(); if (m) markets[m] = true;
+      var s = String(j.status || '').trim(); if (s) statuses[s] = true;
+    });
+    var sorted = function (o) { return Object.keys(o).sort(function (a, b) { return a.localeCompare(b); }); };
+    return { types: sorted(types), pms: sorted(pms), markets: sorted(markets), statuses: sorted(statuses) };
+  }
+
+  function costPasses(row, st) {
+    var j = costJob(row.jobId);
+    if (st.type && costJobType(j) !== st.type) return false;
+    if (st.pm && String((j && j.pm) || '').trim() !== st.pm) return false;
+    if (st.market && String((j && j.market) || '').trim() !== st.market) return false;
+    if (st.status && st.status !== 'all' && String((j && j.status) || '').trim() !== st.status) return false;
+    return true;
+  }
+
+  // Every column on the table can order it, plus the two things that are not
+  // columns — the PM and the type — because those are what John named.
+  var COST_SORTS = [
+    { key: 'counted-desc', label: 'Counted — highest first' },
+    { key: 'counted-asc',  label: 'Counted — lowest first' },
+    { key: 'job-asc',      label: 'Job number A–Z' },
+    { key: 'job-desc',     label: 'Job number Z–A' },
+    { key: 'pm-asc',       label: 'PM A–Z' },
+    { key: 'type-asc',     label: 'Job type A–Z' },
+    { key: 'lines-desc',   label: 'Most cost lines' },
+    { key: 'materials-desc', label: 'Materials — highest first' },
+    { key: 'labor-desc',   label: 'Labor — highest first' },
+    { key: 'subs-desc',    label: 'Subs (QuickBooks) — highest first' },
+    { key: 'unbilled-desc', label: 'Unbilled sub gap — largest first' },
+    { key: 'import-desc',  label: 'Last import — newest first' }
+  ];
+
+  function costSortRows(rows, key) {
+    var dir = /-asc$/.test(key) ? 1 : -1;
+    var base = String(key || '').replace(/-(asc|desc)$/, '');
+    var txt = function (r) {
+      var j = costJob(r.jobId) || {};
+      if (base === 'pm') return String(j.pm || '').toLowerCase();
+      if (base === 'type') return costJobType(j).toLowerCase();
+      if (base === 'import') return String(r.lastImport || '');
+      return String(j.jobNumber || jobLabelFor(r.jobId)).toLowerCase();
+    };
+    var num = function (r) {
+      if (base === 'lines') return r.lines || 0;
+      if (base === 'materials') return (r.buckets && r.buckets.materials) || 0;
+      if (base === 'labor') return (r.buckets && r.buckets.labor) || 0;
+      if (base === 'subs') return r.subs || 0;
+      if (base === 'unbilled') return (r.subs || 0) - (r.billed || 0);
+      return r.total || 0;
+    };
+    var isText = base === 'job' || base === 'pm' || base === 'type' || base === 'import';
+    // A COPY: the caller's array is the render input and sorting it in place
+    // would reorder the source on every repaint.
+    return rows.slice().sort(function (a, b) {
+      if (isText) {
+        var A = txt(a), B = txt(b);
+        return A < B ? -1 * dir : A > B ? 1 * dir : 0;
+      }
+      return (num(a) - num(b)) * dir;
+    });
+  }
+
+  var COSTS_VIEWS_PAGE = 'detailed_costs';
+  var COSTS_VIEW_KEY = 'p86_hub_detailed_costs_active_view';
+
+  function costFiltersOf(st) {
+    return { q: st.q || '', type: st.type || '', pm: st.pm || '',
+             market: st.market || '', status: st.status || 'all', sort: st.sort || 'counted-desc' };
+  }
+  function applyCostFilters(st, f) {
+    f = f || {};
+    st.q = f.q || ''; st.type = f.type || ''; st.pm = f.pm || '';
+    st.market = f.market || ''; st.status = f.status || 'all';
+    st.sort = f.sort || 'counted-desc';
+  }
+  function costsAnyFilter(st) {
+    return !!(st.q || st.type || st.pm || st.market || (st.status && st.status !== 'all'));
   }
 
   function renderCosts(host) {
@@ -1428,7 +1556,10 @@ function p86Ask(message, opts) {
     var st = costsState();
     var rows = costRowsFrom(_costs.lines || [], _costs.bills || []);
     var q = String(st.q || '').trim().toLowerCase();
-    var shown = rows.filter(function (r) { return costsMatch(r, q); });
+    var shown = costSortRows(
+      rows.filter(function (r) { return costPasses(r, st) && costsMatch(r, q); }),
+      st.sort || 'counted-desc');
+    var facets = costFacets(rows);
     var t = costsTotals(rows);
     var CANON = (window.p86CostBuckets && window.p86CostBuckets.CANON) || [];
     var h = '<div class="jhc-wrap">';
@@ -1450,8 +1581,34 @@ function p86Ask(message, opts) {
       + 'QuickBooks records ' + money(t.subs) + ' of sub spend; Project 86 has been billed ' + money(t.billed) + '.'
       + (t.accrual ? ' ' + money(t.accrual) + ' of month-end accruals did not cancel \u2014 an import was cut between an accrual and its reversal.' : '')
       + '</div>';
-    h += '<div class="jobshub-actions"><input type="search" class="jobshub-search jhc-q" placeholder="Search jobs\u2026" value="' + esc(st.q || '') + '" style="min-width:220px;">'
-      + '<span class="jobshub-summary">' + shown.length + ' of ' + rows.length + ' shown</span></div>';
+    // \u2500\u2500 Toolbar: search, the four filters, sort, views \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // The filters only offer values that are on the rows in front of you
+    // (costFacets), so choosing one can never produce an empty table by
+    // itself.
+    var opts = function (list, cur, anyLabel) {
+      return '<option value="">' + esc(anyLabel) + '</option>' + list.map(function (v) {
+        return '<option value="' + esc(v) + '"' + (cur === v ? ' selected' : '') + '>' + esc(v) + '</option>';
+      }).join('');
+    };
+    h += '<div class="jobshub-actions jhc-bar">'
+      + '<input type="search" class="jobshub-search jhc-q" placeholder="Search job, PM, type, client\u2026" value="' + esc(st.q || '') + '" style="min-width:200px;">'
+      + '<select class="jobshub-filter jhc-f" data-f="type" title="Job type">' + opts(facets.types, st.type, 'All types') + '</select>'
+      + '<select class="jobshub-filter jhc-f" data-f="pm" title="Project manager">' + opts(facets.pms, st.pm, 'All PMs') + '</select>'
+      + '<select class="jobshub-filter jhc-f" data-f="market" title="Market">' + opts(facets.markets, st.market, 'All markets') + '</select>'
+      + '<select class="jobshub-filter jhc-f" data-f="status" title="Job status">'
+        + '<option value="all">All statuses</option>'
+        + facets.statuses.map(function (v) {
+            return '<option value="' + esc(v) + '"' + (st.status === v ? ' selected' : '') + '>' + esc(v) + '</option>';
+          }).join('')
+      + '</select>'
+      + '<select class="jobshub-filter jhc-sort" title="Sort">' + COST_SORTS.map(function (s) {
+          return '<option value="' + esc(s.key) + '"' + (st.sort === s.key ? ' selected' : '') + '>' + esc(s.label) + '</option>';
+        }).join('') + '</select>'
+      + '<button type="button" class="ee-btn ghost jhc-views">' + esc(costsViewLabel(st)) + ' \u25be</button>'
+      + (costsAnyFilter(st) ? '<button type="button" class="ee-btn ghost jhc-clear" title="Clear every filter">Clear</button>' : '')
+      + '<span class="jobshub-summary">' + shown.length + ' of ' + rows.length + ' shown'
+      + (shown.length !== rows.length ? ' \u00b7 ' + money(costsTotals(shown).total) + ' counted' : '')
+      + '</span></div>';
     if (!shown.length) {
       h += '<div class="jobshub-empty">' + (rows.length ? 'No job matches that.' : 'No costs have been imported yet.') + '</div>';
     } else {
@@ -1489,12 +1646,159 @@ function p86Ask(message, opts) {
         if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (e) {} }
       });
     }
+    // Changing any filter drops the active saved view: what is on screen is
+    // no longer that view, and leaving its name on the button would be a lie.
+    Array.prototype.forEach.call(host.querySelectorAll('.jhc-f'), function (sel) {
+      sel.addEventListener('change', function () {
+        costsState()[sel.getAttribute('data-f')] = sel.value;
+        costsSetActiveView(null);
+        paintCostsIndex(host);
+      });
+    });
+    var sortEl = host.querySelector('.jhc-sort');
+    if (sortEl) sortEl.addEventListener('change', function () {
+      costsState().sort = sortEl.value;
+      costsSetActiveView(null);
+      paintCostsIndex(host);
+    });
+    var clearEl = host.querySelector('.jhc-clear');
+    if (clearEl) clearEl.addEventListener('click', function () {
+      applyCostFilters(costsState(), {});
+      costsSetActiveView(null);
+      paintCostsIndex(host);
+    });
+    var viewsEl = host.querySelector('.jhc-views');
+    if (viewsEl) viewsEl.addEventListener('click', function () { openCostsViews(host, viewsEl); });
+
     Array.prototype.forEach.call(host.querySelectorAll('[data-jhc-job]'), function (tr) {
       tr.addEventListener('click', function () {
         costsState().job = tr.getAttribute('data-jhc-job');
         renderCosts(host);
       });
     });
+
+    // Restore the last-applied view once per session, the way the hub's
+    // other sub-pages do. Only when nothing is filtered already, so a view
+    // can never overwrite something the user just typed.
+    if (!st._viewInit && window.p86Api && window.p86Api.listViews) {
+      st._viewInit = true;
+      var want = null;
+      try { want = localStorage.getItem(COSTS_VIEW_KEY); } catch (e) { want = null; }
+      if (want && !costsAnyFilter(st)) {
+        window.p86Api.listViews.list(COSTS_VIEWS_PAGE).then(function (r) {
+          var v = ((r && r.views) || []).filter(function (x) { return x.id === want; })[0];
+          if (!v || costsAnyFilter(costsState())) return;
+          applyCostFilters(costsState(), (v.config && v.config.filters) || {});
+          costsState().viewId = v.id;
+          paintCostsIndex(host);
+        }).catch(function () { /* a view that will not load is not an error worth a banner */ });
+      }
+    }
+  }
+
+  function costsViewLabel(st) {
+    var v = st && st._viewName;
+    return v ? v : 'Views';
+  }
+  function costsSetActiveView(id, name) {
+    var st = costsState();
+    st.viewId = id || null;
+    st._viewName = id ? (name || st._viewName) : null;
+    try {
+      if (id) localStorage.setItem(COSTS_VIEW_KEY, id);
+      else localStorage.removeItem(COSTS_VIEW_KEY);
+    } catch (e) { /* private window */ }
+  }
+
+  // The saved-views menu. Same listViews API and the same shape as the hub's
+  // other sub-pages, with its own page key so a Detailed Costs view never
+  // appears on the Bills list.
+  function openCostsViews(host, anchor) {
+    if (!(window.p86Api && window.p86Api.listViews)) return;
+    var st = costsState();
+    window.p86Api.listViews.list(COSTS_VIEWS_PAGE).then(function (r) {
+      var views = (r && r.views) || [];
+      var pop = document.createElement('div');
+      pop.className = 'jhv-pop';
+      pop.style.cssText = 'position:fixed;z-index:100000;min-width:260px;max-width:340px;background:var(--surface,#1b1e24);'
+        + 'border:1px solid var(--border,#333);border-radius:8px;padding:6px;box-shadow:0 10px 30px rgba(0,0,0,.45);';
+      pop.innerHTML = (views.length ? views.map(function (v) {
+        return '<div data-view="' + esc(v.id) + '" style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:6px;">'
+          + '<span class="jhv-apply" style="flex:1;cursor:pointer;">' + (v.id === st.viewId ? '✓ ' : '') + esc(v.name)
+          + (v.is_default ? ' <em style="color:var(--text-dim,#888);">· default</em>' : '') + '</span>'
+          + '<a href="#" data-def="' + esc(v.id) + '" title="Set as default" style="text-decoration:none;">★</a>'
+          + '<a href="#" data-del="' + esc(v.id) + '" title="Delete" style="text-decoration:none;">✕</a>'
+          + '</div>';
+      }).join('') : '<div style="padding:6px 8px;color:var(--text-dim,#888);">No saved views yet.</div>')
+        + '<div style="border-top:1px solid var(--border,#333);margin-top:6px;padding-top:6px;">'
+        + '<button type="button" class="ee-btn jhv-save" style="width:100%;">＋ Save current filters as view…</button></div>';
+      document.body.appendChild(pop);
+      var r2 = anchor.getBoundingClientRect();
+      pop.style.top = (r2.bottom + 4) + 'px';
+      pop.style.left = Math.max(8, Math.min(r2.right - 260, window.innerWidth - 268)) + 'px';
+      function close() { pop.remove(); document.removeEventListener('mousedown', onOut, true); }
+      function onOut(e) { if (!pop.contains(e.target) && e.target !== anchor) close(); }
+      setTimeout(function () { document.addEventListener('mousedown', onOut, true); }, 0);
+
+      pop.querySelectorAll('.jhv-apply').forEach(function (sp) {
+        sp.addEventListener('click', function () {
+          var id = sp.parentNode.getAttribute('data-view');
+          var v = views.filter(function (x) { return x.id === id; })[0];
+          if (!v) return;
+          applyCostFilters(costsState(), (v.config && v.config.filters) || {});
+          costsSetActiveView(v.id, v.name);
+          close();
+          paintCostsIndex(host);
+        });
+      });
+      pop.querySelectorAll('[data-def]').forEach(function (a) {
+        a.addEventListener('click', function (e) {
+          e.preventDefault(); e.stopPropagation();
+          window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(function () {
+            close();
+            if (typeof window.p86Toast === 'function') window.p86Toast('Default view set', 'success');
+          });
+        });
+      });
+      pop.querySelectorAll('[data-del]').forEach(function (a) {
+        a.addEventListener('click', async function (e) {
+          e.preventDefault(); e.stopPropagation();
+          if (!(await p86Ask('Delete this saved view?'))) return;
+          var delId = a.getAttribute('data-del');
+          window.p86Api.listViews.remove(delId).then(function () {
+            if (costsState().viewId === delId) costsSetActiveView(null);
+            close();
+            paintCostsIndex(host);
+          });
+        });
+      });
+      pop.querySelector('.jhv-save').addEventListener('click', function () {
+        // p86Prompt, never the native prompt(): in the installed app that
+        // returns undefined, which the == null guard below reads as Cancel,
+        // and Save view does nothing on a phone with no word said. The
+        // popover closes FIRST — it sits above the dialog and would cover
+        // the name box.
+        close();
+        var ask = (typeof window.p86Prompt === 'function')
+          ? window.p86Prompt({ title: 'Save this view', message: 'Saves the filters and the sort you have on now, so you can come back to them in one tap.', placeholder: 'View name' })
+          : Promise.resolve(window.prompt('Name this view'));
+        Promise.resolve(ask).then(function (name) {
+          if (name == null) return;
+          name = String(name).trim();
+          if (!name) return;
+          return window.p86Api.listViews.create({
+            page: COSTS_VIEWS_PAGE, name: name,
+            config: { filters: costFiltersOf(costsState()) }, is_default: false
+          }).then(function (res) {
+            costsSetActiveView((res && res.view && res.view.id) || null, name);
+            paintCostsIndex(host);
+            if (typeof window.p86Toast === 'function') window.p86Toast('View saved', 'success');
+          });
+        }).catch(function (e) {
+          if (typeof window.p86Toast === 'function') window.p86Toast('Could not save the view: ' + ((e && e.message) || 'error'), 'error');
+        });
+      });
+    }).catch(function () { /* no views endpoint — the button simply does nothing */ });
   }
 
   function renderCostsDetail(host, jobId) {
@@ -1521,7 +1825,25 @@ function p86Ask(message, opts) {
     switchJobsHubSubTab('costs');
   };
 
-  window.p86JobsHub = { renderJobsHubInto: renderJobsHubInto, switchJobsHubSubTab: switchJobsHubSubTab };
+  window.p86JobsHub = {
+    renderJobsHubInto: renderJobsHubInto,
+    switchJobsHubSubTab: switchJobsHubSubTab,
+    // Test seam for the Detailed Costs index. The sort comparators and the
+    // filter predicate decide which jobs a WIP meeting looks at, so they are
+    // reachable without a server; paintCostsIndex is exposed so the toolbar
+    // can be driven in jsdom the way the other pages' renderers are.
+    __costs: {
+      paint: paintCostsIndex,
+      state: costsState,
+      sortRows: costSortRows,
+      facets: costFacets,
+      passes: costPasses,
+      jobType: costJobType,
+      match: costsMatch,
+      SORTS: COST_SORTS,
+      setLines: function (lines, bills) { _costs.lines = lines || []; _costs.bills = bills || []; _costs.loading = false; _costs.error = null; }
+    }
+  };
   window.switchJobsHubSubTab = switchJobsHubSubTab;
   // Bill editor exposed for reuse (PO editor "Bills" section in S3,
   // doc-import OCR-to-bill in S4). open(id, onSaved) — onSaved fires after

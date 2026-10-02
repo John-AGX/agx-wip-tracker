@@ -379,9 +379,36 @@
                     }
                     // Schedule accordion children carry data-schedule-subtab
                     // (calendar / planning) — same pattern as the rest.
+                    //
+                    // ?v=167 AND WHY IT IS NOT 165 OR 166. This handler first shipped
+                    // in the Production Planning commit, which bumped app.js
+                    // 164 -> 165 locally. Upstream had bumped it to 165 too, so
+                    // on rebase git saw the index.html line already matching and
+                    // dropped the hunk — and this code went out under a version
+                    // string that was already cached in people's browsers with
+                    // no handler in it. For them the sidebar row did nothing.
+                    // test/estimate-line-addressability.test.js's cache-buster
+                    // ledger caught it. If you rebase a ?v bump, check it
+                    // survived: a bump that collides with someone else's is the
+                    // one kind that disappears silently.
+                    //
+                    // IT THEN HAPPENED AGAIN. 353c16dd fixed the first
+                    // collision by bumping to 166 — but that build shipped
+                    // WITHOUT the fallback below, so putting this out under 166
+                    // as well would have repeated the bug exactly. Hence 167.
+                    // Two collisions in one afternoon is the measure of how
+                    // easy this is to miss.
                     const scheduleSub = btn.getAttribute('data-schedule-subtab');
-                    if (scheduleSub && typeof window.switchScheduleSubTab === 'function') {
-                        window.switchScheduleSubTab(scheduleSub);
+                    if (scheduleSub) {
+                        if (typeof window.switchScheduleSubTab === 'function') {
+                            window.switchScheduleSubTab(scheduleSub);
+                        } else if (typeof window.renderSchedule === 'function') {
+                            // js/schedule.js is a separate script with its own
+                            // ?v, so it can be a stale copy that predates the
+                            // sub-views. Falling back to a plain render beats a
+                            // row that silently does nothing.
+                            window.renderSchedule();
+                        }
                     }
                     // Assembly Studio accordion children carry
                     // data-asmstudio-subtab (assemblies / studio / codes /
