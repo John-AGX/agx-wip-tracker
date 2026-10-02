@@ -111,13 +111,13 @@ const JOB_KEYS = ['jobNumber', 'title', 'name', 'status', 'street_address', 'cit
 async function readP86(pool, orgId) {
   const jobsRaw = await pool.query(
     'SELECT id, ' + JOB_KEYS.map((k) => "data->>'" + k + "' AS \"" + k + '"').join(', ')
-    + ", data->'changeOrders' AS legacy_cos, data->'purchaseOrders' AS legacy_pos, bt_job_id, geocode_lat, geocode_lng, geocode_status, market_id FROM jobs WHERE organization_id = $1 AND bt_archived_at IS NULL", [orgId]);
-  const jobRows = jobsRaw.rows.map((r) => ({ id: r.id, legacy_cos: r.legacy_cos, legacy_pos: r.legacy_pos, bt_job_id: r.bt_job_id,
+    + ", data->'changeOrders' AS legacy_cos, data->'purchaseOrders' AS legacy_pos, bt_job_id, geocode_lat, geocode_lng, geocode_status, market_id, bt_created_at FROM jobs WHERE organization_id = $1 AND bt_archived_at IS NULL", [orgId]);
+  const jobRows = jobsRaw.rows.map((r) => ({ id: r.id, legacy_cos: r.legacy_cos, legacy_pos: r.legacy_pos, bt_job_id: r.bt_job_id, bt_created_at: r.bt_created_at,
     geocode_lat: r.geocode_lat, geocode_lng: r.geocode_lng, geocode_status: r.geocode_status, market_id: r.market_id,
     data: Object.fromEntries(JOB_KEYS.map((k) => [k, r[k] == null ? '' : r[k]])) }));
   const leads = await pool.query(
     'SELECT l.id, l.title, l.status, l.street_address, l.city, l.state, l.zip, l.source, l.confidence, '
-    + 'l.estimated_revenue_low, l.estimated_revenue_high, l.bt_lead_id, l.notes, '
+    + 'l.estimated_revenue_low, l.estimated_revenue_high, l.bt_lead_id, l.notes, l.bt_created_at, '
     // Converted = the lead <-> job link on EITHER side (jobs.lead_id or
     // leads.job_id), and only through a job of THIS organization: another
     // tenant's job naming this lead, or this lead naming another tenant's job,
@@ -133,7 +133,7 @@ async function readP86(pool, orgId) {
   // and an older row with no organization is — missing it would read its
   // Buildertrend twin as "new" and create a duplicate.
   const cos = await pool.query(
-    'SELECT co.id, co.job_id, co.status, co.co_number, co.data, co.is_locked, co.linked_node_id, co.bt_co_id '
+    'SELECT co.id, co.job_id, co.status, co.co_number, co.data, co.is_locked, co.linked_node_id, co.bt_co_id, co.bt_created_at '
     + 'FROM job_change_orders co JOIN jobs j ON j.id = co.job_id '
     + 'WHERE j.organization_id = $1 AND j.bt_archived_at IS NULL AND (co.organization_id = $1 OR co.organization_id IS NULL)', [orgId]);
   // Purchase orders on the same terms as change orders, with what is already
@@ -142,7 +142,7 @@ async function readP86(pool, orgId) {
   // already has portal access to the job's files (its job assignment AND the
   // job folder grant — what services/po-sub-access.js writes).
   const pos = await pool.query(
-    'SELECT po.id, po.job_id, po.status, po.po_number, po.data, po.is_locked, po.sub_id, po.bt_po_id, s.name AS sub_name, '
+    'SELECT po.id, po.job_id, po.status, po.po_number, po.data, po.is_locked, po.sub_id, po.bt_po_id, po.bt_created_at, s.name AS sub_name, '
     + "(SELECT COALESCE(SUM(b.amount), 0) FROM job_vendor_bills b WHERE b.po_id = po.id AND b.status <> 'void') AS billed, "
     + '(EXISTS (SELECT 1 FROM job_subs js WHERE js.job_id = po.job_id AND js.sub_id = po.sub_id) '
     + "AND EXISTS (SELECT 1 FROM attachment_folder_grants g WHERE g.sub_id = po.sub_id AND g.entity_type = 'job' AND g.entity_id = po.job_id AND g.folder = 'general')) AS sub_access "
@@ -156,7 +156,7 @@ async function readP86(pool, orgId) {
   // (bill-routes.js refuses a bill whose PO is on another job), which scopes it
   // without a tolerance arm of its own.
   const bills = await pool.query(
-    'SELECT b.id, b.job_id, b.status, b.bill_number, b.amount, b.bill_date, b.due_date, b.data, b.po_id, b.sub_id, b.bt_bill_id, '
+    'SELECT b.id, b.job_id, b.status, b.bill_number, b.amount, b.bill_date, b.due_date, b.data, b.po_id, b.sub_id, b.bt_bill_id, b.bt_created_at, '
     + 's.name AS sub_name, po.po_number AS po_number '
     + 'FROM job_vendor_bills b JOIN jobs j ON j.id = b.job_id '
     + 'LEFT JOIN subs s ON s.id = b.sub_id AND s.organization_id = $1 '
@@ -180,12 +180,12 @@ async function readP86(pool, orgId) {
   //       organization (sync-apply.js createEstimate), so a row carrying a
   //       bt_worksheet_id always carries an organization too.
   const estsOnJob = await pool.query(
-    'SELECT e.id, e.attached_job_id, e.bt_worksheet_id, e.data, e.is_locked, e.sent_at, e.sent_count, '
+    'SELECT e.id, e.attached_job_id, e.bt_worksheet_id, e.data, e.is_locked, e.sent_at, e.sent_count, e.bt_created_at, '
     + 'e.approval_status, e.accepted_at, e.approved_at, e.declined_at '
     + 'FROM estimates e JOIN jobs j ON j.id = e.attached_job_id '
     + 'WHERE j.organization_id = $1 AND j.bt_archived_at IS NULL AND (e.organization_id = $1 OR e.organization_id IS NULL)', [orgId]);
   const estsLoose = await pool.query(
-    'SELECT e.id, e.attached_job_id, e.bt_worksheet_id, e.data, e.is_locked, e.sent_at, e.sent_count, '
+    'SELECT e.id, e.attached_job_id, e.bt_worksheet_id, e.data, e.is_locked, e.sent_at, e.sent_count, e.bt_created_at, '
     + 'e.approval_status, e.accepted_at, e.approved_at, e.declined_at '
     + 'FROM estimates e WHERE e.organization_id = $1 AND e.bt_worksheet_id IS NOT NULL AND e.attached_job_id IS NULL', [orgId]);
   // ORG TASKS FILED UNDER A JOB. No tolerance arm: tasks.organization_id is
@@ -332,6 +332,37 @@ function matchRows(kind, values, p86) {
 
 const PREVIEW_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills', 'estimates', 'tasks'];
 
+// WHERE P86 KEEPS WHAT IT ALREADY HOLDS, per dataset. The six that carry
+// Buildertrend's creation date are the six whose appliers heal it
+// (sync-apply healBtDates / healBtDatesLoose); clients and tasks have no such
+// column and are deliberately absent.
+const HEALED_COLLECTION = {
+  jobs: 'jobs', leads: 'leads', changeOrders: 'coRows',
+  purchaseOrders: 'poRows', bills: 'billRows', estimates: 'estimateRows',
+};
+
+/* WHICH ROWS A SAFE PRESS WOULD STILL FILL A DATE ON.
+ *
+ * Marked here, once, rather than in each of the five matchers: the rule is the
+ * same for every dataset and it belongs next to nothing in particular.
+ *
+ * Only CONFIDENT rows are marked, because only those are the ones a safe apply
+ * reaches (sync-apply apply(): targets = rows whose class is matched or
+ * conflict). Marking a row the press will not touch would put a number on a
+ * button that does not come down when it is pressed.
+ */
+function markCreatedDue(kind, rows, p86) {
+  const key = HEALED_COLLECTION[kind];
+  if (!key) return;
+  const held = new Map();
+  for (const r of (p86[key] || [])) held.set(String(r.id), r.bt_created_at);
+  for (const row of rows) {
+    if (row['class'] !== 'matched' && row['class'] !== 'conflict') continue;
+    if (!row.p86 || row.p86.id == null) continue;
+    row.btCreatedDue = match.btCreatedDue(row.bt, held.get(String(row.p86.id)));
+  }
+}
+
 function buildDataset(kind, fr, p86, p86Error) {
   const ds = DATASETS[kind];
   const out = {
@@ -375,6 +406,7 @@ function buildDataset(kind, fr, p86, p86Error) {
       { readComplete: fr.complete === true });
   const reliable = fr.complete === true && !p86Error;
   out.classified = true;
+  markCreatedDue(kind, rows, p86);
   out.rows = rows;
   out.summary = match.summarise(rows);
   // What each Buildertrend Market option seems to mean, from the records
@@ -649,4 +681,4 @@ function forgetFetch(orgId) {
 
 let inFlight = false;
 
-module.exports = { PREVIEW_KINDS, handle, buildPreview, rememberFetch, cachedFetch, forgetFetch, readP86, matchRows, changeOrderTotals, ownerSlug, fetchedSentence, carriesKey, VIEW_PARAM };
+module.exports = { PREVIEW_KINDS, handle, buildPreview, rememberFetch, cachedFetch, forgetFetch, readP86, matchRows, markCreatedDue, changeOrderTotals, ownerSlug, fetchedSentence, carriesKey, VIEW_PARAM };

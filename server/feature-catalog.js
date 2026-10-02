@@ -526,9 +526,19 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.90';
+const APP_VERSION = '1.91';
 
 const releases = [
+  {
+    version: '1.91',
+    date: '2026-10-02',
+    name: 'The Buildertrend dates can be filled on their own',
+    summary: 'The Safe button on the Buildertrend page now counts the records still missing Buildertrend\u2019s creation date \u2014 so you can fill just those, without creating anything or touching money.',
+    changes: [
+      { type: 'fixed', text: 'The Safe button could not be pressed on a tab where everything was already linked and up to date \u2014 it read (0) and greyed out. That is exactly the state a record imported before the Created column existed is in, so the one thing the press had left to do, filling in the day Buildertrend created the record, could not be done from this page at all. The only way to get those dates was \u201cRun sync now\u201d, which also creates records and applies money corrections. The button now counts them, says how many, and fills only blanks \u2014 a date already recorded is never rewritten.' },
+      { type: 'fixed', text: 'A press whose only work was filling those dates used to report \u201cN already up to date\u201d \u2014 over the very records it had just written. It now says how many dates it recorded.' },
+    ],
+  },
   {
     version: '1.90',
     date: '2026-10-02',

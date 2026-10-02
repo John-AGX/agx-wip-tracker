@@ -816,6 +816,19 @@
     }).length;
   }
 
+  // A confident record still owed Buildertrend's creation date (r.btCreatedDue,
+  // from the matcher — the same test the backfill's own UPDATE makes). Every
+  // record imported before those columns existed is due once. Without counting
+  // it the safe button reads (0) and DISABLES on an org whose records are all
+  // linked and current — which is the exact org that needs the backfill, so the
+  // dates could never be filled from this page at all.
+  function createdDateCount(ds) {
+    if (!ds) return 0;
+    return (ds.rows || []).filter(function (r) {
+      return (r['class'] === 'matched' || r['class'] === 'conflict') && r.bt && r.bt.btId != null && r.bt.btId !== '' && r.btCreatedDue === true;
+    }).length;
+  }
+
   // A confident purchase order P86 has approved whose stored approval does not
   // yet say WHICH Buildertrend approval it was (the sub's or the builder's own).
   function approvalKindCount(ds) {
@@ -832,6 +845,7 @@
       if (r.rung !== 'Buildertrend ID') return true;
       if (ds.key === 'purchaseOrders' && (r.subAccessDue === true || r.approvalKindDue === true)) return true;
       if (r.btStatusDue === true) return true;
+      if (r.btCreatedDue === true) return true;
       // The two blanks a safe press fills on a job (sync-apply isSafeCorrection).
       // Leave one out and a linked job whose only safe update is that fill
       // counts 0, the button disables, and the fill never lands.
@@ -869,6 +883,8 @@
     var w = statusWordCount(ds);
     var noun = NOUN[key] || 'record';
     var word = w ? ' Records what Buildertrend now calls ' + w + ' ' + noun + (w === 1 ? '' : 's') + ', beside the P86 status, which does not change.' : '';
+    var made = createdDateCount(ds);
+    if (made) word += ' Records the day Buildertrend created ' + made + ' ' + noun + (made === 1 ? '' : 's') + ' \u2014 a blank is filled, a date already there is left alone.';
     if (!l) return 'Nothing is left to link.' + word + (key === 'jobs' ? ' Start dates are filled only where P86 has none.' : '') + TAIL;
     return 'Link ' + l + ' confident ' + noun + ' match' + (l === 1 ? '' : 'es') + ' to Buildertrend' +
       (key === 'jobs' ? ' and fill start dates where P86 has none' : '') + '?' + word + TAIL;
@@ -880,6 +896,8 @@
     var t = 'Saves the Buildertrend id on each confident match' + (ds.key === 'jobs' ? ' and fills a start date and a map location only where P86 has none' : '') + '.';
     var w = statusWordCount(ds);
     if (w) t += ' Records what Buildertrend now calls ' + w + ' ' + (NOUN[ds.key] || 'record') + (w === 1 ? '' : 's') + ', beside the P86 status, which does not change.';
+    var made = createdDateCount(ds);
+    if (made) t += ' Records the day Buildertrend created ' + made + ' ' + (NOUN[ds.key] || 'record') + (made === 1 ? '' : 's') + ', so lists can be sorted by age. It only ever FILLS a blank — a date already recorded is never rewritten.';
     if (ds.key === 'estimates') {
       t += ' An estimate’s LINE ITEMS are applied one row at a time and only when you tick them: they carry every cost and every price on the proposal.'
         + ' Nothing is written into a P86 estimate that was sent to a client or sold — those take the Buildertrend id and nothing else.'
@@ -966,6 +984,7 @@
     if (c.linked) parts.push(c.linked + ' newly linked');
     if (c.subAccess) parts.push('sub portal access granted on ' + c.subAccess);
     if (c.statusWord) parts.push('Buildertrend’s own word recorded on ' + c.statusWord);
+    if (c.createdDate) parts.push('Buildertrend’s created date recorded on ' + c.createdDate);
     if (c.approvalKind) parts.push('which Buildertrend approval recorded on ' + c.approvalKind);
     if (c.fields) parts.push(c.fields + ' field' + (c.fields === 1 ? '' : 's') + ' changed');
     if (c.unchanged) parts.push(c.unchanged + ' already up to date');

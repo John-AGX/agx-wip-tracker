@@ -1962,8 +1962,31 @@ function btInstant(v) {
   return d.toISOString();
 }
 
+// WHICH KEY CARRIES IT. Buildertrend sends the creation timestamp under
+// createdDate on jobs, leads and bills and under dateAdded on change orders,
+// purchase orders and estimates, so every caller reads it through here rather
+// than guessing per dataset.
+function btCreatedRaw(bt) {
+  if (!bt) return null;
+  const a = bt.createdDate;
+  if (a != null && String(a).trim() !== '') return a;
+  return bt.dateAdded != null ? bt.dateAdded : null;
+}
+
+// IS A DATE STILL OWED ON THIS RECORD? The backfill (sync-apply healBtDates) is
+// FILL-ONLY — `WHERE bt_created_at IS NULL` — so a record is due exactly when
+// Buildertrend has a date we can parse and P86 is not already holding one.
+// Nothing here may drift from that UPDATE: the preview counts what a press is
+// about to write, and a count that is not the write is worse than no count.
+function btCreatedDue(bt, storedBtCreatedAt) {
+  if (storedBtCreatedAt != null && String(storedBtCreatedAt).trim() !== '') return false;
+  return btInstant(btCreatedRaw(bt)) != null;
+}
+
 module.exports = {
   btInstant,
+  btCreatedRaw,
+  btCreatedDue,
   matchJobs, matchLeads, matchClients, p86ClientView, CLIENT_CUSTOM_FIELDS, JOB_CUSTOM_FIELDS, fieldText, clientCore, sameClientProperty, emailKey, phoneKey, notInBuildertrend, summarise, RATE_CLASSES,
   parseJobName, exactNumberKey, looseNumberKey, namesAgree, nameEvidence, placeEvidence, streetsMatchStrict, streetsAgree, samePlace,
   nearIndex, nearKey, nearTitles, bigrams, GENERIC,

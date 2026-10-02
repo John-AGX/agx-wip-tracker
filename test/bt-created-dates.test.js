@@ -128,8 +128,11 @@ describe('repairing the records already imported', () => {
       expect([sig, at > -1]).toEqual([sig, true]);
       const body = src.slice(at, src.indexOf('\n}', at));
       expect([sig, liveLines(body, 'bt_created_at IS NULL').length]).toEqual([sig, 1]);
-      // and it writes nothing at all when the date will not parse
-      expect([sig, liveLine(body, 'if (!iso) return;')]).toEqual([sig, true]);
+      // and it writes nothing at all when the date will not parse. It answers
+      // FALSE rather than returning bare, because a press whose only work was
+      // the backfill has to be able to say so (counts.createdDate) instead of
+      // reporting "already up to date" over a row it had just written.
+      expect([sig, liveLine(body, 'if (!iso) return false;')]).toEqual([sig, true]);
       // no fallback to "now" anywhere in either body — the defect they exist to fix
       expect([sig, /new Date\(\)/.test(body)]).toEqual([sig, false]);
     }
@@ -152,9 +155,9 @@ describe('repairing the records already imported', () => {
    * write to a document that went to a client.
    */
   const APPLIERS = [
-    ['applyJob', "healBtDates(db, 'jobs'", 'if (!applied.length && wasLinked && !nextBtStatus) return'],
+    ['applyJob', "healBtDates(db, 'jobs'", 'if (!applied.length && wasLinked && !nextBtStatus && !healedDate) return'],
     ['applyLead', "healBtDates(db, 'leads'", 'if (!applied.length && wasLinked) return'],
-    ['applyChangeOrder', "healBtDatesLoose(db, 'job_change_orders'", 'if (!applied.length && wasLinked && !nextBtStatus) return'],
+    ['applyChangeOrder', "healBtDatesLoose(db, 'job_change_orders'", 'if (!applied.length && wasLinked && !nextBtStatus && !healedDate) return'],
     ['applyPurchaseOrder', "healBtDatesLoose(db, 'job_purchase_orders'", 'if (!applied.length && wasLinked'],
     ['applyBill', "healBtDatesLoose(db, 'job_vendor_bills'", 'if (!applied.length && wasLinked'],
     ['applyEstimate', "healBtDatesLoose(db, 'estimates'", 'const locked = estimateMatch.lifecycleLock(view);'],

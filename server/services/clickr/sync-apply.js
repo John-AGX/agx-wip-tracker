@@ -261,12 +261,9 @@ async function readDataset(org, kind, deps) {
  * place that knows both names, and it is a union of two settled keys, not a
  * guess at a third.
  */
-function btCreatedRaw(bt) {
-  if (!bt) return null;
-  const a = bt.createdDate;
-  if (a != null && String(a).trim() !== '') return a;
-  return bt.dateAdded != null ? bt.dateAdded : null;
-}
+// Which key carries the date lives in bt-match.js, so the preview's "due" and
+// this write read the same value. See match.btCreatedDue.
+const btCreatedRaw = match.btCreatedRaw;
 
 /* BACKFILL THE BUILDERTREND DATES ON A ROW THAT ALREADY EXISTS.
  *
@@ -294,13 +291,17 @@ function btCreatedRaw(bt) {
  * read off it HERE, through btCreatedRaw, so no call site can name the wrong
  * key for its dataset and silently write nothing.
  */
+// Answers whether this row actually TOOK a date, so a press that did nothing
+// else can still say what it did. Fill-only, so the answer is false the second
+// time over the same row.
 async function healBtDates(db, table, orgId, id, bt) {
   const iso = match.btInstant(btCreatedRaw(bt));
-  if (!iso) return;
-  await db.query(
+  if (!iso) return false;
+  const r = await db.query(
     'UPDATE ' + table + ' SET bt_created_at = $1, bt_synced_at = COALESCE(bt_synced_at, NOW())'
     + ' WHERE id = $2 AND organization_id = $3 AND bt_created_at IS NULL',
     [iso, id, orgId]);
+  return !!(r && r.rowCount);
 }
 
 /* A CHANGE ORDER, PURCHASE ORDER, BILL OR ESTIMATE CAN CARRY A NULL
@@ -316,8 +317,8 @@ async function healBtDates(db, table, orgId, id, bt) {
  */
 async function healBtDatesLoose(db, table, orgId, id, bt) {
   const iso = match.btInstant(btCreatedRaw(bt));
-  if (!iso) return;
-  await db.query(
+  if (!iso) return false;
+  const r = await db.query(
     'UPDATE ' + table + ' SET bt_created_at = $1, bt_synced_at = COALESCE(bt_synced_at, NOW())'
     + ' WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL) AND bt_created_at IS NULL',
     [iso, id, orgId]);
@@ -339,7 +340,7 @@ async function applyJob(db, orgId, row, mode, fields) {
   const taken = await db.query('SELECT id FROM jobs WHERE organization_id = $1 AND bt_job_id = $2 AND id <> $3', [orgId, btId, job.id]);
   if (taken.rows.length) return { skipped: 'Another P86 job is already linked to this Buildertrend job.' };
 
-  await healBtDates(db, 'jobs', orgId, job.id, row.bt);
+  const healedDate = await healBtDates(db, 'jobs', orgId, job.id, row.bt);
 
   const data = (job.data && typeof job.data === 'object') ? Object.assign({}, job.data) : {};
   const applied = [];
@@ -419,7 +420,7 @@ async function applyJob(db, orgId, row, mode, fields) {
   const nextBtStatus = withBtStatus(data, btStatusText(row.bt.status));
   if (nextBtStatus) data.btStatus = nextBtStatus.btStatus;
   const wasLinked = linkedTo === btId;
-  if (!applied.length && wasLinked && !nextBtStatus) return { unchanged: true, stale };
+  if (!applied.length && wasLinked && !nextBtStatus && !healedDate) return { unchanged: true, stale };
   if (point) data.geocodeSource = 'buildertrend';
   await db.query('UPDATE jobs SET data = $1::jsonb, bt_job_id = $2, updated_at = NOW() WHERE id = $3 AND organization_id = $4',
     [JSON.stringify(data), btId, job.id, orgId]);
@@ -436,7 +437,7 @@ async function applyJob(db, orgId, row, mode, fields) {
       + 'WHERE id = $4 AND organization_id = $5',
       [point.lat, point.lng, data.address || [data.street_address, data.city, data.state, data.zip].filter((x) => norm(x)).join(', '), job.id, orgId]);
   }
-  return { applied, linked: !wasLinked, stale, btStatus: !!nextBtStatus };
+  return { applied, linked: !wasLinked, stale, btStatus: !!nextBtStatus, btCreated: healedDate };
 }
 
 // ── change orders ────────────────────────────────────────────────────────
@@ -476,7 +477,7 @@ async function applyChangeOrder(db, orgId, row, mode, fields) {
   // Buildertrend’s own date, filled in passing — see healBtDates. Above every
   // early return below, because a record long since in step with Buildertrend
   // has no field to apply and is exactly the one this is for.
-  await healBtDatesLoose(db, 'job_change_orders', orgId, co.id, row.bt);
+  const healedDate = await healBtDatesLoose(db, 'job_change_orders', orgId, co.id, row.bt);
 
   let data = parseData(co.data);
   const applied = [];
@@ -538,7 +539,7 @@ async function applyChangeOrder(db, orgId, row, mode, fields) {
       stale.push('Status — ' + statusMove.value + ' is not a status a sync sets');
     }
   }
-  if (!applied.length && wasLinked && !nextBtStatus) return { unchanged: true, stale };
+  if (!applied.length && wasLinked && !nextBtStatus && !healedDate) return { unchanged: true, stale };
   await db.query('UPDATE job_change_orders SET data = $1::jsonb, bt_co_id = $2, updated_at = NOW() WHERE id = $3 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $4)',
     [JSON.stringify(data), btId, co.id, orgId]);
   if (approvedAt) {
@@ -561,7 +562,7 @@ async function applyChangeOrder(db, orgId, row, mode, fields) {
     await db.query('UPDATE job_change_orders SET status = $1 WHERE id = $2 AND status = $3 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $4)',
       [statusTo, co.id, statusFrom, orgId]);
   }
-  return { applied, linked: !wasLinked, stale, btStatus: !!nextBtStatus };
+  return { applied, linked: !wasLinked, stale, btStatus: !!nextBtStatus, btCreated: healedDate };
 }
 
 async function createChangeOrder(db, orgId, row, user) {
@@ -654,7 +655,7 @@ async function applyPurchaseOrder(db, orgId, row, mode, fields) {
   // Buildertrend’s own date, filled in passing — see healBtDates. Above every
   // early return below, because a record long since in step with Buildertrend
   // has no field to apply and is exactly the one this is for.
-  await healBtDatesLoose(db, 'job_purchase_orders', orgId, po.id, row.bt);
+  const healedDate = await healBtDatesLoose(db, 'job_purchase_orders', orgId, po.id, row.bt);
 
   let data = parseData(po.data);
   let subId = po.sub_id || null;
@@ -772,13 +773,13 @@ async function applyPurchaseOrder(db, orgId, row, mode, fields) {
     }
   }
   const wasLinked = linkedTo === btId;
-  if (!applied.length && wasLinked && !stampedApproval) return { unchanged: true, stale };
+  if (!applied.length && wasLinked && !stampedApproval && !healedDate) return { unchanged: true, stale };
   await db.query(
     `UPDATE job_purchase_orders SET data = $1::jsonb, sub_id = $2, status = $3, is_locked = $4, bt_po_id = $5,
        approved_at = CASE WHEN $3 IN ('approved', 'work_complete', 'closed') AND approved_at IS NULL THEN NOW() ELSE approved_at END, updated_at = NOW()
      WHERE id = $6 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $7)`,
     [JSON.stringify(data), subId, status, nowLocked, btId, po.id, orgId]);
-  return { applied, linked: !wasLinked, stale, approvalStamp: stampedApproval };
+  return { applied, linked: !wasLinked, stale, approvalStamp: stampedApproval, btCreated: healedDate };
 }
 
 // SUB PORTAL ACCESS, as the PO page grants it. Called only AFTER the
@@ -932,7 +933,7 @@ async function applyBill(db, orgId, row, mode, fields) {
   // Buildertrend’s own date, filled in passing — see healBtDates. Above every
   // early return below, because a record long since in step with Buildertrend
   // has no field to apply and is exactly the one this is for.
-  await healBtDatesLoose(db, 'job_vendor_bills', orgId, bill.id, row.bt);
+  const healedDate = await healBtDatesLoose(db, 'job_vendor_bills', orgId, bill.id, row.bt);
 
   let data = parseData(bill.data);
   let poId = bill.po_id || null;
@@ -1019,7 +1020,7 @@ async function applyBill(db, orgId, row, mode, fields) {
   const nextBt = withBtStatus(data, btStatusText(row.bt.paymentStatusText));
   if (nextBt) data = nextBt;
   const wasLinked = linkedTo === btId;
-  if (!applied.length && wasLinked && !nextBt) return { unchanged: true, stale };
+  if (!applied.length && wasLinked && !nextBt && !healedDate) return { unchanged: true, stale };
   // approved_at is stamped the way P86's own status route stamps it, but ONLY
   // when THIS write moved the status onto approved or paid ($12). Keying it off
   // the status the row ends with instead would back-fill a date onto every bill
@@ -1035,7 +1036,7 @@ async function applyBill(db, orgId, row, mode, fields) {
        approved_at = CASE WHEN $12 = 1 AND approved_at IS NULL THEN NOW() ELSE approved_at END, updated_at = NOW()
      WHERE id = $10 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $11)`,
     [JSON.stringify(data), poId, subId, status, billNumber, amount, billDate, dueDate, btId, bill.id, orgId, stampApproval]);
-  return { applied, linked: !wasLinked, stale, btStatus: !!nextBt };
+  return { applied, linked: !wasLinked, stale, btStatus: !!nextBt, btCreated: healedDate };
 }
 
 async function createBill(db, orgId, row, user) {
@@ -1168,7 +1169,7 @@ async function applyEstimate(db, orgId, row, mode, fields) {
   // Above the lifecycle lock as well as the early returns: an estimate that
   // went to a client is refused every other write, and its AGE is not a write
   // into the document — it is the same provenance the link beside it records.
-  await healBtDatesLoose(db, 'estimates', orgId, est.id, row.bt);
+  const healedDate = await healBtDatesLoose(db, 'estimates', orgId, est.id, row.bt);
   const wasLinked = linkedTo === btId;
 
   // THE GUARD, re-checked against the LOCKED row rather than against the
@@ -1186,7 +1187,7 @@ async function applyEstimate(db, orgId, row, mode, fields) {
     // it is. What is written is one column: the id that stops the next refresh
     // reading this worksheet as new and creating a duplicate proposal.
     const stale = (fields || []).map((f) => f + ' — this P86 estimate went to a client or was sold (' + locked.join('; ') + ')');
-    if (wasLinked) return { unchanged: true, stale };
+    if (wasLinked && !healedDate) return { unchanged: true, stale };
     await db.query(
       'UPDATE estimates SET bt_worksheet_id = $1 WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)',
       [btId, est.id, orgId]);
@@ -1253,12 +1254,12 @@ async function applyEstimate(db, orgId, row, mode, fields) {
   // Buildertrend's OWN proposal word, beside P86's own state and never as one.
   const nextBt = withBtStatus(data, btStatusText(row.bt.proposalStatus));
   if (nextBt) data = nextBt;
-  if (!applied.length && wasLinked && !nextBt && jobId === (est.job_id || null)) return { unchanged: true, stale };
+  if (!applied.length && wasLinked && !nextBt && jobId === (est.job_id || null) && !healedDate) return { unchanged: true, stale };
   await db.query(
     'UPDATE estimates SET data = $1::jsonb, attached_job_id = $2, bt_worksheet_id = $3, updated_at = NOW() '
     + 'WHERE id = $4 AND (organization_id = $5 OR organization_id IS NULL)',
     [JSON.stringify(data), jobId, btId, est.id, orgId]);
-  return { applied, linked: !wasLinked, stale, btStatus: !!nextBt };
+  return { applied, linked: !wasLinked, stale, btStatus: !!nextBt, btCreated: healedDate };
 }
 
 async function createEstimate(db, orgId, row, user) {
@@ -1555,7 +1556,7 @@ async function applyLead(db, orgId, row, mode, fields) {
   // a foreign record's date on a lead that is not it. Reachable: two P86 leads
   // matching one Buildertrend lead is the possible_duplicate class, and the
   // live org has 18 of them.
-  await healBtDates(db, 'leads', orgId, lead.id, row.bt);
+  const healedDate = await healBtDates(db, 'leads', orgId, lead.id, row.bt);
 
   const sets = {};
   const applied = [];
@@ -1624,7 +1625,7 @@ async function applyLead(db, orgId, row, mode, fields) {
   const n = params.length;
   await db.query('UPDATE leads SET ' + cols.map((k, i) => k + ' = $' + (i + 1)).concat(['bt_lead_id = $' + (n - 2), 'updated_at = NOW()']).join(', ')
     + ' WHERE id = $' + (n - 1) + ' AND organization_id = $' + n, params);
-  return { applied, linked: !wasLinked, stale, contactLinked, regeocode: addressChanged ? lead.id : null };
+  return { applied, linked: !wasLinked, stale, contactLinked, regeocode: addressChanged ? lead.id : null, btCreated: healedDate };
 }
 
 // ── clients ──────────────────────────────────────────────────────────────
@@ -2136,7 +2137,7 @@ async function apply(org, input, deps) {
         results.push(Object.assign(base, { outcome: 'unchanged', stale: r.stale }));
         if (kind === 'purchaseOrders') grantFor = base;
       } else {
-        results.push(Object.assign(base, { outcome: 'applied', linked: !!r.linked, fields: r.applied, stale: r.stale, contactLinked: !!r.contactLinked, btStatus: !!r.btStatus, approvalStamp: !!r.approvalStamp }));
+        results.push(Object.assign(base, { outcome: 'applied', linked: !!r.linked, fields: r.applied, stale: r.stale, contactLinked: !!r.contactLinked, btStatus: !!r.btStatus, btCreated: !!r.btCreated, approvalStamp: !!r.approvalStamp }));
         if (r.regeocode) regeocode.push(r.regeocode);
         if (kind === 'purchaseOrders') grantFor = base;
       }
@@ -2161,6 +2162,11 @@ async function apply(org, input, deps) {
     // it. Counted apart so a press that only did this does not read as a bare
     // "N updated" with no field named.
     if (r.btStatus) counts.statusWord = (counts.statusWord || 0) + 1;
+    // Buildertrend's creation date, filled into a blank. Counted apart for the
+    // same reason as the status word: a press whose only work was this must not
+    // read as a bare "N updated" with no field named — nor, as it did before,
+    // as "N already up to date" while it wrote the date to every one of them.
+    if (r.btCreated) counts.createdDate = (counts.createdDate || 0) + 1;
     if (r.approvalStamp) counts.approvalKind = (counts.approvalKind || 0) + 1;
     counts.fields += (r.fields || []).length;
   }

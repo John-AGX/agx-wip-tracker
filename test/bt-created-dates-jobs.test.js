@@ -318,8 +318,17 @@ describe('the four record types that hang off a job', () => {
   test('the key is chosen in ONE place, not guessed per call site', () => {
     // Six kinds, two names. Naming a key at each of the six call sites is how
     // one of them ends up reading undefined for ever without a word.
+    //
+    // That one place is now bt-match.js, because the PREVIEW has to read the
+    // same key to say which records are still owed a date (match.btCreatedDue,
+    // counted by the safe button). Two readers, one rule: a count that could
+    // drift from the write would put a number on a button that does not come
+    // down when it is pressed. sync-apply holds the alias and nothing else.
     const src = read('server/services/clickr/sync-apply.js').replace(/\r\n/g, '\n');
-    expect(liveLine(src, 'function btCreatedRaw(bt) {')).toBe(true);
+    const match = read('server/services/clickr/bt-match.js').replace(/\r\n/g, '\n');
+    expect(liveLine(match, 'function btCreatedRaw(bt) {')).toBe(true);
+    expect(liveLine(src, 'const btCreatedRaw = match.btCreatedRaw;')).toBe(true);
+    expect(liveLine(src, 'function btCreatedRaw(bt) {')).toBe(false);
     const calls = src.match(/healBtDates(Loose)?\(db, '[a-z_]+', orgId, [a-z.]+, row\.bt\)/g) || [];
     expect(calls.length).toBe(6);
     // and nothing hands it a single named key instead of the whole bt side
