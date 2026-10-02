@@ -53,51 +53,23 @@ function text() { return require('./work-order-notify-text'); }
 function recipientsModule() { return require('./work-order-recipients'); }
 function senderHelpers() { return require('../email-sender'); }
 
+/* THE DELIVERY HALF MOVED TO services/notice-delivery.js.
+ *
+ * resolveDeps, the three preference readers, reachable, displayName,
+ * senderOrgFor and deliver were never about work orders, and the money
+ * notices need exactly the same "off means off everywhere" rules. Pulled back
+ * in under their own names, so every function below is unchanged.
+ */
+const delivery = require('./notice-delivery');
+const {
+  resolveDeps, prefsOf, emailOn, pushOn, reachable, displayName, deliver, senderOrgFor,
+} = delivery;
+
 function positiveInt(v) {
   const n = Number(v);
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
-function resolveDeps(deps) {
-  const d = deps || {};
-  let isEnabled = d.isEnabled;
-  if (typeof isEnabled !== 'function') {
-    isEnabled = d.sendEmail
-      ? function () { return true; }
-      : function () { return require('../email').isEnabled(); };
-  }
-  return {
-    sendEmail: d.sendEmail || function (m) { return require('../email').sendEmail(m); },
-    sendPush: d.sendPush || function (userId, key, payload, prefs) {
-      return require('../notify-events').sendPushForEvent(userId, key, payload, prefs);
-    },
-    hasCapability: d.hasCapability,
-    isEnabled: isEnabled,
-  };
-}
-
-function prefsOf(u) {
-  let p = u && u.notification_prefs;
-  if (typeof p === 'string') { try { p = JSON.parse(p); } catch (_) { p = {}; } }
-  return (p && typeof p === 'object') ? p : {};
-}
-
-function emailOn(u, key) {
-  return !!(u && u.email) && prefsOf(u)[key] !== false;
-}
-
-function pushOn(u, key) {
-  const prefs = prefsOf(u);
-  return !(prefs.push && typeof prefs.push === 'object' && prefs.push[key] === false);
-}
-
-function reachable(u, key) {
-  return emailOn(u, key) || pushOn(u, key);
-}
-
-function displayName(u) {
-  return String((u && (u.name || u.email)) || ('User ' + (u && u.id))).slice(0, 80);
-}
 
 async function logSystemEvent(db, ticket, kind, detail) {
   try {
@@ -114,10 +86,6 @@ async function logSystemEvent(db, ticket, kind, detail) {
   }
 }
 
-async function senderOrgFor(db, orgId) {
-  const name = await senderHelpers().orgNameFor(db, orgId);
-  return name ? { id: orgId, name: name } : { id: orgId };
-}
 
 async function siteFor(db, ticket) {
   try {
@@ -127,39 +95,6 @@ async function siteFor(db, ticket) {
   }
 }
 
-// One person, one message: email when their email pref is on, push when their
-// push pref is on. True when either channel reached them.
-async function deliver(d, u, key, message, opts) {
-  const o = opts || {};
-  let reached = false;
-  if (emailOn(u, key)) {
-    try {
-      const helpers = senderHelpers();
-      const r = await d.sendEmail({
-        to: u.email,
-        subject: message.subject,
-        html: message.html,
-        text: message.text,
-        tag: key,
-        organizationId: o.orgId,
-        senderOrg: o.senderOrg,
-        replyTo: helpers.cleanReplyTo(o.replyTo, [u.email]) || false,
-      });
-      if (r && r.ok) reached = true;
-    } catch (e) {
-      console.warn('[work-order-notices] email failed (' + key + '):', e && e.message);
-    }
-  }
-  if (message.push && pushOn(u, key)) {
-    try {
-      const p = await d.sendPush(Number(u.id), key, message.push, prefsOf(u));
-      if (p && p.sent) reached = true;
-    } catch (e) {
-      console.warn('[work-order-notices] push failed (' + key + '):', e && e.message);
-    }
-  }
-  return reached;
-}
 
 async function subtaskTally(db, ticket) {
   const r = await db.query(

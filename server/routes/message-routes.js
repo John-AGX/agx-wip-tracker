@@ -76,6 +76,11 @@ function dmParticipants(key) {
   return m ? [Number(m[1]), Number(m[2])] : null;
 }
 
+// THE TENANT GATE for a caller-supplied thread key. isForbiddenDm below
+// answers the DM question; this answers the entity one, which nothing asked
+// until now — see services/thread-org-scope.js.
+const { threadInOrg } = require('../services/thread-org-scope');
+
 // True when `key` is a DM and `userId` is NOT one of its two participants.
 // Non-DM threads return false (no per-user gate at this layer).
 function isForbiddenDm(key, userId) {
@@ -116,7 +121,9 @@ async function describeThread(key, orgId) {
     }
     if (key.startsWith('estimate:')) {
       const id = key.slice(9);
-      const { rows } = await pool.query('SELECT data FROM estimates WHERE id = $1', [id]);
+      const { rows } = await pool.query(
+        'SELECT data FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        [id, orgId]);
       if (rows.length) {
         const d = rows[0].data || {};
         return { kind: 'estimate', label: d.title || ('Estimate ' + id) };
@@ -132,9 +139,12 @@ async function describeThread(key, orgId) {
     }
     if (key.startsWith('attachment:')) {
       const id = key.slice('attachment:'.length);
+      // Scoped like the three above: the label is the attachment's FILENAME,
+      // which is a name somebody typed, so an unscoped lookup turned a
+      // guessed id into another tenant's file name.
       const { rows } = await pool.query(
-        'SELECT filename, entity_type FROM attachments WHERE id = $1',
-        [id]
+        'SELECT filename, entity_type FROM attachments WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        [id, orgId]
       );
       if (rows.length) {
         return { kind: 'attachment', label: rows[0].filename || ('Photo ' + id) };
@@ -350,15 +360,26 @@ router.get('/:threadKey', async (req, res) => {
     if (isForbiddenDm(key, req.user.id)) {
       return res.status(403).json({ error: 'Not a participant in this conversation' });
     }
+    // LAYER 1 — the entity this thread is about must not be another
+    // tenant's. 404 and not 403: a foreign job and a nonexistent one answer
+    // the same, which is the convention the attachment doors already keep.
+    if (!(await threadInOrg(pool, key, req.user.organization_id))) {
+      return res.status(404).json({ error: 'Thread not found' });
+    }
+    // LAYER 2 — and the rows themselves. An entity that cannot be resolved
+    // (its job was deleted) still shows the caller only their own org's
+    // messages. NULL is the unbackfilled-legacy tolerance every read here
+    // carries; the stamp is written off the author's users row on insert.
     const { rows } = await pool.query(
       `SELECT m.id, m.thread_key, m.user_id, u.name AS user_name, u.email AS user_email,
               m.body, m.created_at, m.edited_at
          FROM messages m
          LEFT JOIN users u ON u.id = m.user_id
         WHERE m.thread_key = $1
+          AND (m.organization_id = $2 OR m.organization_id IS NULL)
         ORDER BY m.created_at ASC
         LIMIT 1000`,
-      [key]
+      [key, req.user.organization_id]
     );
     const desc = await describeThread(key, req.user && req.user.organization_id);
     res.json({ thread_key: key, kind: desc.kind, label: desc.label, messages: rows });
@@ -377,6 +398,13 @@ router.post('/:threadKey', async (req, res) => {
     }
     if (isForbiddenDm(key, req.user.id)) {
       return res.status(403).json({ error: 'Not a participant in this conversation' });
+    }
+    // The tenant gate BEFORE the write: without it the INSERT below stamped
+    // the author's organization_id onto a row sitting in another tenant's
+    // thread — a forged row that looks correctly stamped, which is the exact
+    // shape services/attachment-org-scope.js warns about for this table.
+    if (!(await threadInOrg(pool, key, req.user.organization_id))) {
+      return res.status(404).json({ error: 'Thread not found' });
     }
     const body = String((req.body && req.body.body) || '').trim();
     if (!body) return res.status(400).json({ error: 'body is required' });
