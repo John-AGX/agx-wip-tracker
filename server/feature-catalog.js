@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.87';
+const APP_VERSION = '1.88';
 
 const releases = [
+  {
+    version: '1.88',
+    date: '2026-10-02',
+    name: 'The nightly scans stop sending twice',
+    summary: 'Four corrections to the certificate-expiry scanner — the oldest scheduled job in Project 86, and the one the newer ones were modelled on, so its faults were on their way into them.',
+    changes: [
+      { type: 'fixed', text: 'A certificate reminder could go to a subcontractor twice. If the nightly scan hit a database hiccup part-way through, the record of who had already been emailed was never written — so the next run emailed every company it had already done. The record is now written company by company, as it goes.' },
+      { type: 'fixed', text: 'Two copies of Project 86 running at once could both send the same reminder. The scans now take a lock, so one does the work and the other steps aside. This matters most for certificate reminders, because those leave the building: a duplicate is a subcontractor getting the same email twice, not an internal annoyance.' },
+      { type: 'improved', text: 'The admin preview of the nightly scans now tells you how many emails are about to go out. It reported which companies were due a scan and nothing at all about volume — because the preview skipped the scan entirely. It runs the whole thing now and stops just before sending.' },
+      { type: 'fixed', text: 'The certificate scan read expiry dates in a way that could name the previous day, depending on the server’s timezone. It reads the date exactly as stored now, which is what a person reading the certificate would say, in Tampa or anywhere else.' },
+    ],
+  },
   {
     version: '1.87',
     date: '2026-10-02',

@@ -84,8 +84,12 @@
  *
  * DATE columns are read as 'YYYY-MM-DD' strings straight from to_char, never
  * through toISOString on a Date — node-postgres hands a DATE back as LOCAL
- * midnight, so toISOString names the previous day on any server west of UTC.
- * cert-expiry-cron.js has that bug inside its dedupe key today.
+ * midnight, and toISOString then reads the UTC day off that instant. The slip
+ * is EAST of UTC: at UTC+2 local midnight on the 12th is 22:00Z on the 11th, so
+ * toISOString says the eleventh. (An earlier draft of this comment said west,
+ * which is backwards — at UTC-4 the two agree.) Latent on Railway, which runs
+ * UTC; real on a dev machine east of Greenwich. cert-expiry-cron.js carried
+ * exactly that bug inside its dedupe key until 1.88.
  *
  * ━━ THE SYNC ━━
  *
@@ -130,67 +134,13 @@ const TICK_MS = 60 * 60 * 1000;         // hourly; the window is 15 hours wide
 const FIRST_RUN_DELAY_MS = 60 * 1000;
 const LEDGER_KEY = 'deadline_digest_log';
 
-/* ONE REPLICA SENDS, WHATEVER THE REPLICA COUNT IS.
- *
- * Every cron in this server dedupes through a single JSONB row in
- * app_settings, read-modify-written with ON CONFLICT DO UPDATE — a
- * last-writer-wins whole-blob overwrite. work-order-notify-cron.js says in
- * its own header that this is "fine for one replica", and that is exactly the
- * caveat: two replicas ticking at the same minute both read a ledger without
- * today's key, both send, and the second save erases the first's marker.
- *
- * Whether this app runs one replica is NOT KNOWABLE FROM THIS REPOSITORY.
- * ecosystem.config.js pins instances: 1, but only the pm2/VPS path reads it;
- * Railway runs `npm start` and keeps the replica count in its dashboard.
- * rate-limit.js says "one Railway replica today" and db.js calls repeated room
- * takeovers "the only honest signal available that more than one replica is
- * running" — the codebase is guessing, in comments, in two places.
- *
- * So this cron does not depend on the answer. A Postgres advisory lock is held
- * for the duration of a real tick; a second replica fails to take it and skips,
- * rather than racing the ledger. No schema change, no migration, and it is
- * correct whether the count is one or ten.
- *
- * THE LOCK IS TAKEN ON ITS OWN CLIENT, NOT THROUGH pool.query. A session-level
- * advisory lock belongs to the CONNECTION that took it. Taken through the pool,
- * the unlock can land on a different connection — leaving the lock held by a
- * connection sitting idle in the pool, so every later tick fails to acquire it
- * and the cron goes quiet forever. The one other advisory lock in this server
- * (routes/admin-agents-routes.js) does take it through the pool; it survives
- * because that path is a one-shot admin action rather than a repeating timer.
- */
-// Must not collide with that one, which uses 0x86 * 1000000 + orgId
-// (134000001 and up). This sits in its own decade and names itself.
-const TICK_LOCK_KEY = 8601986;
-
-// Returns a release function, or null when another replica is already ticking.
-// Never throws: a database that cannot answer is a reason to skip this tick,
-// not to crash the timer that owns every later one.
-async function takeTickLock() {
-  if (!pool || typeof pool.connect !== 'function') return function () {};
-  let client;
-  try {
-    client = await pool.connect();
-    const r = await client.query('SELECT pg_try_advisory_lock($1) AS got', [TICK_LOCK_KEY]);
-    const got = !!(r && r.rows && r.rows[0] && r.rows[0].got);
-    if (!got) {
-      client.release();
-      return null;
-    }
-    return async function release() {
-      try {
-        await client.query('SELECT pg_advisory_unlock($1)', [TICK_LOCK_KEY]);
-      } catch (e) {
-        console.warn('[deadlines] advisory unlock failed:', e && e.message);
-      }
-      try { client.release(); } catch (_) {}
-    };
-  } catch (e) {
-    console.warn('[deadlines] advisory lock failed:', e && e.message);
-    try { if (client) client.release(); } catch (_) {}
-    return null;
-  }
-}
+/* The tick lock lives in services/cron-tick-lock.js, because cert-expiry-cron
+ * needs exactly the same thing and a second copy of a subtle lock is how the
+ * two would drift. Its header has the whole argument: every cron here dedupes
+ * through one JSONB row rewritten whole, and whether this app runs one replica
+ * cannot be read from this repository at all. */
+const tickLock = require('./services/cron-tick-lock');
+const TICK_LOCK_KEY = tickLock.KEYS.deadlineDigest;
 
 /* A lead that has been won or lost is not waiting for a call. This set exists
  * three times on the client (js/leads.js, js/app.js, js/entities-map.js) and
@@ -545,7 +495,7 @@ async function runOnce(opts) {
   // a live tick would be a preview you cannot trust to run when you ask.
   let release = null;
   if (!dry) {
-    release = await takeTickLock();
+    release = await tickLock.take(pool, TICK_LOCK_KEY, 'deadlines');
     if (!release) {
       console.log('[deadlines] tick skipped — another replica holds the lock');
       return Object.assign(out, { skippedTick: 'locked' });
