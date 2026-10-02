@@ -32,6 +32,11 @@ const WORK_ORDER_KEYS = [
 // the heading logic had never been exercised with more than one.
 const MONEY_KEYS = ['estimate_decided', 'po_status', 'bill_approval', 'bill_decided'];
 
+// The deadline digest (server/deadline-digest-cron.js). THIRD group, and the
+// first one that sits immediately after another with no ungrouped row between
+// them — a case the heading renderer had never met. See the adjacency test.
+const DEADLINE_KEYS = ['lead_followup', 'invoice_past_due', 'bill_payment_due', 'workflow_overdue'];
+
 describe('the catalog', () => {
   test('every row, in order — a new notification is a new settings toggle', () => {
     const keys = events.NOTIFY_EVENTS.map((e) => e.key);
@@ -42,6 +47,7 @@ describe('the catalog', () => {
       ...WORK_ORDER_KEYS,
       'job_assignment',
       ...MONEY_KEYS,
+      ...DEADLINE_KEYS,
       'password_reset',
     ]);
   });
@@ -65,19 +71,19 @@ describe('the catalog', () => {
     }
   });
 
-  test('the grouped rows are exactly those two groups, each contiguous', () => {
+  test('the grouped rows are exactly those three groups, each contiguous', () => {
     // Contiguity is what makes one heading correct: My Account prints the
     // heading above the first row of a group and a rule after its last, so a
     // row that strays out of its run would print a second heading.
     const grouped = events.NOTIFY_EVENTS.filter((e) => e.group).map((e) => e.key);
-    expect(grouped).toEqual([...WORK_ORDER_KEYS, ...MONEY_KEYS]);
+    expect(grouped).toEqual([...WORK_ORDER_KEYS, ...MONEY_KEYS, ...DEADLINE_KEYS]);
     const runs = [];
     for (const e of events.NOTIFY_EVENTS) {
       if (!e.group) { runs.push(null); continue; }
       if (!runs.length || runs[runs.length - 1] !== e.group) runs.push(e.group);
     }
     const names = runs.filter(Boolean);
-    expect(names).toEqual(['Work orders', 'Money']);
+    expect(names).toEqual(['Work orders', 'Money', 'Deadlines']);
   });
 
   test('labels and descriptions as worded', () => {
@@ -145,7 +151,7 @@ describe('My Account prints the group heading', () => {
   test('one heading above the six work-order rows, a rule after them', () => {
     const { pane } = render(events.NOTIFY_EVENTS);
     const headings = Array.from(pane.querySelectorAll('.p86-pref-group'));
-    expect(headings.map((h) => h.textContent)).toEqual(['Work orders', 'Money']);
+    expect(headings.map((h) => h.textContent)).toEqual(['Work orders', 'Money', 'Deadlines']);
     const children = Array.from(pane.children);
     const at = children.indexOf(headings[0]);
     const titles = children.slice(at + 1, at + 7).map((el) => el.querySelector('.p86-pref-title').textContent);
@@ -157,7 +163,7 @@ describe('My Account prints the group heading', () => {
     expect(children[at + 8].querySelector('.p86-pref-title').textContent).toBe('Job assignments');
   });
 
-  test('and one above the four money rows — two groups, two rules, no more', () => {
+  test('and one above the four money rows — the heading is printed per RUN', () => {
     // The heading logic had only ever rendered one group. A second one is what
     // proves the heading is printed per RUN rather than once per page.
     const { pane } = render(events.NOTIFY_EVENTS);
@@ -168,10 +174,32 @@ describe('My Account prints the group heading', () => {
     const at = children.indexOf(money);
     const titles = children.slice(at + 1, at + 5).map((el) => el.querySelector('.p86-pref-title').textContent);
     expect(titles).toEqual(['Proposals decided', 'Purchase orders', 'Bills to approve', 'Bill decisions']);
+  });
+
+  test('two groups back to back print two headings and NO rule between them', () => {
+    // Deadlines follows Money with no ungrouped row in between, which this
+    // renderer had never been given: it prints the end-rule only when an
+    // UNGROUPED row follows a group, so the only thing separating two adjacent
+    // groups is the second one\u2019s own heading. That is legible, and pinning it
+    // is what stops a future group being tucked in somewhere that prints a
+    // heading with no visible break at all.
+    const { pane } = render(events.NOTIFY_EVENTS);
+    const children = Array.from(pane.children);
+    const headings = Array.from(pane.querySelectorAll('.p86-pref-group'));
+    expect(headings.map((h) => h.textContent)).toEqual(['Work orders', 'Money', 'Deadlines']);
+
+    const deadlines = headings.find((h) => h.textContent === 'Deadlines');
+    const at = children.indexOf(deadlines);
+    // Immediately before the Deadlines heading is the LAST money row, not a rule.
+    expect(children[at - 1].querySelector('.p86-pref-title').textContent).toBe('Bill decisions');
+    const titles = children.slice(at + 1, at + 5).map((el) => el.querySelector('.p86-pref-title').textContent);
+    expect(titles).toEqual(['Leads to follow up', 'Invoices owed to you', 'Bills to pay', 'RFIs and submittals waiting']);
     expect(children[at + 5].className).toBe('p86-pref-group-end');
-    // The row after the money group is the ungrouped one that follows it.
     expect(children[at + 6].querySelector('.p86-pref-title').textContent).toBe('Password resets');
-    expect(pane.querySelectorAll('.p86-pref-group')).toHaveLength(2);
+
+    // Three groups, but only TWO rules: a rule is printed where a group ENDS
+    // at an ungrouped row, and Money ends at another group.
+    expect(pane.querySelectorAll('.p86-pref-group')).toHaveLength(3);
     expect(pane.querySelectorAll('.p86-pref-group-end')).toHaveLength(2);
   });
 

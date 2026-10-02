@@ -526,9 +526,22 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.86';
+const APP_VERSION = '1.87';
 
 const releases = [
+  {
+    version: '1.87',
+    date: '2026-10-02',
+    name: 'One morning message for everything with a date on it',
+    summary: 'Leads to follow up, invoices owed to you, bills to pay and RFIs still waiting — collected into a single message that arrives in your own morning.',
+    changes: [
+      { type: 'new', text: 'One message each morning with everything that has a date on it: leads you set a follow-up date on, invoices owed to you, bills whose payment date has arrived, and RFIs or submittals still waiting. It arrives in YOUR morning — 7am where you actually are, not 7am on the server — and only when there is something in it.' },
+      { type: 'new', text: 'Four switches, one message. Each of the four sections has its own toggle under Deadlines in My Account → Notifications, so a salesperson can keep follow-ups and switch off accounts payable. Turn a section off and it disappears from the message; turn them all off and no message is sent.' },
+      { type: 'improved', text: 'It is deliberately ONE email a day rather than one per thing. Past due has no end: an invoice that is never paid is past due again tomorrow, and every morning after. A message per record would have been four emails in one minute on the first day and a hundred the day somebody imports a spreadsheet of old follow-up dates. Long lists are shortened and the message says how many it left out, rather than quietly showing you eight of forty.' },
+      { type: 'fixed', text: 'An RFI you had already ANSWERED was still being counted as overdue — and a transmittal you had already SENT with it. The overdue list asked whether the record had been closed, and answering an RFI does not close it, so the only way to make one stop appearing was to close it, which is not what answered means. It now asks whether the record still needs somebody to act. The same list was also mixing all three kinds together because it never filtered by type.' },
+      { type: 'improved', text: 'Dates are read as the day on the record, in your own timezone. A bill due the 3rd is due the 3rd whether you are in Tampa or Denver, and nobody is told something is a day late while it is still today where they are.' },
+    ],
+  },
   {
     version: '1.86',
     date: '2026-10-02',

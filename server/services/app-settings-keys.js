@@ -131,6 +131,10 @@ const KEY_CLASSES = {
   work_order_notify_log: {
     klass: 'internal', read: null, write: null,
     note: 'work-order-notify-cron.js morning digest ledger ({fires: {"digest|<uid>|<localDate>": ms}}). Writing it suppresses work-order digests and waiting reminders platform-wide.'
+  },
+  deadline_digest_log: {
+    klass: 'internal', read: null, write: null,
+    note: 'deadline-digest-cron.js ledger ({fires: {"deadlines|<uid>|<localDate>": ms}}) — ONE key per person per local day, not one per record, so it stays small however large the overdue backlog is. Writing it suppresses the deadline digest platform-wide.'
   }
 };
 

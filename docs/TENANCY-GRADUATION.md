@@ -192,7 +192,42 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**595** occurrences of `organization_id IS NULL` across `server/`.
+**590** occurrences of `organization_id IS NULL` across `server/`.
+
+595 → 590: the deadline digest. **THE FIRST SLICE TO MOVE THIS NUMBER
+DOWN**, and it did so without a migration, a backfill or a judgement call —
+which is worth reading before the next slice adds one.
+
+Eight of the removed arms were **vacuous**. Every statement in
+`routes/job-workflow-routes.js` carried `(organization_id = $n OR
+organization_id IS NULL)` against `job_workflow_items`, whose
+`organization_id` is `INTEGER NOT NULL` — so the tolerance arm could not
+match a row, in any tenant, ever. It was not protecting legacy data; there is
+no legacy data for it to protect. What it did do was count against this item
+and invite the next reader to argue for a looseness the schema already
+forbids. The one arm left in that file is on `jobs`, whose column IS nullable,
+and it stays.
+
+**This is a cheap audit anybody can repeat:** for each table carrying a
+tolerance arm, ask whether its `organization_id` is actually nullable. Where
+it is `NOT NULL`, every arm on it is dead code wearing the costume of a
+safety measure. That is the first bite anyone should take out of this item,
+because it is the only one with no risk in it at all.
+
+The three occurrences ADDED back are prose, not predicates — two in the new
+cron's header and one in the route's, each explaining why the arm is absent.
+The raw count in this document greps the string, so an explanation of a
+missing arm reads here as an arm. Worth knowing before the next slice is
+surprised by its own arithmetic.
+
+`deadline-digest-cron.js` itself adds **none**, and could not sensibly have
+added any: it has no `req.user` and no per-org loop, so its predicate is
+`<record>.organization_id = u.organization_id` — the record and the person it
+would be mailed to must be in the same tenant, asserted on the join. A
+tolerance arm there would have been actively dangerous rather than merely
+dead: inside the per-org loop the other crons use, `OR organization_id IS
+NULL` matches an org-less record in EVERY tenant's pass and mails it to all of
+them. The equality skips it instead, because `NULL = NULL` is not true in SQL.
 
 593 → 595: the comment notice. Two arms, both in
 `services/comment-notices.js`, both READS, and both copies of a predicate

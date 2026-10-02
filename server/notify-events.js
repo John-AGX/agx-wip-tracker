@@ -8,6 +8,11 @@
 // An event may carry an optional `group` (a heading, e.g. 'Work orders'). Rows
 // of one group stay contiguous in this list; My Account prints the heading
 // once, above the first row of the group (js/account.js renderPrefRows).
+// THE CONTIGUITY IS LOAD-BEARING, not tidiness: a group split in two prints
+// its heading twice, and test/notify-events-work-orders.test.js asserts the
+// runs are exactly ['Work orders', 'Money', 'Deadlines']. Note that
+// job_assignment sits UNGROUPED between the first two groups, so a new group
+// goes at the end rather than being tucked beside a related row.
 //
 // This is deliberately LIGHTER than server/email-events.js — push bodies are
 // one-liners composed at the call site; no templates, no org overrides. If a
@@ -52,6 +57,10 @@ const NOTIFY_EVENTS = [
   { key: 'po_status',           group: 'Money',       label: 'Purchase orders',            desc: 'When a purchase order on a job you run, or one you raised, is approved or has its work marked complete. Names the sub who signed when a signature was actually taken.', channels: { email: true, push: true } },
   { key: 'bill_approval',       group: 'Money',       label: 'Bills to approve',           desc: 'Once per wait, when a vendor bill is entered against a job you run, or one you entered yourself, and is sitting unapproved. Sending a bill back to open asks again; approving or voiding it does not.', channels: { email: true, push: true } },
   { key: 'bill_decided',        group: 'Money',       label: 'Bill decisions',             desc: 'When a vendor bill you are waiting on is approved for payment, or voided. Voided covers both a refusal and a duplicate being discarded, so it says what happened rather than why.', channels: { email: true, push: true } },
+  { key: 'lead_followup',      group: 'Deadlines',   label: 'Leads to follow up',         desc: 'In your morning message: a lead you set a follow-up date on, once that date arrives. Goes to whoever sells the lead. A follow-up you captured as a TASK instead is already in your tasks digest, so it is not repeated here.', channels: { email: true, push: true } },
+  { key: 'invoice_past_due',   group: 'Deadlines',   label: 'Invoices owed to you',       desc: 'In your morning message: an invoice you own that is due today or past due and still has a balance. Sent and part-paid invoices only — a draft has no deadline and a paid one has no balance.', channels: { email: true, push: true } },
+  { key: 'bill_payment_due',   group: 'Deadlines',   label: 'Bills to pay',               desc: 'In your morning message: a vendor bill whose payment date has arrived and which is still open or approved. Goes to whoever entered it, or the job\u2019s PM if nobody did. A bill with no due date is never guessed at from its invoice date.', channels: { email: true, push: true } },
+  { key: 'workflow_overdue',   group: 'Deadlines',   label: 'RFIs and submittals waiting', desc: 'In your morning message: an RFI, submittal or transmittal past its due date that still needs an answer. Goes to the person responsible, or whoever raised it. An RFI somebody has already answered does not count as waiting.', channels: { email: true, push: true } },
   { key: 'password_reset',      label: 'Password resets',        desc: 'When an admin resets your password. Recommended to leave on.',              channels: { email: true, push: false } }
 ];
 

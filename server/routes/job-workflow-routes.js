@@ -23,6 +23,18 @@ const { requireAuth } = require('../auth');
 // mounted under the existing job-routes mount path so the URL nests
 // naturally. We export both.
 const router = express.Router();
+
+// THE ORG TERM HERE IS STRICT, ON PURPOSE.
+//
+// job_workflow_items.organization_id is INTEGER NOT NULL (server/db.js), so
+// the OR-organization_id-IS-NULL arm that every statement in this file used
+// to carry could not match a row — a tolerance the column cannot have. Eight of
+// them were counted against docs/TENANCY-GRADUATION.md item 9, which is trying
+// to drive that number to zero, and each one invited the next reader to argue
+// for a looseness the schema already forbids. They are gone.
+//
+// The ONE arm left in this file is the jobs lookup below: jobs.organization_id
+// IS nullable, so there the tolerance is real and load-bearing.
 const jobNestedRouter = express.Router({ mergeParams: true });
 
 // Per-type status validation. Routes throw 422 with structured detail
@@ -37,12 +49,16 @@ const VALID_STATUSES = {
 const DEFAULT_STATUS = { rfi: 'open', submittal: 'submitted', transmittal: 'pending' };
 // Number prefix per type.
 const NUMBER_PREFIX = { rfi: 'RFI', submittal: 'SUB', transmittal: 'TRX' };
-// Statuses considered "open" (still needs action). Used by the
-// overdue + my-open queries.
+// Statuses considered "open" (still needs action) — THE one copy lives in
+// services/workflow-open-door.js, because this vocabulary is now asked by
+// three readers (this file, the deadline digest, and the partial index it
+// shapes) and a second copy is how they would drift apart. Kept as Sets here
+// because this file tests membership; the digest wants SQL.
+const openDoor = require('../services/workflow-open-door');
 const OPEN_STATUSES = {
-  rfi:         new Set(['open']),
-  submittal:   new Set(['submitted', 'revise_resubmit']),
-  transmittal: new Set(['pending'])
+  rfi:         new Set(openDoor.OPEN_STATUSES.rfi),
+  submittal:   new Set(openDoor.OPEN_STATUSES.submittal),
+  transmittal: new Set(openDoor.OPEN_STATUSES.transmittal)
 };
 
 function validationError(res, msg, detail) {
@@ -99,7 +115,7 @@ jobNestedRouter.get('/workflow-items', requireAuth, async (req, res) => {
               closed_at, created_at, updated_at
          FROM job_workflow_items
         WHERE job_id = $1
-          AND (organization_id = $2 OR organization_id IS NULL)
+          AND organization_id = $2
           AND archived_at IS NULL
           ${typeClause} ${statusClause}
         ORDER BY created_at DESC`,
@@ -185,7 +201,7 @@ router.get('/mine', requireAuth, async (req, res) => {
               job_id, metadata, created_at
          FROM job_workflow_items
         WHERE responsible_user_id = $1
-          AND (organization_id = $2 OR organization_id IS NULL)
+          AND organization_id = $2
           AND archived_at IS NULL
           AND closed_at IS NULL
         ORDER BY (CASE WHEN due_date < CURRENT_DATE THEN 0 ELSE 1 END),
@@ -205,13 +221,25 @@ router.get('/mine', requireAuth, async (req, res) => {
 router.get('/overdue', requireAuth, async (req, res) => {
   try {
     const r = await pool.query(
+      // OPEN IS A STATUS QUESTION, NOT A closed_at ONE. This used to filter on
+      // `closed_at IS NULL` alone and had no type filter, so an RFI somebody had
+      // already ANSWERED and a transmittal already SENT were both reported
+      // overdue — permanently, because nothing short of closing them ever stamps
+      // closed_at. See services/workflow-open-door.js. The closed_at term stays
+      // because it is what keeps idx_jwi_due_open applicable.
+      //
+      // The org term is STRICT: job_workflow_items.organization_id is NOT NULL
+      // (server/db.js), so the `OR organization_id IS NULL` arm this carried
+      // could never match a row — a tolerance the column cannot have, counted
+      // against docs/TENANCY-GRADUATION.md item 9 for nothing.
       `SELECT id, type, number, subject, status, due_date,
               job_id, responsible_user_id,
               (CURRENT_DATE - due_date) AS days_overdue
          FROM job_workflow_items
-        WHERE (organization_id = $1 OR organization_id IS NULL)
+        WHERE organization_id = $1
           AND archived_at IS NULL
           AND closed_at IS NULL
+          AND ${openDoor.openSql('job_workflow_items')}
           AND due_date IS NOT NULL
           AND due_date < CURRENT_DATE
         ORDER BY due_date ASC
@@ -232,7 +260,7 @@ router.get('/overdue', requireAuth, async (req, res) => {
 //   Joins jobs for a display label. Uses idx_jwi_org.
 router.get('/', requireAuth, async (req, res) => {
   try {
-    const where = ['(w.organization_id = $1 OR w.organization_id IS NULL)', 'w.archived_at IS NULL'];
+    const where = ['w.organization_id = $1', 'w.archived_at IS NULL'];
     const params = [req.user.organization_id];
     let pn = 2;
     const type = String(req.query.type || '').toLowerCase();
@@ -277,7 +305,7 @@ router.get('/:id', requireAuth, async (req, res) => {
     const r = await pool.query(
       `SELECT * FROM job_workflow_items
         WHERE id = $1
-          AND (organization_id = $2 OR organization_id IS NULL)
+          AND organization_id = $2
           AND archived_at IS NULL`,
       [req.params.id, req.user.organization_id]
     );
@@ -301,7 +329,7 @@ router.put('/:id', requireAuth, async (req, res) => {
       `SELECT id, type, status, metadata
          FROM job_workflow_items
         WHERE id = $1
-          AND (organization_id = $2 OR organization_id IS NULL)
+          AND organization_id = $2
           AND archived_at IS NULL`,
       [req.params.id, req.user.organization_id]
     );
@@ -353,7 +381,7 @@ router.put('/:id', requireAuth, async (req, res) => {
     params.push(req.user.organization_id);
     const r = await pool.query(
       `UPDATE job_workflow_items SET ${sets.join(', ')}
-        WHERE id = $${p} AND (organization_id = $${p + 1} OR organization_id IS NULL)
+        WHERE id = $${p} AND organization_id = $${p + 1}
         RETURNING *`,
       params
     );
@@ -370,7 +398,7 @@ router.post('/:id/archive', requireAuth, async (req, res) => {
   try {
     const r = await pool.query(
       `UPDATE job_workflow_items SET archived_at = NOW(), updated_at = NOW()
-        WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)
+        WHERE id = $1 AND organization_id = $2
           AND archived_at IS NULL
         RETURNING id`,
       [req.params.id, req.user.organization_id]

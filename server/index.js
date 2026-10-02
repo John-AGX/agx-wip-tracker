@@ -636,6 +636,15 @@ function startServer() {
       // claims a crashed send left behind), crew-activity batches at most one
       // per work order per 30 min, and the weekday morning digest / waiting
       // reminder. Per org, never throws; skips a tick while shutting down.
+      // The deadline digest — one morning message per person covering the
+      // things that came due because time passed (a lead follow-up, an
+      // invoice, a bill, an RFI). Armed beside the other digests; it gates
+      // itself on each recipient's own local morning.
+      try {
+        require('./deadline-digest-cron').start();
+      } catch (e) {
+        console.warn('[deadlines] failed to start digest scanner:', e && e.message);
+      }
       try {
         require('./work-order-notify-cron').start();
       } catch (e) {
