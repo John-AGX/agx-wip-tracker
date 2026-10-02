@@ -121,22 +121,26 @@
 .pp-group-head small { font-weight: 500; letter-spacing: 0; text-transform: none; }
 
 /* ── A job row ──────────────────────────────────────────────────────── */
+/* DENSITY. John, 2026-10-02: "tighten the lines up a bit, they are pretty
+   bulky". Measured on his own 40-row sheet, a row was 157px — 6,280px of
+   scrolling. The address moved onto the title line (js/production-planning.js),
+   and everything below is the spacing that paid for the rest. */
 .pp-row {
-  display: grid; grid-template-columns: 52px 1fr; gap: 10px;
+  display: grid; grid-template-columns: 34px 1fr; gap: 9px;
   background: var(--surface, rgba(255, 255, 255, 0.02));
   border: 1px solid var(--border, rgba(255, 255, 255, 0.10));
-  border-radius: 8px; padding: 12px; margin-bottom: 8px;
+  border-radius: 8px; padding: 8px 10px; margin-bottom: 6px;
 }
 .pp-row.is-done { background: rgba(52, 211, 153, 0.07); border-color: rgba(52, 211, 153, 0.30); }
 
 .pp-check {
-  width: 52px; height: 52px; border-radius: 10px; cursor: pointer;
+  width: 34px; height: 34px; border-radius: 8px; cursor: pointer;
   border: 2px solid var(--border, rgba(255, 255, 255, 0.18));
   background: var(--overlay-light, rgba(255, 255, 255, 0.04));
   color: transparent;
   display: grid; place-items: center;
 }
-.pp-check svg { width: 26px; height: 26px; }
+.pp-check svg { width: 20px; height: 20px; }
 .pp-row.is-done .pp-check { background: #2f7d4f; border-color: #2f7d4f; color: #fff; }
 
 .pp-row-main { min-width: 0; }
@@ -165,11 +169,11 @@
 .pp-pill-prog { background: rgba(251, 191, 36, 0.16); color: #fbbf24; }
 .pp-pill-done { background: #2f7d4f; color: #fff; }
 
-.pp-addr { font-size: 12px; color: var(--text-dim, #9aa0a8); margin-top: 3px; }
+.pp-addr { font-size: 11.5px; color: var(--text-dim, #9aa0a8); }
 .pp-addr a { color: inherit; }
 
 .pp-progress {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 8px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 6px;
 }
 .pp-steps {
   display: flex; border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
@@ -180,7 +184,7 @@
   background: var(--surface, rgba(255, 255, 255, 0.03));
   color: var(--text, #e6e6e6);
   font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
-  font-size: 11.5px; padding: 8px 0; width: 48px; cursor: pointer;
+  font-size: 11.5px; padding: 5px 0; width: 46px; cursor: pointer;
   font-variant-numeric: tabular-nums;
 }
 .pp-steps button:last-child { border-right: 0; }
@@ -197,11 +201,11 @@
      the elements this file sizes rather than asserted globally, so it cannot
      fight the app's own cascade. */
   box-sizing: border-box;
-  width: 100%; min-height: 36px; resize: vertical; margin-top: 8px;
+  width: 100%; min-height: 26px; resize: vertical; margin-top: 5px;
   border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
   background: var(--overlay-light, rgba(255, 255, 255, 0.03));
   color: var(--text, #e6e6e6);
-  font: inherit; font-size: 12.5px; padding: 7px 9px; border-radius: 6px;
+  font: inherit; font-size: 12.5px; padding: 4px 8px; border-radius: 6px; line-height: 1.4;
 }
 
 .pp-empty { text-align: center; padding: 36px 10px; color: var(--text-dim, #9aa0a8); }
@@ -214,11 +218,15 @@
 /* ── Phone ──────────────────────────────────────────────────────────── */
 @media (max-width: 560px) {
   .pp-page { padding: 14px 12px 50px; }
+  /* On a phone the check goes BACK UP to 44px — the desktop row shrank for
+     density, but a thumb has not. The row is narrow here anyway, so the extra
+     ten pixels cost nothing. */
   .pp-row { grid-template-columns: 44px 1fr; }
   .pp-check { width: 44px; height: 44px; }
+  .pp-check svg { width: 24px; height: 24px; }
   /* The percent control keeps a finger-sized target rather than shrinking:
      this is used standing in a car park. It wraps onto its own line instead. */
-  .pp-steps button { width: 46px; }
+  .pp-steps button { width: 46px; padding: 8px 0; }
   .pp-pill { margin-left: 0; }
   .pp-head { flex-direction: column; align-items: stretch; }
   .pp-head-actions .pp-btn { flex: 1 1 auto; }

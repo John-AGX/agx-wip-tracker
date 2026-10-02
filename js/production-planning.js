@@ -222,11 +222,20 @@
     var st = statusOf(r);
     var pct = Number(r.pct) || 0;
     var addr = r.address || '';
+    // The STREET only. Grouped by property, the city/state/zip is noise on
+    // every row — it was costing a whole wrapped line each, and 40 of those
+    // is most of a screen. The link still carries the full address.
+    var street = addr.split(',')[0].trim() || addr;
     var mapHtml = '';
     if (addr && window.p86MapLink && typeof window.p86MapLink.linkHTML === 'function') {
-      mapHtml = window.p86MapLink.linkHTML(addr, { iconOnly: false });
+      mapHtml = window.p86MapLink.linkHTML(addr, { iconOnly: false, label: street });
+      // p86MapLink labels with the full address; swap in the street without
+      // touching the href, which is what the maps deep link needs.
+      if (mapHtml.indexOf(esc(addr)) !== -1) {
+        mapHtml = mapHtml.replace(esc(addr), esc(street));
+      }
     } else if (addr) {
-      mapHtml = esc(addr);
+      mapHtml = esc(street);
     }
 
     return '<article class="pp-row' + (st === 'done' ? ' is-done' : '') + '" data-row="' + esc(r.id) + '">' +
@@ -241,12 +250,17 @@
           '<span class="pp-num">' + esc(r.job_number || '') + '</span>' +
           '<span class="pp-name">' + esc(r.job_title || '') + '</span>' +
           (r.is_work_order ? '<span class="pp-tag">WO</span>' : '') +
-          (r.contract_amount != null
+          // A contract of zero is not a contract — most work orders have none,
+          // and printing $0 on half the sheet is noise that reads as a number.
+          (Number(r.contract_amount) > 0
             ? '<span class="pp-contract" title="Contract value">' + esc(money(r.contract_amount)) + '</span>' : '') +
+          // The address rides the title line rather than taking one of its
+          // own. It wraps to its own line when there is no room, which is the
+          // only time it needs one.
+          (mapHtml ? '<span class="pp-addr">' + mapHtml + '</span>' : '') +
           '<span class="pp-pill pp-pill-' + st + '">' +
             (st === 'done' ? 'Done' : st === 'prog' ? pct + '%' : 'Not started') + '</span>' +
         '</div>' +
-        (mapHtml ? '<div class="pp-addr">' + mapHtml + '</div>' : '') +
         '<div class="pp-progress">' +
           '<div class="pp-steps" role="group" aria-label="Percent complete">' +
             [0, 25, 50, 75, 100].map(function (p) {
