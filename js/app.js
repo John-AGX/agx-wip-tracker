@@ -373,15 +373,15 @@
                     // Jobs hub accordion children carry data-jobshub-subtab
                     // (purchase-orders / bills / change-orders / rfis /
                     // submittals) — same pattern as data-console-subtab.
+                    const jobshubSub = btn.getAttribute('data-jobshub-subtab');
+                    if (jobshubSub && typeof window.switchJobsHubSubTab === 'function') {
+                        window.switchJobsHubSubTab(jobshubSub);
+                    }
                     // Schedule accordion children carry data-schedule-subtab
                     // (calendar / planning) — same pattern as the rest.
                     const scheduleSub = btn.getAttribute('data-schedule-subtab');
                     if (scheduleSub && typeof window.switchScheduleSubTab === 'function') {
                         window.switchScheduleSubTab(scheduleSub);
-                    }
-                    const jobshubSub = btn.getAttribute('data-jobshub-subtab');
-                    if (jobshubSub && typeof window.switchJobsHubSubTab === 'function') {
-                        window.switchJobsHubSubTab(jobshubSub);
                     }
                     // Assembly Studio accordion children carry
                     // data-asmstudio-subtab (assemblies / studio / codes /
