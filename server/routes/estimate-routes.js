@@ -16,6 +16,22 @@ const { orgNameFor, replyToForUser, cleanOrgName } = require('../email-sender');
 
 const router = express.Router();
 
+/* A NOTICE NEVER FAILS THE WRITE THAT JUSTIFIED IT, and it lives in the
+ * ROUTE on purpose: the Buildertrend sync re-statuses these rows with its
+ * own SQL on its own client and never enters Express, so a notice here is
+ * unreachable from a sync run. On a shared helper it would fire per row,
+ * every thirty minutes. services/money-notices.js says more.
+ */
+function trackNotice(label, start) {
+  try {
+    return require('../services/inflight').track(start(), label);
+  } catch (e) {
+    console.warn('[notice] ' + label + ' failed to start:', e && e.message);
+    return null;
+  }
+}
+
+
 // POST /api/estimates/:id/append-assembly — append a parametric assembly's
 // exploded quantities as estimate lines (the takeoff Quantify "Add to
 // estimate" bridge). Body: { assembly_id, params:{Q,...}, mode?:'rollup'|
@@ -804,16 +820,38 @@ router.post('/:id/approve', requireAuth, requireCapability('ESTIMATES_EDIT'), as
     const method = (b.method || 'manual').toString().trim().slice(0, 40);
     const sig = (b.signature && typeof b.signature === 'object') ? JSON.stringify(b.signature) : null;
     const u = await pool.query(
+      // approved_at is COALESCE'd and the status predicate refuses a repeat:
+      // a second click (there is no front-end guard) used to rewrite the date
+      // of a decision already recorded. Same shape as sent_at two routes up.
+      // The row is returned whole because the notice reads data and owner_id.
       `UPDATE estimates
-          SET approval_status = 'approved', approved_at = NOW(), approved_by = $3,
+          SET approval_status = 'approved', approved_at = COALESCE(approved_at, NOW()), approved_by = $3,
               approval_method = $4, signature = COALESCE($5::jsonb, signature),
               declined_at = NULL, decline_reason = NULL, updated_at = NOW()
         WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)
-      RETURNING approval_status, approved_at, approved_by, approval_method`,
+          AND approval_status IS DISTINCT FROM 'approved'
+      RETURNING id, owner_id, organization_id, data, approval_status, approved_at, approved_by, approval_method`,
       [req.params.id, req.user.organization_id, by, method, sig]
     );
-    if (u.rowCount === 0) return res.status(404).json({ error: 'Estimate not found' });
-    res.json({ ok: true, ...u.rows[0] });
+    // Already approved, or not ours. Re-reading tells the two apart so a
+    // double-click still answers 200 with the decision that stands.
+    if (u.rowCount === 0) {
+      const again = await pool.query(
+        'SELECT approval_status, approved_at, approved_by, approval_method FROM estimates'
+        + ' WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        [req.params.id, req.user.organization_id]);
+      if (!again.rowCount) return res.status(404).json({ error: 'Estimate not found' });
+      return res.json({ ok: true, unchanged: true, ...again.rows[0] });
+    }
+    const row = u.rows[0];
+    res.json({ ok: true, approval_status: row.approval_status, approved_at: row.approved_at,
+      approved_by: row.approved_by, approval_method: row.approval_method });
+    trackNotice('estimate approval notice', function () {
+      return require('../services/money-notices').notifyEstimateDecided(pool, {
+        estimate: row, decision: 'approved', approvedBy: by,
+        actorId: req.user.id, actorName: req.user.name,
+      });
+    });
   } catch (e) {
     console.error('POST /api/estimates/:id/approve error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -825,13 +863,37 @@ router.post('/:id/decline', requireAuth, requireCapability('ESTIMATES_EDIT'), as
   try {
     const reason = ((req.body && req.body.reason) || '').toString().trim().slice(0, 500) || null;
     const u = await pool.query(
-      `UPDATE estimates SET approval_status = 'declined', declined_at = NOW(), decline_reason = $3, updated_at = NOW()
+      // CLEARS THE APPROVAL STAMPS. /approve already cleared the decline
+      // columns and this did not clear its counterparts, so a declined
+      // estimate could still carry an approved_at, an approver's name and a
+      // signature — and any reader taking the stamp rather than the status
+      // read it as won. declined_at is COALESCE'd and the status predicate
+      // refuses a repeat, same as /approve.
+      `UPDATE estimates SET approval_status = 'declined', declined_at = COALESCE(declined_at, NOW()),
+              decline_reason = $3, approved_at = NULL, approved_by = NULL,
+              approval_method = NULL, signature = NULL, updated_at = NOW()
         WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)
-      RETURNING approval_status, declined_at, decline_reason`,
+          AND approval_status IS DISTINCT FROM 'declined'
+      RETURNING id, owner_id, organization_id, data, approval_status, declined_at, decline_reason`,
       [req.params.id, req.user.organization_id, reason]
     );
-    if (u.rowCount === 0) return res.status(404).json({ error: 'Estimate not found' });
-    res.json({ ok: true, ...u.rows[0] });
+    if (u.rowCount === 0) {
+      const again = await pool.query(
+        'SELECT approval_status, declined_at, decline_reason FROM estimates'
+        + ' WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        [req.params.id, req.user.organization_id]);
+      if (!again.rowCount) return res.status(404).json({ error: 'Estimate not found' });
+      return res.json({ ok: true, unchanged: true, ...again.rows[0] });
+    }
+    const row = u.rows[0];
+    res.json({ ok: true, approval_status: row.approval_status, declined_at: row.declined_at,
+      decline_reason: row.decline_reason });
+    trackNotice('estimate decline notice', function () {
+      return require('../services/money-notices').notifyEstimateDecided(pool, {
+        estimate: row, decision: 'declined', reason: reason,
+        actorId: req.user.id, actorName: req.user.name,
+      });
+    });
   } catch (e) {
     console.error('POST /api/estimates/:id/decline error:', e);
     res.status(500).json({ error: 'Server error' });

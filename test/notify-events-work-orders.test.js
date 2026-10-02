@@ -27,13 +27,20 @@ const WORK_ORDER_KEYS = [
   'ticket_approval', 'ticket_waiting', 'ticket_assignment', 'ticket_problem', 'ticket_crew_activity', 'work_order_digest',
 ];
 
+// The money notices (services/money-notices.js). Second group in the catalog,
+// so this file also holds the only assertion that TWO groups render correctly —
+// the heading logic had never been exercised with more than one.
+const MONEY_KEYS = ['estimate_decided', 'po_status', 'bill_approval', 'bill_decided'];
+
 describe('the catalog', () => {
-  test('six work-order rows, contiguous and in order, where ticket_approval sat', () => {
+  test('every row, in order — a new notification is a new settings toggle', () => {
     const keys = events.NOTIFY_EVENTS.map((e) => e.key);
     expect(keys).toEqual([
       'agent_task', 'scribe_draft', 'messages', 'task_due', 'event_reminder', 'reminder', 'schedule_assignment',
       ...WORK_ORDER_KEYS,
-      'job_assignment', 'password_reset',
+      'job_assignment',
+      ...MONEY_KEYS,
+      'password_reset',
     ]);
   });
 
@@ -45,8 +52,30 @@ describe('the catalog', () => {
       expect(typeof ev.label).toBe('string');
       expect(ev.desc.length).toBeGreaterThan(20);
     }
+  });
+
+  test('each money row is grouped "Money" and rides email and push', () => {
+    for (const key of MONEY_KEYS) {
+      const ev = events.NOTIFY_EVENTS.find((e) => e.key === key);
+      expect([key, ev.group]).toEqual([key, 'Money']);
+      expect([key, ev.channels]).toEqual([key, { email: true, push: true }]);
+      expect(ev.desc.length).toBeGreaterThan(20);
+    }
+  });
+
+  test('the grouped rows are exactly those two groups, each contiguous', () => {
+    // Contiguity is what makes one heading correct: My Account prints the
+    // heading above the first row of a group and a rule after its last, so a
+    // row that strays out of its run would print a second heading.
     const grouped = events.NOTIFY_EVENTS.filter((e) => e.group).map((e) => e.key);
-    expect(grouped).toEqual(WORK_ORDER_KEYS);
+    expect(grouped).toEqual([...WORK_ORDER_KEYS, ...MONEY_KEYS]);
+    const runs = [];
+    for (const e of events.NOTIFY_EVENTS) {
+      if (!e.group) { runs.push(null); continue; }
+      if (!runs.length || runs[runs.length - 1] !== e.group) runs.push(e.group);
+    }
+    const names = runs.filter(Boolean);
+    expect(names).toEqual(['Work orders', 'Money']);
   });
 
   test('labels and descriptions as worded', () => {
@@ -111,11 +140,10 @@ describe('My Account prints the group heading', () => {
     return { pane, saved, win };
   }
 
-  test('one heading above the six rows, a rule after them, none elsewhere', () => {
+  test('one heading above the six work-order rows, a rule after them', () => {
     const { pane } = render(events.NOTIFY_EVENTS);
-    const headings = pane.querySelectorAll('.p86-pref-group');
-    expect(headings).toHaveLength(1);
-    expect(headings[0].textContent).toBe('Work orders');
+    const headings = Array.from(pane.querySelectorAll('.p86-pref-group'));
+    expect(headings.map((h) => h.textContent)).toEqual(['Work orders', 'Money']);
     const children = Array.from(pane.children);
     const at = children.indexOf(headings[0]);
     const titles = children.slice(at + 1, at + 7).map((el) => el.querySelector('.p86-pref-title').textContent);
@@ -125,7 +153,24 @@ describe('My Account prints the group heading', () => {
     ]);
     expect(children[at + 7].className).toBe('p86-pref-group-end');
     expect(children[at + 8].querySelector('.p86-pref-title').textContent).toBe('Job assignments');
-    expect(pane.querySelectorAll('.p86-pref-group-end')).toHaveLength(1);
+  });
+
+  test('and one above the four money rows — two groups, two rules, no more', () => {
+    // The heading logic had only ever rendered one group. A second one is what
+    // proves the heading is printed per RUN rather than once per page.
+    const { pane } = render(events.NOTIFY_EVENTS);
+    const headings = Array.from(pane.querySelectorAll('.p86-pref-group'));
+    const money = headings.find((h) => h.textContent === 'Money');
+    expect(money).toBeDefined();
+    const children = Array.from(pane.children);
+    const at = children.indexOf(money);
+    const titles = children.slice(at + 1, at + 5).map((el) => el.querySelector('.p86-pref-title').textContent);
+    expect(titles).toEqual(['Proposals decided', 'Purchase orders', 'Bills to approve', 'Bill decisions']);
+    expect(children[at + 5].className).toBe('p86-pref-group-end');
+    // The row after the money group is the ungrouped one that follows it.
+    expect(children[at + 6].querySelector('.p86-pref-title').textContent).toBe('Password resets');
+    expect(pane.querySelectorAll('.p86-pref-group')).toHaveLength(2);
+    expect(pane.querySelectorAll('.p86-pref-group-end')).toHaveLength(2);
   });
 
   test('the toggles still read and write the flat email key and the nested push key', () => {
@@ -157,7 +202,15 @@ describe('My Account prints the group heading', () => {
       ['window', 'document', 'savePrefs'], [dom.window, dom.window.document, () => {}], 'renderPrefRows');
     const pane = dom.window.document.getElementById('pane');
     fn(pane, {}, events.NOTIFY_EVENTS, true);
-    expect(pane.querySelectorAll('.p86-pref-group')).toHaveLength(6);
+    // Derived from the catalog, not typed: this used to be the literal 6, and
+    // adding a second group made it 10 and turned a mutant-catcher red for the
+    // wrong reason. One heading per GROUPED ROW is what the mutation produces,
+    // against one per RUN in the shipped function — the two numbers differ as
+    // long as any group has more than one row, which the assertion below pins.
+    const groupedRows = events.NOTIFY_EVENTS.filter((e) => e.group).length;
+    const runs = new Set(events.NOTIFY_EVENTS.filter((e) => e.group).map((e) => e.group)).size;
+    expect(groupedRows).toBeGreaterThan(runs);
+    expect(pane.querySelectorAll('.p86-pref-group')).toHaveLength(groupedRows);
   });
 });
 

@@ -19,6 +19,37 @@
 
 const express = require('express');
 const { pool } = require('../db');
+const inflight = require('../services/inflight');
+
+/* A NOTICE NEVER FAILS THE WRITE THAT JUSTIFIED IT.
+ *
+ * This file opens no transaction, so by the time either call below runs the
+ * row is committed. The promise goes to services/inflight.js so a deploy
+ * lets it finish, and a synchronous throw is caught the same as a rejection.
+ *
+ * THE ROUTE, NOT A HELPER. The Buildertrend sync creates and re-statuses
+ * bills with its own SQL on its own client (services/clickr/sync-apply.js
+ * createBill / applyBill) and never enters Express — so a notice here is
+ * unreachable from a sync run, and a notice on a shared helper or a trigger
+ * would mail one per bill every thirty minutes.
+ */
+function trackNotice(label, start) {
+  try {
+    return inflight.track(start(), label);
+  } catch (e) {
+    console.warn('[bill-routes] ' + label + ' failed to start:', e && e.message);
+    return null;
+  }
+}
+
+// The job behind a bill, for the notice's recipients and its subject line.
+// jobs.owner_id is the PM; the bill's own owner_id is whoever entered it.
+async function noticeJob(jobId, orgId) {
+  const r = await pool.query(
+    'SELECT id, owner_id, data FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+    [jobId, orgId]);
+  return r.rows[0] || null;
+}
 const { requireAuth, requireCapability, hasCapability } = require('../auth');
 const { poEffectiveTotal } = require('../services/job-financials');
 const { overbillVerdict } = require('../services/money/overbill');
@@ -321,6 +352,18 @@ router.post('/jobs/:jobId/bills', requireAuth, requireCapability('ESTIMATES_EDIT
       [id, jobId, req.user.organization_id, req.user.id, b.po_id || null, subId, billNumber,
        amount, dateOrNull(b.bill_date), dateOrNull(b.due_date), JSON.stringify(data)]);
     res.json({ bill: Object.assign(shapeRow(rows[0]), { job_number: job.rows[0].job_number, job_title: job.rows[0].job_title }) });
+    // A bill is born 'open', which means somebody has to approve it.
+    trackNotice('bill approval notice', function () {
+      const notices = require('../services/money-notices');
+      return (async function () {
+        const j = await noticeJob(jobId, req.user.organization_id);
+        if (!j) return;
+        return notices.notifyBillAwaitingApproval(pool, {
+          bill: rows[0], orgId: req.user.organization_id, job: j,
+          actorId: req.user.id, actorName: req.user.name,
+        });
+      }());
+    });
   } catch (e) {
     console.error('POST /api/jobs/:jobId/bills error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -416,6 +459,27 @@ router.post('/bills/:id/status', requireAuth, requireCapability('ESTIMATES_EDIT'
         RETURNING ${SELECT_COLS.replace(/b\./g, '')}`,
       [next, req.user.id, paidAt, id]);
     res.json({ bill: shapeRow(rows[0]) });
+    // 'approved' and 'void' are the two a waiting person cares about;
+    // re-entering 'open' clears the claim so the NEXT wait asks again.
+    trackNotice('bill decision notice', function () {
+      const notices = require('../services/money-notices');
+      return (async function () {
+        const b = rows[0];
+        const j = await noticeJob(b.job_id, req.user.organization_id);
+        if (!j) return;
+        if (next === 'open') {
+          await pool.query('UPDATE job_vendor_bills SET approval_notified_at = NULL WHERE id = $1', [b.id]);
+          return notices.notifyBillAwaitingApproval(pool, {
+            bill: b, orgId: req.user.organization_id, job: j,
+            actorId: req.user.id, actorName: req.user.name,
+          });
+        }
+        return notices.notifyBillDecided(pool, {
+          bill: b, orgId: req.user.organization_id, job: j, to: next,
+          actorId: req.user.id, actorName: req.user.name,
+        });
+      }());
+    });
   } catch (e) {
     console.error('POST /api/bills/:id/status error:', e);
     res.status(500).json({ error: 'Server error' });

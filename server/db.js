@@ -1518,6 +1518,18 @@ async function initSchema() {
     -- the same terms again: a bill row can carry a NULL organization_id, so this
     -- one is unique outright and every sync read reaches the row through its job.
     ALTER TABLE job_vendor_bills ADD COLUMN IF NOT EXISTS bt_bill_id TEXT;
+    -- WHEN THE PEOPLE WHO CAN APPROVE THIS BILL WERE LAST TOLD IT IS WAITING.
+    -- services/money-notices.js claims the send on it atomically, the same way
+    -- service_tickets.approval_notified_at works for a work order: the UPDATE
+    -- carries an approval_notified_at IS NULL predicate, so two writers racing
+    -- the same arrival announce it once.
+    --
+    -- It is a claim per WAIT, not per write. A bill re-enters 'open' from
+    -- approved, paid and void (routes/bill-routes.js ALLOWED_TRANSITIONS), so
+    -- without this a bill asks to be approved again on every round trip.
+    -- Every transition back to 'open' clears it, which is what makes the next
+    -- genuine wait notice again.
+    ALTER TABLE job_vendor_bills ADD COLUMN IF NOT EXISTS approval_notified_at TIMESTAMPTZ;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_job_vendor_bills_bt_bill_id ON job_vendor_bills(bt_bill_id) WHERE bt_bill_id IS NOT NULL;
 
     -- ── AN ESTIMATE FILED UNDER A JOB ───────────────────────────────────

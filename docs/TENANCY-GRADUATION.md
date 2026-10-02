@@ -192,7 +192,43 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**582** occurrences of `organization_id IS NULL` across `server/`.
+**593** occurrences of `organization_id IS NULL` across `server/`.
+
+582 → 593: the money notices and the thread-key gate. Eleven arms, and every
+one of them COPIES the predicate its neighbours already use rather than
+inventing a looser one. Ten are READS that resolve a notice's recipients or a
+thread's parent; the eleventh is the one WRITE, and it exists because
+`test/org-write-predicate-invariant.test.js` refused it without one.
+
+* `services/thread-org-scope.js` — one arm, `hasOwnMessages`. The last rung of
+  the thread gate: when a thread's parent entity cannot be resolved (its job was
+  deleted — `messages` has no FK to any entity table), it asks whether the
+  thread holds a message of the caller's own organisation. Without the arm an
+  unbackfilled legacy comment would read as foreign and a real conversation
+  would be refused. See item 9's own argument: this is the same tolerance
+  `attachmentInOrg` rung 4 carries, and the ANSWER it guards is already
+  narrowed by the row-level scope on the read.
+* `routes/message-routes.js` — three. One is the message rows' own term on
+  `GET /api/messages/:threadKey`, which is LAYER 2 of the fix in that commit and
+  the thing that makes an unresolvable thread safe to open. The other two
+  complete `describeThread`: its `job` and `lead` lookups were hardened in an
+  earlier pass and its `estimate` and `attachment` ones were left unscoped, so
+  these two are the same arm those two already had.
+* `services/money-notices.js` — two. The lead lookup that resolves a proposal's
+  salesperson (`estimates.data->>'lead_id'` is a JSONB string that can outlive
+  its lead, so a legacy NULL-org lead must still resolve), and the job predicate
+  on the bill-approval claim.
+* `routes/purchase-order-routes.js` — two, and `routes/bill-routes.js` — one:
+  the job read that names a notice's recipients, plus the PO's sub read. All
+  three copy `assertJobInOrg`'s arm word for word, for the reason every other
+  job-keyed read in the repo carries it — a legacy job with a NULL stamp still
+  has a PM, and that PM still has to hear that a bill needs approving.
+* `routes/estimate-routes.js` — two. `/approve` and `/decline` now refuse a
+  repeat with a status predicate, and each re-reads the row afterwards to tell
+  "already decided" from "not yours" so a double-click still answers 200. Both
+  re-reads carry the same arm the UPDATE above them already had.
+
+When this item closes, all eleven retire with the reads they copied.
 
 581 → 582: `healBtDatesLoose` in `services/clickr/sync-apply.js`, which fills in
 the date Buildertrend made a record on the four kinds that hang off a job —

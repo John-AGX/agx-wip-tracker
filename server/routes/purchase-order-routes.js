@@ -102,6 +102,22 @@ const DEFAULT_SCOPE_TEMPLATE = jobFin.DEFAULT_SCOPE_TEMPLATE;
 // highest numeric suffix on existing PO-#### rows in the org and adds 1.
 const nextPoNumber = (orgId) => jobFin.nextPoNumber(pool, orgId);
 
+/* A NOTICE NEVER FAILS THE WRITE THAT JUSTIFIED IT, and it lives in the
+ * ROUTE on purpose: the Buildertrend sync re-statuses these rows with its
+ * own SQL on its own client and never enters Express, so a notice here is
+ * unreachable from a sync run. On a shared helper it would fire per row,
+ * every thirty minutes. services/money-notices.js says more.
+ */
+function trackNotice(label, start) {
+  try {
+    return require('../services/inflight').track(start(), label);
+  } catch (e) {
+    console.warn('[notice] ' + label + ' failed to start:', e && e.message);
+    return null;
+  }
+}
+
+
 function shapeRow(r) {
   return {
     ...(r.data || {}),
@@ -493,6 +509,32 @@ router.post('/purchase-orders/:id/status', requireAuth, requireCapability('ESTIM
       purchase_order: Object.assign(shapeRow(rows[0]), {
         job_number: cur.rows[0].job_number, job_title: cur.rows[0].job_title
       })
+    });
+    // DELIBERATELY NOT beside grantSubAccessForPO above: that helper is
+    // shared with the sync (services/clickr/sync-apply.js calls it after
+    // commit), and one 'Run sync now' walks every matched PO.
+    trackNotice('purchase-order notice', function () {
+      const notices = require('../services/money-notices');
+      return (async function () {
+        const po = rows[0];
+        if (!po) return;
+        const j = await pool.query(
+          'SELECT id, owner_id, data FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+          [po.job_id, req.user.organization_id]);
+        if (!j.rows.length) return;
+        let subName = null;
+        if (po.sub_id) {
+          const sr = await pool.query(
+            'SELECT name FROM subs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+            [po.sub_id, req.user.organization_id]);
+          subName = sr.rows.length ? sr.rows[0].name : null;
+        }
+        return notices.notifyPoStatus(pool, {
+          po: po, orgId: req.user.organization_id, job: j.rows[0],
+          from: current, to: next, subName: subName,
+          actorId: req.user.id, actorName: req.user.name,
+        });
+      }());
     });
   } catch (e) {
     console.error('POST /api/purchase-orders/:id/status error:', e);

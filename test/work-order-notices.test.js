@@ -132,18 +132,54 @@ function senders(opts) {
   return s;
 }
 
+// Absolutise every relative require EXCEPT the ones named in `keepRelative`,
+// so a temp copy can still pick up a sibling temp copy.
+function rewriteRequires(src, dir, keepRelative) {
+  const keep = new Set(keepRelative || []);
+  return src.replace(/require\((['"])(\.{1,2}\/[^'"]+)\1\)/g, (m, _q, rel) => {
+    if (keep.has(rel)) return m;
+    return 'require(' + JSON.stringify(path.resolve(dir, rel).split(path.sep).join('/')) + ')';
+  });
+}
+
 function mutant(anchor, replacement) {
   const src = fs.readFileSync(REAL, 'utf8').replace(/\r\n/g, '\n');
   if (src.split(anchor).length !== 2) throw new Error('anchor not found');
   let out = src.replace(anchor, () => replacement);
   if (out === src) throw new Error('mutation changed nothing');
-  const dir = path.dirname(REAL);
-  out = out.replace(/require\((['"])(\.{1,2}\/[^'"]+)\1\)/g,
-    (_m, _q, rel) => 'require(' + JSON.stringify(path.resolve(dir, rel).split(path.sep).join('/')) + ')');
+  out = rewriteRequires(out, path.dirname(REAL));
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'p86-won-'));
   tmpDirs.push(tmp);
   const p = path.join(tmp, 'work-order-notices.js');
   fs.writeFileSync(p, out, 'utf8');
+  return require(p);
+}
+
+/* MUTATE A DEPENDENCY, and have this module load the mutated copy.
+ *
+ * The preference readers and deliver() moved out of work-order-notices.js into
+ * services/notice-delivery.js when the money notices needed the same rules — so
+ * the mutation that proves "a muted inbox is not written to" now has to be made
+ * in that file, while still being observed through notifyAssigned. Both copies
+ * land in one temp directory and the require between them is left relative, so
+ * the module under test resolves the mutated sibling rather than the real one.
+ */
+function mutantDep(depFile, anchor, replacement) {
+  const dir = path.dirname(REAL);
+  const depPath = path.join(dir, depFile + '.js');
+  const depSrc = fs.readFileSync(depPath, 'utf8').replace(/\r\n/g, '\n');
+  if (depSrc.split(anchor).length !== 2) throw new Error('dep anchor not found in ' + depFile);
+  const mutated = depSrc.replace(anchor, () => replacement);
+  if (mutated === depSrc) throw new Error('mutation changed nothing');
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'p86-won-'));
+  tmpDirs.push(tmp);
+  const rel = './' + depFile;
+  fs.writeFileSync(path.join(tmp, depFile + '.js'), rewriteRequires(mutated, dir), 'utf8');
+  const main = rewriteRequires(fs.readFileSync(REAL, 'utf8').replace(/\r\n/g, '\n'), dir, [rel]);
+  if (!main.includes("require('" + rel + "')")) throw new Error(REAL + ' does not require ' + rel);
+  const p = path.join(tmp, 'work-order-notices.js');
+  fs.writeFileSync(p, main, 'utf8');
   return require(p);
 }
 
@@ -244,10 +280,23 @@ describe('assignment', () => {
   });
 
   test('MUTANT: ignore the email preference and a muted inbox is written to', async () => {
-    const mod = mutant("  return !!(u && u.email) && prefsOf(u)[key] !== false;", '  return !!(u && u.email);');
+    // emailOn lives in services/notice-delivery.js now — shared with the money
+    // notices so one person's "off" means off everywhere. Mutated there and
+    // still observed from here, which is the point: the rule moved, the
+    // guarantee did not.
+    const mod = mutantDep('notice-delivery',
+      "  return !!(u && u.email) && prefsOf(u)[key] !== false;", '  return !!(u && u.email);');
     const s = senders();
     await mod.notifyAssigned(eng.pool, { ticket: ticket('st1'), assigneeUserId: 19, actor: PAULA }, s.deps);
     expect(s.emails.map((m) => m.to)).toContain('eve@agx.test');
+  });
+
+  test('MUTANT: ignore the push preference and a muted device is pushed to', async () => {
+    const mod = mutantDep('notice-delivery',
+      "  return !(prefs.push && typeof prefs.push === 'object' && prefs.push[key] === false);", '  return true;');
+    const s = senders();
+    await mod.notifyAssigned(eng.pool, { ticket: ticket('st1'), assigneeUserId: 19, actor: PAULA }, s.deps);
+    expect(s.pushes.map((x) => x.userId)).toContain(19);
   });
 
   test('MUTANT: forget the previous assignee and a save that did not change it notifies again', async () => {

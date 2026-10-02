@@ -43,6 +43,14 @@ const NOTIFY_EVENTS = [
   // can slip past this row.
   { key: 'work_order_digest',    group: 'Work orders', label: 'Work orders morning digest', desc: 'One message on weekday mornings, only when a work order needs you: a work order assigned to you with a building still open, waiting for your approval, overdue, scheduled today or tomorrow with the crew link not opened, a crew link about to expire, suggestions or flagged problems waiting.', channels: { email: true, push: true } },
   { key: 'job_assignment',      label: 'Job assignments',        desc: 'When you’re assigned (or reassigned) as the PM on a job.',             channels: { email: true, push: false } },
+  // Money — four contiguous rows under one heading. Every one of these was
+  // already recorded in the database and told to nobody; see
+  // services/money-notices.js, which also explains why each goes to the two
+  // people on the record rather than to everyone holding the capability.
+  { key: 'estimate_decided',    group: 'Money',       label: 'Proposals decided',          desc: 'When somebody records that a proposal was approved or declined. It says who recorded it and the name they put in the box, because in Project 86 a person on your side enters the decision — the client does not click it.', channels: { email: true, push: true } },
+  { key: 'po_status',           group: 'Money',       label: 'Purchase orders',            desc: 'When a purchase order on a job you run, or one you raised, is approved or has its work marked complete. Names the sub who signed when a signature was actually taken.', channels: { email: true, push: true } },
+  { key: 'bill_approval',       group: 'Money',       label: 'Bills to approve',           desc: 'Once per wait, when a vendor bill is entered against a job you run, or one you entered yourself, and is sitting unapproved. Sending a bill back to open asks again; approving or voiding it does not.', channels: { email: true, push: true } },
+  { key: 'bill_decided',        group: 'Money',       label: 'Bill decisions',             desc: 'When a vendor bill you are waiting on is approved for payment, or voided. Voided covers both a refusal and a duplicate being discarded, so it says what happened rather than why.', channels: { email: true, push: true } },
   { key: 'password_reset',      label: 'Password resets',        desc: 'When an admin resets your password. Recommended to leave on.',              channels: { email: true, push: false } }
 ];
 
