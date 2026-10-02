@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.88';
+const APP_VERSION = '1.89';
 
 const releases = [
+  {
+    version: '1.89',
+    date: '2026-10-02',
+    name: 'Backlog stops counting finished work',
+    summary: 'Backlog was reading a number a retired engine saved and never updated — so completed jobs reported their whole contract as still to come. It is worked out live now, which is what the label always said.',
+    changes: [
+      { type: 'fixed', text: 'BACKLOG WAS PADDED BY FINISHED JOBS. It preferred a figure the old node graph stored, which has not been updated since that engine was retired — and the stored figure was not just out of date, it was as high as it could be: Hidden River is Completed and was reporting $267,299 still to come against $0 earned, and Waterside III and Waterside I were each reporting their entire contract. 25 jobs carried one. Backlog is now Income minus what has actually been earned, which is exactly what the caption under it has always claimed. The other 675 jobs are unchanged — they never had the stored figure.' },
+      { type: 'fixed', text: 'OPENING A CHANGE ORDER’S ALLOCATION SCREEN COULD STOP IT EARNING. The screen opened a change order that had never been allocated as “tracks its own percent per building” with every building set to 0% — so pressing Save without touching anything turned a change order that had been earning alongside the job into one that earns nothing, permanently, while the table behind it still showed its money split across the buildings. 13 change orders on Citi Lakes, Saddlebrook Cluster 9 and Saddlebrook Cluster 4 are sitting in that state. Saving can no longer change how a change order earns unless you choose it.' },
+      { type: 'fixed', text: 'Two labels that were not telling the truth. “Revenue Earned (Income × %)” was never that sum — earned revenue is each scope line at its own percent plus each change order at its own — so it now says “Revenue Earned (scope + change orders)”, on the job page and in a shared live room, which have to use the same words for “look at this row” to mean anything. And “1 photo have no GPS” now reads “has”.' },
+    ],
+  },
   {
     version: '1.88',
     date: '2026-10-02',

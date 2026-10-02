@@ -671,9 +671,22 @@ function renderJobsMain() {
                 ? _arForJob.reduce((s, i) => s + (i.status === 'paid' ? (Number(i.total) || 0) : 0), 0)
                 : null;
             const arOutstanding = (arPaid == null) ? null : Math.max(0, invoiced - arPaid);
-            const backlog = (job.ngBacklog != null)
-                ? job.ngBacklog
-                : totalIncome - revenueEarned;
+            // BACKLOG IS THE ARITHMETIC ON THE LABEL, not a frozen number.
+            //
+            // This used to prefer job.ngBacklog — a value the node graph
+            // stored and has not updated since that engine was retired. 25 of
+            // 700 jobs still carry one, and they are not merely stale, they
+            // are systematically MAXIMAL: RV2003 is Completed with
+            // ngBacklog $267,299 and ngRevenueEarned $0; RV2000 and RV2001
+            // report their entire contract as backlog. That stored figure is
+            // what padded Insights' backlog with finished work, and it sat
+            // under a caption promising "Income - Revenue".
+            //
+            // The live expression already knows about change-order income and
+            // runs on the same scope clock as the earned figure above it, so
+            // it is strictly better on every one of those 25 — and identical
+            // on the other 675, which never had the field.
+            const backlog = totalIncome - revenueEarned;
             const remainingCosts = revisedEstCosts - actualCosts;
             // Accrued (committed) cost = sub earned-but-unbilled + open PO
             // commitments (ordered − billed, via getJobPOAccrued). Once a sub BILLS,

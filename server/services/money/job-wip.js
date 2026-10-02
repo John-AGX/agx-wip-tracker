@@ -312,7 +312,11 @@ function computeJobWIP(job, deps) {
 
   const invoiced = jobMoney.invoicedToDate(d.invoices, job);
   const unbilled = revenueEarned - invoiced;
-  const backlog = job.ngBacklog != null ? num(job.ngBacklog) : totalIncome - revenueEarned;
+  // Live, never the stored ngBacklog — see the note at the matching line in
+  // js/jobs.js. The browser and the server have to answer this the same way,
+  // and the stored value was a retired engine's snapshot that reported a
+  // finished job's whole contract as backlog.
+  const backlog = totalIncome - revenueEarned;
   const remainingCosts = revisedEstCosts - actualCosts;
 
   // THE COST CLOCK STAYS STORED. `storedPct` and nothing else reaches these two

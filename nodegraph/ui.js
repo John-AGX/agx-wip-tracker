@@ -2510,7 +2510,9 @@ function updatePhotoLayer(){
   if(_photoPinsEl) _photoPinsEl.style.display='block';
   loadGeoPhotos(function(){
     renderPhotoPins();
-    if(_geoPhotosNoGps) showSatHint(true, _geoPhotosNoGps+' photo'+(_geoPhotosNoGps===1?'':'s')+' have no GPS and aren’t shown.');
+    // The noun was pluralised and the verb was not, so one photo read
+    // "1 photo have no GPS". Both agree now.
+    if(_geoPhotosNoGps) showSatHint(true, _geoPhotosNoGps + (_geoPhotosNoGps === 1 ? ' photo has' : ' photos have') + ' no GPS and aren’t shown.');
   });
 }
 // ── Geolocated task pins (filterable) — same projection + lifecycle as photo pins.
@@ -5360,7 +5362,15 @@ function openCoAllocEditor(coId){
   var split='units';
   // Completion SOURCE (the CO's mini-P&L earn basis): 'rider' rides a scope,
   // 'standalone' tracks its own per-building %s. Default to the saved mode.
-  var coMode=(c.data&&c.data.completionMode)||c.completionMode||'standalone';
+  // DEFAULT TO LEGACY, NOT STANDALONE. This modal is the only writer of a
+    // CO's own percent, and it used to open an unmodeled CO as 'standalone'
+    // with every building seeded at 0% done — so pressing Save without
+    // touching anything converted a CO that had been earning at the job's
+    // live percent into one that earns /usr/bin/bash forever, while the table behind it
+    // kept showing its dollars allocated per building. 13 COs across RV2004,
+    // RV2013 and RV2017 are in that state now. An empty mode keeps the legacy
+    // behaviour, so choosing standalone has to be deliberate.
+    var coMode=(c.data&&c.data.completionMode)||c.completionMode||'';
   var riderScope=(c.data&&c.data.riderScopeName)||c.riderScopeName||'';
   var scopeNames=(function(){ var m={}; (appData.phases||[]).forEach(function(p){ if(p.jobId===jid){ m[p.phase||'Unnamed']=1; } }); return Object.keys(m).sort(); })();
   if(coMode==='rider'&&!riderScope&&scopeNames.length) riderScope=scopeNames[0];

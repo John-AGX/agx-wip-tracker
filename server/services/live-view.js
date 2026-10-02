@@ -413,7 +413,13 @@ function buildJobWip(inp) {
         tone: 'warn',
         rows: [
           { label: '% Complete', pct: num(w.pctComplete) },
-          row('Revenue Earned (Income × %)', 'revenueEarned'),
+          // Must stay the SAME STRING as index.html's caption — the two ends
+          // of a live room are different documents, and the only thing that
+          // makes "look at Revenue Earned" land on both screens is that they
+          // use identical words. test/live-view-client.test.js holds every
+          // label here against index.html and caught this one when the app
+          // side was corrected and this was not.
+          row('Revenue Earned (scope + change orders)', 'revenueEarned'),
           row('JTD Gross Profit', 'jtdProfit'),
           row('JTD Margin %', 'jtdMargin', '%'),
           row('Invoiced to Date', 'invoiced'),

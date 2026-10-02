@@ -104,17 +104,25 @@ describe('the census excludes exactly the jobs whose Δ reaches no stored number
   });
 });
 
-describe('Δ backlog = −Δ holds on fewer jobs than the census used to claim', () => {
-  test('a stored ngBacklog is preferred, so backlog does not move at all', () => {
-    // nodegraph/ui.js writes ngBacklog in the same block as ngRevenueEarned,
-    // so THIS is the ordinary shape of a job whose earned Δ lands: earned,
-    // profit and unbilled move, backlog is frozen. `dBacklog: -delta` was
-    // wrong on exactly these.
+describe('Δ backlog = −Δ now holds wherever the earned Δ lands', () => {
+  // THIS BLOCK USED TO ASSERT THE OPPOSITE, and the change is the point.
+  //
+  // job-wip.js preferred a stored job.ngBacklog, so on the ordinary shape —
+  // nodegraph/ui.js writes ngBacklog in the same block as ngRevenueEarned —
+  // an earned Δ moved earned, profit and unbilled while backlog sat frozen.
+  //
+  // That preference is gone. The stored value was a retired engine's snapshot
+  // and it was systematically MAXIMAL, not merely stale: 25 of 700 live jobs
+  // carried one, RV2003 was Completed with $267,299 of backlog against $0
+  // earned, and RV2000 and RV2001 reported their whole contract. It sat under
+  // a caption reading "Backlog (Income - Revenue)" that it did not obey, and
+  // it is what padded Insights' backlog with finished work.
+  test('a stored ngBacklog no longer freezes backlog — it moves by −Δ like any other job', () => {
     const j = job({ ngRevenueEarned: 7000, ngBacklog: 5000 });
-    expect(deltaLanding(j).landsInBacklog).toBe(false);
+    expect(deltaLanding(j).landsInBacklog).toBe(true);
     const m = moves(j);
-    expect(m.backlog).toBe(0);
-    expect(m.revenueEarned).toBeCloseTo(CLOCK_DELTA, 6);  // and the rest still move
+    expect(m.backlog).toBeCloseTo(-CLOCK_DELTA, 6);
+    expect(m.revenueEarned).toBeCloseTo(CLOCK_DELTA, 6);
   });
 
   test('derived backlog moves by −Δ', () => {

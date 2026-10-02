@@ -1252,7 +1252,7 @@
                                             <span id="wip-pct-complete">0%</span>
                                         </div>
                                         <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
-                                            <span style="color: var(--text-dim);">Revenue Earned (Income &times; %)</span>
+                                            <span style="color: var(--text-dim);" title="Each scope line at its own % complete, plus each change order at its own">Revenue Earned (scope + change orders)</span>
                                             <span id="wip-revenue-earned">$0.00</span>
                                         </div>
                                         <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 12px;">
@@ -3748,7 +3748,7 @@
     <script src="js/progress.js?v=4"></script>
     <!-- The Jobs list sort rules (pure; read by js/jobs.js at load). -->
     <script src="js/jobs-sort.js?v=1"></script>
-    <script src="js/jobs.js?v=263"></script>
+    <script src="js/jobs.js?v=264"></script>
     <script src="js/doc-import.js?v=8"></script>
     <script src="js/job-workflow-ui.js?v=7"></script>
     <!-- Job sidebar Files + Photos + Comments tabs (renderJobFiles /
@@ -4109,7 +4109,7 @@
     </div>
     <script src="nodegraph/engine.js?v=125"></script>
     <script src="js/cost-buckets.js?v=6"></script>
-    <script src="nodegraph/ui.js?v=337"></script>
+    <script src="nodegraph/ui.js?v=338"></script>
     <!-- Ribbon popovers (Layers / More) + layer visibility persistence.
          Loads after ui.js; only owns the popover chrome — the moved
          ribbon buttons stay wired by ui.js itself. -->

@@ -106,7 +106,17 @@ const money = (n) => (n < 0 ? '-' : '') + '$' + Math.abs(Math.round(n)).toLocale
 function deltaLanding(jobData) {
   const d = jobData || {};
   const landsInEarned = d.ngRevenueEarned != null;
-  return { landsInEarned, landsInBacklog: landsInEarned && d.ngBacklog == null };
+  // BACKLOG IS NO LONGER FROZEN BY A STORED ngBacklog. It used to be
+  // `landsInEarned && d.ngBacklog == null`, mirroring a job-wip.js that
+  // preferred the stored number — which meant an earned Δ moved earned,
+  // profit and unbilled while backlog sat still. That preference is gone
+  // (job-wip.js and js/jobs.js both compute totalIncome - revenueEarned
+  // always), because the stored value came from a retired engine and was
+  // systematically maximal: 25 of 700 jobs carried one, and RV2003 was
+  // Completed with $267,299 of backlog against $0 earned.
+  //
+  // So wherever the earned Δ lands, the backlog Δ lands with it.
+  return { landsInEarned, landsInBacklog: landsInEarned };
 }
 
 async function main() {
