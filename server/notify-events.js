@@ -20,6 +20,7 @@ const NOTIFY_EVENTS = [
   { key: 'agent_task',          label: 'Background tasks',       desc: 'When a background task finishes, fails, or needs your answer.',              channels: { email: true, push: true } },
   { key: 'scribe_draft',        label: 'Scribe drafts',          desc: 'When the Scribe finishes drafting a change for your review.',               channels: { email: false, push: true } },
   { key: 'messages',            label: 'Direct messages',        desc: 'When a teammate sends you a direct message.',                               channels: { email: true, push: true } },
+  { key: 'comment_posted',      label: 'Comments',               desc: 'When somebody comments on a job, lead, proposal or photo you have already posted about, and when somebody comments on a photo you uploaded. Your own comments never notify you, including when an admin is acting as you.', channels: { email: true, push: true } },
   { key: 'task_due',            label: 'Tasks due',              desc: 'Your morning digest of overdue and due-today tasks.',                       channels: { email: true, push: true } },
   { key: 'event_reminder',      label: 'Calendar reminders',     desc: 'Reminders before your calendar events start.',                              channels: { email: true, push: true } },
   { key: 'reminder',            label: 'Personal reminders',     desc: 'Your own "remind me" reminders when they come due.',                        channels: { email: true, push: true } },

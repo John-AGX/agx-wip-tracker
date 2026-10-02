@@ -81,6 +81,24 @@ function dmParticipants(key) {
 // until now — see services/thread-org-scope.js.
 const { threadInOrg } = require('../services/thread-org-scope');
 
+// The OTHER half of a posted comment: telling the people in the conversation.
+// notifyMessageDM below owns `dm:` and returns on its second line for
+// everything else; services/comment-notices.js owns the entity threads.
+const inflight = require('../services/inflight');
+const { notifyThreadComment } = require('../services/comment-notices');
+
+// This route opens no transaction, so the message row is committed by the
+// time the notice runs. The promise goes to services/inflight.js so a deploy
+// waits for it, and a notice that cannot even START must not fail the post.
+function trackNotice(label, start) {
+  try {
+    return inflight.track(start(), label);
+  } catch (e) {
+    console.warn('[message-routes] ' + label + ' failed to start:', e && e.message);
+    return null;
+  }
+}
+
 // True when `key` is a DM and `userId` is NOT one of its two participants.
 // Non-DM threads return false (no per-user gate at this layer).
 function isForbiddenDm(key, userId) {
@@ -176,9 +194,11 @@ function escHtml(s) {
 // Fire-and-forget; respects notification_prefs.messages opt-out — same
 // posture as notifyTaskAssigned (tasks-routes.js). Body built inline (no
 // email-templates dependency); the send is recorded in email_log by
-// sendEmail. Never throws. No-op for non-DM threads (entity threads are
-// org-shared comment streams — emailing the whole org on every comment is
-// out of scope for M1).
+// sendEmail. Never throws. No-op for non-DM threads — and that is now a
+// DIVISION OF LABOUR, not a gap: the entity threads are notified by
+// services/comment-notices.js, which tells the thread's own participants
+// (and a photo's uploader) instead of the whole org. The line below is what
+// keeps one comment from producing two notices.
 //
 // THE RECIPIENT MUST BE IN THE SENDER'S ORG. The thread-key guards only prove
 // the SENDER is a participant, and a dm: key is caller-typed — so posting to
@@ -446,9 +466,39 @@ router.post('/:threadKey', async (req, res) => {
       [id]
     );
     // Fire-and-forget DM email to the other participant (self-guarding,
-    // honors notification_prefs.messages, no-op for entity threads).
+    // honors notification_prefs.messages, no-op for entity threads — the
+    // comment notice right below covers those).
     notifyMessageDM(key, req.user.id, body);
     res.json({ message: rows[0] });
+
+    // And the entity threads, which told nobody until now. The byline is read
+    // off the row that was just written rather than off req.user: under an
+    // act-as session the author IS the acted-as user, and a notice naming the
+    // admin instead would not match the comment the recipient opens. Both ids
+    // are dropped from the audience for the same reason.
+    if (!isDm) {
+      const posted = rows[0] || {};
+      // An attachment: thread names itself — comment-notices reads the file
+      // name off the row behind the same org ladder, because 86's tool has no
+      // label to pass. So the describeThread call is skipped there rather than
+      // run and thrown away; photo comments are the common case.
+      const needsLabel = key.indexOf('attachment:') !== 0;
+      trackNotice('comment notice', function () {
+        const named = needsLabel
+          ? describeThread(key, req.user.organization_id)
+          : Promise.resolve(null);
+        return named.then(function (d) {
+          return notifyThreadComment(pool, {
+            key: key,
+            orgId: req.user.organization_id,
+            actorIds: [req.user.id, authorId],
+            actorName: posted.user_name || posted.user_email,
+            body: body,
+            label: d && d.label,
+          });
+        });
+      });
+    }
   } catch (e) {
     console.error('POST /api/messages/:threadKey error:', e);
     res.status(500).json({ error: 'Server error' });

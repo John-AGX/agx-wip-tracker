@@ -2407,6 +2407,7 @@
             'job-photos':       'renderJobPhotos',
             'job-files':        'renderJobFiles',
             'job-daily-logs':   'renderJobDailyLogs',
+            'job-comments':     'renderJobComments',
             'job-reports':      'renderJobReports',
             'job-service-tickets': 'renderJobServiceTickets'
         };

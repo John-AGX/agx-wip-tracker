@@ -192,7 +192,32 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**593** occurrences of `organization_id IS NULL` across `server/`.
+**595** occurrences of `organization_id IS NULL` across `server/`.
+
+593 → 595: the comment notice. Two arms, both in
+`services/comment-notices.js`, both READS, and both copies of a predicate
+their neighbour already uses.
+
+* `participantIds` — who has posted in a thread. The arm is the SAME term the
+  thread read in `routes/message-routes.js` carries, deliberately word for
+  word: that read is what decides which messages a person can see, and an
+  audience narrower than the readership would mean a comment visible to
+  somebody who is never told about it. Message rows written before the
+  backfill carry no stamp, so without the arm every thread older than it
+  would quietly notify nobody.
+* `recipients` — the users lookup. Strict on `organization_id`, with the arm
+  on the message row that reached it, which is the point: an unstamped row is
+  tolerated as EVIDENCE of participation and then the person it names is still
+  proved to be in this organisation. Mutation showed why both layers have to
+  be there — strip either one alone and every obvious test stayed green,
+  because the other was still filtering. `test/comment-notices.test.js` now
+  names the row shape only one of them can catch.
+
+The photo half adds no arm: `photoFacts` reads the attachment by id and hands
+the row to `attachmentInOrg`, so it inherits that ladder rather than writing a
+fourth version of it.
+
+When this item closes, both retire with the reads they copied.
 
 582 → 593: the money notices and the thread-key gate. Eleven arms, and every
 one of them COPIES the predicate its neighbours already use rather than

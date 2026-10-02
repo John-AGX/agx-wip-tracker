@@ -64,7 +64,7 @@
     // section was not linkable at all — the same registry drift that kept
     // job-reports from deep-linking. test/router-job-subtabs.test.js pins
     // this list against RIGHT_TABS so the next tab added can't repeat it.
-    'job-photos', 'job-files', 'job-daily-logs',
+    'job-photos', 'job-files', 'job-daily-logs', 'job-comments',
     // Site Map — the node-graph structural-editing overlay, now a dedicated tab.
     'job-site-map',
     // Workflow (RFIs / Submittals / Transmittals) — jobs-hub row clicks

@@ -16368,6 +16368,30 @@ async function execProjectInlineTool(name, input, ctx) {
        ON CONFLICT (thread_key, user_id) DO UPDATE SET last_read_at = EXCLUDED.last_read_at`,
       [`attachment:${attId}`, userId]
     );
+    // 86 posting a comment is a person posting a comment: the photo's
+    // uploader and anyone already in the thread hear about it on the same
+    // terms as the human door (routes/message-routes.js). The actor is the
+    // user whose 86 this is, and the row above is stamped with that same id,
+    // so they are not notified about their own instruction.
+    try {
+      const _acName = await pool.query(
+        'SELECT name, email FROM users WHERE id = $1 AND organization_id = $2',
+        [userId, _acOrgId]
+      );
+      const _acWho = _acName.rows[0] || {};
+      require('../services/inflight').track(
+        require('../services/comment-notices').notifyThreadComment(pool, {
+          key: `attachment:${attId}`,
+          orgId: _acOrgId,
+          actorIds: [userId],
+          actorName: _acWho.name || _acWho.email,
+          body: body,
+        }),
+        'comment notice (86)'
+      );
+    } catch (e) {
+      console.warn('[ai-routes] photo comment notice failed to start:', e && e.message);
+    }
     return `Comment posted on attachment ${attId} (id: ${msgId}).`;
   }
 

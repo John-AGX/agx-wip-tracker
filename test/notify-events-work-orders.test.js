@@ -36,7 +36,9 @@ describe('the catalog', () => {
   test('every row, in order — a new notification is a new settings toggle', () => {
     const keys = events.NOTIFY_EVENTS.map((e) => e.key);
     expect(keys).toEqual([
-      'agent_task', 'scribe_draft', 'messages', 'task_due', 'event_reminder', 'reminder', 'schedule_assignment',
+      // comment_posted sits next to 'messages' because it is the same family:
+      // both are somebody talking to you. It is NOT in the Money group.
+      'agent_task', 'scribe_draft', 'messages', 'comment_posted', 'task_due', 'event_reminder', 'reminder', 'schedule_assignment',
       ...WORK_ORDER_KEYS,
       'job_assignment',
       ...MONEY_KEYS,

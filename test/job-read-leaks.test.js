@@ -114,8 +114,12 @@ describe('a guessed id no longer returns another tenant\'s label', () => {
     const fn = fnBody(MSG, 'describeThread');
     expect(fn).toMatch(/FROM jobs WHERE id = \$1 AND \(organization_id = \$2 OR organization_id IS NULL\)/);
     expect(fn).toMatch(/FROM leads WHERE id = \$1 AND \(organization_id = \$2 OR organization_id IS NULL\)/);
+    // THREE callers now: the two inbox reads, and the comment notice, which
+    // borrows the label for its subject line rather than resolving the
+    // entity a second time. The count is pinned so a fourth caller has to
+    // come through here and prove it passes an org too.
     const calls = MSG.split(/(?<!function )describeThread\(/).slice(1);
-    expect(calls.length).toBe(2);
+    expect(calls.length).toBe(3);
     for (const c of calls) expect(c.slice(0, 120)).toMatch(/organization_id/);
   });
 

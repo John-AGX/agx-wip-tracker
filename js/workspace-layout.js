@@ -58,6 +58,11 @@
     { id: 'job-photos',        label: 'Photos',     icon: 'photos' },
     { id: 'job-files',         label: 'Files',      icon: 'folder' },
     { id: 'job-daily-logs',    label: 'Daily Logs', icon: 'daily-logs' },
+    // The job's conversation. js/messaging.js mountInline was written for
+    // "the job detail page's Comments slot" and the slot was never built, so
+    // the thread it renders had no reading surface at all — a comment could
+    // be written (by 86, or through the photo viewer) and never seen again.
+    { id: 'job-comments',      label: 'Comments',   icon: 'conversations' },
     { id: 'job-reports',       label: 'Reports',    icon: 'document-text' },
     // Service Tickets — the WORK ORDER tier above tasks (js/service-tickets.js).
     // It sits with the field/document cluster because that is who a work order
@@ -1714,6 +1719,7 @@
       'job-photos': 'renderJobPhotos',
       'job-files': 'renderJobFiles',
       'job-daily-logs': 'renderJobDailyLogs',
+      'job-comments': 'renderJobComments',
       'job-reports': 'renderJobReports',
       'job-service-tickets': 'renderJobServiceTickets'
     };
@@ -2103,6 +2109,7 @@
       'job-photos': 'renderJobPhotos',
       'job-files': 'renderJobFiles',
       'job-daily-logs': 'renderJobDailyLogs',
+      'job-comments': 'renderJobComments',
       'job-reports': 'renderJobReports',
       'job-service-tickets': 'renderJobServiceTickets'
     };

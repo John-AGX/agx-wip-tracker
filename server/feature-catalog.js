@@ -526,9 +526,22 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.84';
+const APP_VERSION = '1.85';
 
 const releases = [
+  {
+    version: '1.85',
+    date: '2026-10-02',
+    name: 'Comments have a home, and somebody hears them',
+    summary: 'Every job, lead, proposal and photo has had a comment thread since messaging shipped. There was no page that showed one, and only a direct message ever produced a notice.',
+    changes: [
+      { type: 'new', text: 'Every job now has a Comments tab. The conversation was already there — on jobs, leads, proposals and every photo — and there was nowhere to read it. The widget that draws a thread had been written for this exact slot, and the slot was never built, so a comment on a job could be written and never seen again. It sits next to Daily Logs, it is linkable (/jobs/… /job-comments), and anybody who can open the job can read and add to it.' },
+      { type: 'new', text: 'A comment now tells the people in the conversation. Anyone who has posted in that thread hears about the next comment, and on a photo the person who uploaded it hears too — which is the only reason the first comment on a photo ever reaches anybody, since the owner has usually said nothing yet. One switch, Comments, under My Account → Notifications.' },
+      { type: 'improved', text: 'It tells the conversation, not the company. The job’s PM does not get a notice for every comment on all forty of their jobs, and no notice is addressed to a permission’s holders. Posting once is how you join a conversation — the same rule your inbox already uses to decide which threads are yours. You are never told about your own comment, including when an admin is working as you.' },
+      { type: 'fixed', text: 'When 86 added a comment to a photo, nobody was told. The comment was saved and the thread was correct; it simply produced no notice, so asking 86 to flag something on a picture reached the person it was for only if they happened to open it. It now notifies on exactly the same terms as a comment typed in by hand.' },
+      { type: 'improved', text: 'A notice goes somewhere useful. A comment on a job opens the job’s new Comments tab; a comment on a photo opens the Photos tab of the job the photo hangs on. A run of comments in one thread arrives as one notification on your phone that updates, rather than a stack, and a paste storm stops after a handful instead of filling your inbox.' },
+    ],
+  },
   {
     version: '1.84',
     date: '2026-10-01',

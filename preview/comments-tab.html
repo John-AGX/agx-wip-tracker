@@ -1,0 +1,83 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Comments tab — preview</title>
+  <!-- Proves the job Comments tab PAINTS from the shipped files, and proves
+       the one thing the renderer is built around: mountInline writes
+       display:flex onto its host, so the host must not be the pane.
+       Panes 1 and 2 are the real .sub-tab-content-job markup; only the active
+       one may be visible. js/messaging.js and js/job-media.js are loaded
+       unmodified; only p86Api is a stub. -->
+  <style>
+    body { margin: 0; padding: 20px; background: #0b0b0f; color: #e5e7eb;
+           font-family: -apple-system, Segoe UI, Arial, sans-serif; }
+    :root { --border:#2a2a3a; --card-bg:#141419; --surface:#17171c; --text:#fff;
+            --text-dim:#888; --accent:#22d3ee; }
+    /* the real rules, copied from css/styles.css */
+    .sub-tab-content-job { display: none; }
+    .sub-tab-content-job.active { display: block; }
+    h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .4px;
+         color: #9ca3af; margin: 22px 0 8px; }
+    #verdict { margin: 18px 0; padding: 12px 14px; border-radius: 8px;
+               font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+    .ok { background: rgba(34,197,94,.12); border: 1px solid #16a34a; }
+    .bad { background: rgba(248,113,113,.12); border: 1px solid #f87171; }
+    button.primary { background:#4f8cff; color:#fff; border:none; border-radius:6px; }
+  </style>
+</head>
+<body>
+  <h3>#job-comments (active)</h3>
+  <div id="job-comments" class="sub-tab-content-job active"></div>
+
+  <h3>#job-files (inactive — must stay invisible)</h3>
+  <div id="job-files" class="sub-tab-content-job">files pane content</div>
+
+  <div id="verdict"></div>
+
+  <script>
+    // The only stub: the server. Three messages and a markRead.
+    var posted = [];
+    window.p86Api = {
+      messages: {
+        thread: function (key) {
+          return Promise.resolve({ messages: [
+            { id: 'm1', user_id: 12, user_name: 'Sam', body: 'Soffit on the north side is short two sticks.', created_at: new Date(Date.now() - 7200e3).toISOString() },
+            { id: 'm2', user_id: 10, user_name: 'Dana', body: 'Ordering today — it will be on site Thursday.', created_at: new Date(Date.now() - 3600e3).toISOString() },
+            { id: 'm3', user_id: 13, user_name: 'Reza', body: 'Crew is on the back elevation until then.', created_at: new Date(Date.now() - 600e3).toISOString() }
+          ].concat(posted) });
+        },
+        markRead: function () { return Promise.resolve({}); },
+        post: function (key, body) {
+          posted.push({ id: 'm' + (4 + posted.length), user_id: 10, user_name: 'Dana', body: body, created_at: new Date().toISOString() });
+          return Promise.resolve({});
+        },
+        recent: function () { return Promise.resolve({ total_unread: 0 }); }
+      }
+    };
+    window.appState = { currentUser: { id: 10 } };
+  </script>
+  <script src="../js/messaging.js"></script>
+  <script src="../js/job-media.js"></script>
+  <script>
+    window.renderJobComments('j1');
+    setTimeout(function () {
+      var pane = document.getElementById('job-comments');
+      var files = document.getElementById('job-files');
+      var host = pane.firstElementChild;
+      var fails = [];
+      if (!host || host.className !== 'job-comments-host') fails.push('no wrapper inside the pane');
+      if (pane.style.display) fails.push('the PANE was given an inline display (' + pane.style.display + ') — it would beat .sub-tab-content-job{display:none} and paint over other tabs');
+      if (host && getComputedStyle(host).display !== 'flex') fails.push('the wrapper is not a flex column');
+      if (getComputedStyle(files).display !== 'none') fails.push('the inactive pane became visible');
+      if (!/short two sticks/.test(pane.textContent)) fails.push('the thread did not paint');
+      if (!pane.querySelector('[data-thread-send]')) fails.push('no composer');
+      var v = document.getElementById('verdict');
+      v.className = fails.length ? 'bad' : 'ok';
+      v.textContent = fails.length
+        ? 'FAIL\n- ' + fails.join('\n- ')
+        : 'PASS — thread painted, composer present, the flex column is on the WRAPPER and the pane kept its own display, and the inactive pane is still hidden.';
+    }, 350);
+  </script>
+</body>
+</html>
