@@ -6363,6 +6363,153 @@ async function initSchema() {
       ON live_participants(stream_key) WHERE stream_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_live_participants_room
       ON live_participants(room_id, joined_at);
+
+    -- ══ PRODUCTION PLANNING ═════════════════════════════════════════════
+    -- The service manager's checklist, filled in before the Thursday WIP
+    -- meeting: every open service job, grouped by property, with how far
+    -- along it is and what is left.
+    --
+    -- WHY THIS IS ITS OWN RECORD AND NOT A FIELD ON THE JOB. A job's percent
+    -- is DERIVED — js/progress-core.js rolls the scope cells up by revenue —
+    -- and the scalar it caches (data.pctComplete) drives PO/sub cost accrual
+    -- on both the browser and the server AND is the one figure an outside
+    -- owner sees in a money-redacted Live Room. A manager's Thursday estimate
+    -- must not move any of that on its way in. So it lands here first, and
+    -- reaches the job only when somebody APPLIES it, one row at a time.
+    --
+    -- WHY A SNAPSHOT OF THE JOB'S IDENTITY LIVES ON THE ROW. The list is built
+    -- from the jobs that were open at the moment it was raised. A job renamed,
+    -- renumbered or closed mid-week must not rewrite last Thursday's sheet —
+    -- the sheet is a record of what was discussed. job_id stays, so live data
+    -- can be shown beside the snapshot, but the snapshot is what prints.
+    --
+    -- TWO PRIOR ATTEMPTS AT THIS ARE IN THE REPO'S HISTORY AND BOTH WERE
+    -- RETIRED: "Thursday WIP Meeting Accruals" (a manual weekly capture) and
+    -- the 3 AM daily snapshot that replaced it — the latter because it was a
+    -- browser setTimeout that only fired if a tab happened to be open, and it
+    -- silently lost days. Nothing here is written by a client timer. Every row
+    -- is written by an authenticated route or a guest link, on a real action.
+    CREATE TABLE IF NOT EXISTS production_checklists (
+      id                TEXT PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      title             TEXT NOT NULL,
+      -- The meeting this sheet is for. A DATE, not a timestamp: "Thursday" is
+      -- a day on a wall calendar, and the calendar-vs-instant ledger
+      -- (test/calendar-dates-vs-instants.test.js) exists because that
+      -- distinction has been got wrong here before.
+      meeting_date      DATE,
+      status            TEXT NOT NULL DEFAULT 'open',   -- open | closed
+      notes             TEXT,
+      created_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      closed_at         TIMESTAMPTZ,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    DO $production_checklists_status_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'production_checklists_status_chk') THEN
+        ALTER TABLE production_checklists ADD CONSTRAINT production_checklists_status_chk
+          CHECK (status IN ('open','closed'));
+      END IF;
+    END $production_checklists_status_chk$;
+    CREATE INDEX IF NOT EXISTS idx_production_checklists_org
+      ON production_checklists(organization_id, meeting_date DESC, created_at DESC);
+
+    -- One row per job on one sheet.
+    --
+    -- pct is 0-100 in steps of 25 (the control the manager actually uses) and
+    -- is the MANAGER'S number, never the system's. applied_at/applied_pct
+    -- record that it was pushed onto the job's scope line, so a row cannot be
+    -- applied twice by accident and the sheet can show what has landed.
+    CREATE TABLE IF NOT EXISTS production_checklist_rows (
+      id                TEXT PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      checklist_id      TEXT NOT NULL REFERENCES production_checklists(id) ON DELETE CASCADE,
+      job_id            TEXT NOT NULL,
+      -- Snapshot, taken when the sheet was raised. See the table comment.
+      job_number        TEXT,
+      job_title         TEXT,
+      client_label      TEXT,
+      address           TEXT,
+      contract_amount   NUMERIC(14,2),
+      -- The manager's answer.
+      pct               INTEGER NOT NULL DEFAULT 0,
+      done              BOOLEAN NOT NULL DEFAULT FALSE,
+      note              TEXT,
+      -- Who last moved it. actor_kind tells a signed-in person from a link:
+      -- a bearer token has no identity, so the honest record is "this arrived
+      -- through the link sent to <recipient>" — the same rule
+      -- service_ticket_events states.
+      updated_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      updated_actor     TEXT,
+      updated_at        TIMESTAMPTZ,
+      applied_at        TIMESTAMPTZ,
+      applied_pct       INTEGER,
+      applied_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      sort_key          TEXT,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    DO $production_checklist_rows_pct_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'production_checklist_rows_pct_chk') THEN
+        ALTER TABLE production_checklist_rows ADD CONSTRAINT production_checklist_rows_pct_chk
+          CHECK (pct >= 0 AND pct <= 100);
+      END IF;
+    END $production_checklist_rows_pct_chk$;
+    -- One row per job per sheet. Re-running the builder must top up, not
+    -- duplicate.
+    --
+    -- organization_id leads the key even though checklist_id already implies
+    -- it through the FK: test/org-write-predicate-invariant.test.js holds
+    -- "every ON CONFLICT on a tenant table is keyed on the tenant" as an
+    -- invariant of the STATEMENT, so a cross-tenant match is impossible by
+    -- construction rather than by a WHERE somebody has to remember.
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_production_checklist_rows
+      ON production_checklist_rows(organization_id, checklist_id, job_id);
+    CREATE INDEX IF NOT EXISTS idx_production_checklist_rows_org
+      ON production_checklist_rows(organization_id, checklist_id);
+
+    -- The link John sends the service manager.
+    --
+    -- Modelled on service_ticket_shares, NOT report_shares, and the reason is
+    -- the same one stated there: report_shares freezes a "document" snapshot
+    -- because a report is a finished thing, whereas a checklist being filled
+    -- in is LIVE. The guest read joins the sheet.
+    --
+    -- token_hash, not token: task_shares keeps the raw token, so a leaked
+    -- backup of that table hands over every live link. Not repeated here.
+    --
+    -- scope is view | update. 'update' is narrower than it sounds and narrower
+    -- than an 'edit' would be — it is the three fields the sheet exists to
+    -- collect (pct, done, note) and nothing else. A link holder can never add
+    -- a row, remove one, apply anything to a job, or see another sheet.
+    CREATE TABLE IF NOT EXISTS production_checklist_shares (
+      id                TEXT PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      checklist_id      TEXT NOT NULL REFERENCES production_checklists(id) ON DELETE CASCADE,
+      token_hash        TEXT NOT NULL UNIQUE,
+      scope             TEXT NOT NULL DEFAULT 'view',   -- view | update
+      -- Default TRUE everywhere a share exists in this app. The sheet shows
+      -- contract value only when the sender deliberately turns this off.
+      hide_financials   BOOLEAN NOT NULL DEFAULT TRUE,
+      recipient_email   TEXT,
+      recipient_name    TEXT,
+      expires_at        TIMESTAMPTZ NOT NULL,
+      opened_at         TIMESTAMPTZ,
+      revoked_at        TIMESTAMPTZ,
+      last_used_at      TIMESTAMPTZ,
+      view_count        INTEGER NOT NULL DEFAULT 0,
+      created_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    DO $production_checklist_shares_scope_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'production_checklist_shares_scope_chk') THEN
+        ALTER TABLE production_checklist_shares ADD CONSTRAINT production_checklist_shares_scope_chk
+          CHECK (scope IN ('view','update'));
+      END IF;
+    END $production_checklist_shares_scope_chk$;
+    CREATE INDEX IF NOT EXISTS idx_production_checklist_shares_list
+      ON production_checklist_shares(checklist_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_production_checklist_shares_org
+      ON production_checklist_shares(organization_id, created_at DESC);
   `);
 
   // ── Performance indexes: 86's read-tool surface (2026-05-23) ──────

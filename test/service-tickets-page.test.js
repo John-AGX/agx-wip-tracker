@@ -1298,7 +1298,12 @@ describe('index.html', () => {
     expect(group.querySelector(':scope > .app-nav-group-label').textContent.trim()).toBe('Operations');
     const prev = row.previousElementSibling;
     expect(prev.matches('.app-nav-parent[data-accordion="jobs"]')).toBe(true);
-    expect(row.nextElementSibling.matches('.tab-btn[data-tab="schedule"]')).toBe(true);
+    // Schedule became an .app-nav-parent accordion when Production Planning
+    // landed (1.85) — it is still the next row, it is just no longer a bare
+    // button. The assertion this replaces was about POSITION, and the position
+    // is unchanged; only the element Schedule renders as moved.
+    expect(row.nextElementSibling.matches('.app-nav-parent[data-accordion="schedule"]')).toBe(true);
+    expect(row.nextElementSibling.querySelector('[data-tab="schedule"]')).toBeTruthy();
     expect(row.getAttribute('data-cap')).toBe(CAPS);
     expect(row.textContent.trim()).toBe('Service Tickets');
     expect(row.hasAttribute('data-p86-icon')).toBe(true);

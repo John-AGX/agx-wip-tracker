@@ -64,7 +64,16 @@ const DIRECT = [
   'estimates', 'field_tools', 'inbound_emails', 'jobs', 'leads', 'list_views',
   'managed_agent_registry', 'markets', 'oauth_tokens', 'org_folder_templates',
   'org_mcp_servers', 'org_memory', 'org_skill_packs', 'org_tags',
-  'payload_templates', 'payloads', 'plan_versions', 'plans', 'projects',
+  'payload_templates', 'payloads', 'plan_versions', 'plans',
+  // The service manager's Thursday checklist. All three carry their own
+  // organization_id NOT NULL with a cascading FK — the same shape the whole
+  // service_ticket_* family above is classified `direct` for, including its
+  // shares table. The rows and shares could be argued as `parent`, but the
+  // house precedent is that a NOT NULL column plus ON DELETE CASCADE is an
+  // anchor, not a cache.
+  'production_checklist_rows', 'production_checklist_shares',
+  'production_checklists',
+  'projects',
   'receipt_ocr_feedback', 'receipts', 'reminders', 'report_share_comments',
   'report_shares', 'reports',
   'service_ticket_events', 'service_ticket_flags', 'service_ticket_labor',

@@ -1,0 +1,229 @@
+/* Production planning — the service manager's Thursday checklist.
+ *
+ * Lives inside #schedule-root, so it inherits the app's theme variables and
+ * sets none of its own palette. Every colour below is var(--x, fallback) in
+ * the house style, so the page follows the app's light/dark rather than
+ * carrying a second opinion about it.
+ *
+ * The layout is a field clipboard: one sticky tally, then job cards grouped by
+ * property, each with a big tap target for "done" and a segmented percent. It
+ * is used on a phone in a car park as often as at a desk, so the check and the
+ * percent buttons stay finger-sized at every width. */
+
+.pp-page {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 18px 16px 60px;
+  color: var(--text, #e6e6e6);
+}
+
+/* ── Header ─────────────────────────────────────────────────────────── */
+.pp-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.pp-title { margin: 2px 0 0; font-size: 20px; font-weight: 700; }
+.pp-sub { margin: 4px 0 0; font-size: 12.5px; color: var(--text-dim, #9aa0a8); }
+.pp-dim { color: var(--text-dim, #9aa0a8); }
+.pp-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.pp-back {
+  background: none; border: 0; padding: 0 0 4px; cursor: pointer;
+  color: var(--text-dim, #9aa0a8); font-size: 12px;
+}
+.pp-back:hover { color: var(--text, #e6e6e6); }
+
+.pp-btn {
+  background: var(--overlay-light, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  color: var(--text, #e6e6e6);
+  border-radius: 6px; padding: 7px 12px; font-size: 12.5px; cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.pp-btn:hover { background: var(--row-hover, rgba(255, 255, 255, 0.10)); }
+.pp-btn-sm { padding: 4px 9px; font-size: 11.5px; }
+.pp-btn-primary {
+  background: rgba(79, 140, 255, 0.18);
+  border-color: rgba(79, 140, 255, 0.5);
+  color: #9cc1ff; font-weight: 600;
+}
+.pp-btn-primary:hover { background: rgba(79, 140, 255, 0.28); }
+
+/* ── Tally ──────────────────────────────────────────────────────────── */
+.pp-tally {
+  position: sticky; top: 0; z-index: 4;
+  display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-end;
+  padding: 12px 0; margin-bottom: 10px;
+  background: var(--bg, #17181c);
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.10));
+}
+.pp-stat b {
+  display: block; font-size: 24px; font-weight: 700; line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.pp-stat span {
+  font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--text-dim, #9aa0a8);
+}
+.pp-stat-done b { color: #34d399; }
+.pp-stat-prog b { color: #fbbf24; }
+.pp-overall { flex: 1 1 200px; min-width: 0; font-size: 11.5px; }
+.pp-bar {
+  height: 8px; border-radius: 4px; overflow: hidden; margin-top: 4px;
+  background: var(--surface2, rgba(255, 255, 255, 0.10));
+}
+.pp-bar > i { display: block; height: 100%; background: #4f8cff; transition: width .25s; }
+
+/* ── Filters ────────────────────────────────────────────────────────── */
+.pp-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.pp-chip {
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  background: var(--surface, rgba(255, 255, 255, 0.03));
+  color: var(--text, #e6e6e6);
+  border-radius: 999px; padding: 6px 13px; font-size: 12px; cursor: pointer;
+}
+.pp-chip[aria-pressed="true"] {
+  background: var(--text, #e6e6e6); color: var(--bg, #17181c);
+  border-color: var(--text, #e6e6e6); font-weight: 600;
+}
+.pp-search {
+  box-sizing: border-box;
+  flex: 1 1 200px; min-width: 0;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  background: var(--surface, rgba(255, 255, 255, 0.03));
+  color: var(--text, #e6e6e6);
+  border-radius: 999px; padding: 6px 13px; font-size: 12.5px;
+}
+
+/* ── Index ──────────────────────────────────────────────────────────── */
+.pp-index { list-style: none; margin: 0; padding: 0; }
+.pp-index-row {
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.10));
+  border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; cursor: pointer;
+  background: var(--surface, rgba(255, 255, 255, 0.02));
+}
+.pp-index-row:hover { background: var(--row-hover, rgba(255, 255, 255, 0.06)); }
+.pp-index-main { display: flex; gap: 8px; align-items: center; }
+.pp-index-title { font-weight: 600; font-size: 14px; }
+.pp-index-meta { font-size: 11.5px; color: var(--text-dim, #9aa0a8); margin-top: 3px; }
+
+/* ── Groups ─────────────────────────────────────────────────────────── */
+.pp-group { margin-bottom: 20px; }
+.pp-group-head {
+  display: flex; justify-content: space-between; gap: 8px; align-items: baseline;
+  margin: 0 0 8px; font-size: 12px; font-weight: 700;
+  letter-spacing: .05em; text-transform: uppercase;
+  color: var(--text-dim, #9aa0a8);
+}
+.pp-group-head small { font-weight: 500; letter-spacing: 0; text-transform: none; }
+
+/* ── A job row ──────────────────────────────────────────────────────── */
+.pp-row {
+  display: grid; grid-template-columns: 52px 1fr; gap: 10px;
+  background: var(--surface, rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.10));
+  border-radius: 8px; padding: 12px; margin-bottom: 8px;
+}
+.pp-row.is-done { background: rgba(52, 211, 153, 0.07); border-color: rgba(52, 211, 153, 0.30); }
+
+.pp-check {
+  width: 52px; height: 52px; border-radius: 10px; cursor: pointer;
+  border: 2px solid var(--border, rgba(255, 255, 255, 0.18));
+  background: var(--overlay-light, rgba(255, 255, 255, 0.04));
+  color: transparent;
+  display: grid; place-items: center;
+}
+.pp-check svg { width: 26px; height: 26px; }
+.pp-row.is-done .pp-check { background: #2f7d4f; border-color: #2f7d4f; color: #fff; }
+
+.pp-row-main { min-width: 0; }
+.pp-row-top { display: flex; flex-wrap: wrap; gap: 4px 9px; align-items: baseline; }
+.pp-num {
+  font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11.5px; color: #4f8cff;
+}
+.pp-name { font-weight: 600; font-size: 14px; }
+.pp-row.is-done .pp-name { text-decoration: line-through; text-decoration-color: #2f7d4f; }
+.pp-tag {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .06em;
+  padding: 1px 6px; border-radius: 3px;
+  background: rgba(251, 191, 36, 0.16); color: #fbbf24;
+}
+.pp-contract {
+  font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11.5px; color: var(--text-dim, #9aa0a8);
+}
+.pp-pill {
+  margin-left: auto; font-size: 10px; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; padding: 2px 8px; border-radius: 999px;
+  white-space: nowrap;
+  background: var(--surface2, rgba(255, 255, 255, 0.08)); color: var(--text-dim, #9aa0a8);
+}
+.pp-pill-prog { background: rgba(251, 191, 36, 0.16); color: #fbbf24; }
+.pp-pill-done { background: #2f7d4f; color: #fff; }
+
+.pp-addr { font-size: 12px; color: var(--text-dim, #9aa0a8); margin-top: 3px; }
+.pp-addr a { color: inherit; }
+
+.pp-progress {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 8px;
+}
+.pp-steps {
+  display: flex; border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  border-radius: 6px; overflow: hidden;
+}
+.pp-steps button {
+  border: 0; border-right: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  background: var(--surface, rgba(255, 255, 255, 0.03));
+  color: var(--text, #e6e6e6);
+  font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11.5px; padding: 8px 0; width: 48px; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.pp-steps button:last-child { border-right: 0; }
+.pp-steps button[aria-pressed="true"] { background: #4f8cff; color: #06142e; font-weight: 700; }
+.pp-mini { flex: 1 1 70px; min-width: 60px; }
+.pp-mini .pp-bar { height: 5px; margin-top: 0; }
+.pp-who { font-size: 11px; }
+.pp-applied { font-size: 11px; color: #34d399; white-space: nowrap; }
+
+.pp-note {
+  /* border-box explicitly, NOT inherited from a global `*` rule. A textarea
+     is content-box by default, so width:100% plus padding and a border
+     overflowed the row by 20px — found at 980px, not on a phone. Scoped to
+     the elements this file sizes rather than asserted globally, so it cannot
+     fight the app's own cascade. */
+  box-sizing: border-box;
+  width: 100%; min-height: 36px; resize: vertical; margin-top: 8px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  background: var(--overlay-light, rgba(255, 255, 255, 0.03));
+  color: var(--text, #e6e6e6);
+  font: inherit; font-size: 12.5px; padding: 7px 9px; border-radius: 6px;
+}
+
+.pp-empty { text-align: center; padding: 36px 10px; color: var(--text-dim, #9aa0a8); }
+
+.pp-check:focus-visible, .pp-chip:focus-visible, .pp-steps button:focus-visible,
+.pp-btn:focus-visible, .pp-note:focus-visible, .pp-search:focus-visible {
+  outline: 2px solid #4f8cff; outline-offset: 2px;
+}
+
+/* ── Phone ──────────────────────────────────────────────────────────── */
+@media (max-width: 560px) {
+  .pp-page { padding: 14px 12px 50px; }
+  .pp-row { grid-template-columns: 44px 1fr; }
+  .pp-check { width: 44px; height: 44px; }
+  /* The percent control keeps a finger-sized target rather than shrinking:
+     this is used standing in a car park. It wraps onto its own line instead. */
+  .pp-steps button { width: 46px; }
+  .pp-pill { margin-left: 0; }
+  .pp-head { flex-direction: column; align-items: stretch; }
+  .pp-head-actions .pp-btn { flex: 1 1 auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-bar > i { transition: none; }
+}

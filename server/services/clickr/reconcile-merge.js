@@ -63,6 +63,7 @@ const PLAIN = {
 const NOT_MOVED = {
   'job_access.job_id': 'moved with conflict handling (moveUnique)',
   'job_subs.job_id': 'moved with conflict handling (moveUnique)',
+  'production_checklist_rows.job_id': 'moved with conflict handling (moveUnique) — one row per job per checklist, so a row only crosses when the survivor is not already on that sheet',
   'node_graphs.job_id': 'one per job: moved only when the survivor has none',
   'lead_graphs.lead_id': 'one per lead: moved only when the survivor has none',
   'file_folders.entity_id': 'folded into same-named survivor folders (moveFolders)',
@@ -128,7 +129,7 @@ async function attachedCounts(db, kind, id, orgId) {
     const n = await count(db, 'SELECT COUNT(*) AS n FROM ' + t + ' WHERE entity_type = $1 AND entity_id = $2', [k.entityType, id]);
     if (n) out[t] = n;
   }
-  const one = kind === 'jobs' ? [['job_access', 'job_id'], ['job_subs', 'job_id'], ['node_graphs', 'job_id']]
+  const one = kind === 'jobs' ? [['job_access', 'job_id'], ['job_subs', 'job_id'], ['node_graphs', 'job_id'], ['production_checklist_rows', 'job_id']]
     : kind === 'leads' ? [['lead_graphs', 'lead_id']] : [];
   for (const [t, c] of one) {
     const n = await count(db, 'SELECT COUNT(*) AS n FROM ' + t + ' WHERE ' + c + ' = $1', [id]);
@@ -319,6 +320,12 @@ async function mergeRecords(db, orgId, kind, loserId, survivorId, userId) {
   if (kind === 'jobs') {
     await moveUnique(db, 'job_access', { idCol: 'job_id', keyCols: ['user_id'] }, loserId, survivorId, moved, kept);
     await moveUnique(db, 'job_subs', { idCol: 'job_id', keyCols: ['sub_id'] }, loserId, survivorId, moved, kept);
+    // A production-planning sheet carries one row per job, so the loser's row
+    // crosses only when the survivor is not already on that checklist —
+    // otherwise the unique index (organization_id, checklist_id, job_id) would
+    // refuse it. The kept count says how many were left behind, which is the
+    // honest answer: the survivor already has a line on that sheet.
+    await moveUnique(db, 'production_checklist_rows', { idCol: 'job_id', keyCols: ['checklist_id'] }, loserId, survivorId, moved, kept);
     await moveOne(db, 'node_graphs', 'job_id', loserId, survivorId, moved, kept);
     // Lead / estimate links the survivor lacks come across.
     const sets = [];

@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.85';
+const APP_VERSION = '1.86';
 
 const releases = [
+  {
+    version: '1.86',
+    date: '2026-10-02',
+    name: 'Production Planning — the checklist for the WIP meeting',
+    summary: 'A new page under Schedule where the service manager ticks off every open service job before Thursday, and you push the agreed numbers onto the WIP one job at a time.',
+    changes: [
+      { type: 'new', text: 'Schedule → Production Planning. Make a checklist and it picks up every open Service and Mid-Tier job as it stands right now, grouped by property, each with how far along it is (0 / 25 / 50 / 75 / 100), a tick for done, and a box for what’s left. A job whose name ends in WO is badged as a work order. Across the top: how many are done, in progress and not started, and one overall figure — plus filters and a search.' },
+      { type: 'new', text: '“Send to…” makes a link you can give the service manager with no login at all. They get the same checklist and can move the same three things — how far along, done, and what’s left — and nothing else. They cannot add a job, remove one, push anything to the WIP, or reach any other sheet. The link expires in 30 days, money is hidden unless you turn it on, and you can switch it off at any time.' },
+      { type: 'new', text: 'APPLY TO WIP, one job at a time. The manager’s percentage is their number — it does not touch the job until you press the button, and then it is written onto that job’s scope line so the WIP recalculates the way it always does. A job with more than one scope line is NOT guessed at: it tells you so and asks which line, because splitting one figure across lines worth different amounts would invent a split nobody decided.' },
+      { type: 'improved', text: 'Nothing is created on a timer. The two previous attempts at a weekly capture both died quietly — one was a browser task that only ran if a tab happened to be open at 3am and silently lost days. A checklist exists because you made one, and refreshing it adds newly-opened jobs without ever removing what was already discussed.' },
+    ],
+  },
   {
     version: '1.85',
     date: '2026-10-02',

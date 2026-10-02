@@ -105,6 +105,9 @@
     var first = String(pathname || '').split('/').filter(Boolean)[0];
     return !!first && redirectedTop(first) !== null;
   }
+  // Schedule's two sub-pages. An allow-list, so /schedule/<anything-else>
+  // falls back to the bare Schedule tab rather than inventing a sub-view.
+  var KNOWN_SCHEDULE_SUBS = ['calendar', 'planning'];
   var KNOWN_TOP_TABS = ['summary', 'my-files', 'field-tools', 'jobs', 'jobshub', 'estimates', 'schedule', 'plans', 'assembly-studio', 'insights', 'admin', 'projects', 'orgmap', 'orgleadsmap', 'console', 'cost-inbox', 'invoices', 'service-tickets', 'my-day', 'my-tasks', 'messages', 'email-hub'];
 
   // ── URL <-> route object ──────────────────────────────────────
@@ -205,6 +208,18 @@
       } else if (parts[1] && KNOWN_EST_SUBS.indexOf(parts[1]) !== -1) {
         route.estSub = parts[1];
       }
+    } else if (top === 'schedule') {
+      // /schedule/planning            — the checklist index
+      // /schedule/planning/<id>       — one checklist, which is the URL
+      //                                 John sends the service manager
+      // /schedule/calendar            — the production grid (the default)
+      if (parts[1] && KNOWN_SCHEDULE_SUBS.indexOf(parts[1]) !== -1) {
+        route.schedSub = parts[1];
+        if (parts[1] === 'planning' && parts[2]) {
+          try { route.schedPlanId = decodeURIComponent(parts[2]); }
+          catch (e) { route.schedPlanId = parts[2]; }
+        }
+      }
     } else if (top === 'admin') {
       if (parts[1] && KNOWN_ADMIN_SUBS.indexOf(parts[1]) !== -1) {
         route.adSub = parts[1];
@@ -278,6 +293,17 @@
       if (route.estId) return '/estimates/edit/' + encodeURIComponent(route.estId);
       if (route.estSub) return '/estimates/' + route.estSub;
       return '/estimates';
+    }
+    if (route.top === 'schedule') {
+      // Must come before the generic `/' + route.top` tail, which already
+      // produces a valid-looking '/schedule' and would silently drop the
+      // sub-page and the id — the same trap documented on /projects above.
+      if (route.schedSub === 'planning') {
+        return route.schedPlanId
+          ? '/schedule/planning/' + encodeURIComponent(route.schedPlanId)
+          : '/schedule/planning';
+      }
+      return '/schedule';
     }
     if (route.top === 'my-files') return '/files';
     if (route.top === 'admin') {
@@ -389,6 +415,20 @@
       // trap as the client editor — a session restore must not reopen an
       // edit form). The URL stays /subs while the editor is up.
       if (estSub && KNOWN_EST_SUBS.indexOf(estSub) !== -1) route.estSub = estSub;
+    } else if (top === 'schedule') {
+      // The active sub-view is owned by js/schedule.js and persisted per
+      // device, so it is asked rather than read off a class — the two
+      // nav children share data-tab="schedule" and switchTab lights both.
+      var schedSub = null;
+      try {
+        schedSub = localStorage.getItem('p86_schedule_subtab') === 'planning' ? 'planning' : 'calendar';
+      } catch (e) { schedSub = null; }
+      if (schedSub === 'planning') {
+        route.schedSub = 'planning';
+        var pid = (window.p86ProductionPlanning && typeof window.p86ProductionPlanning.currentId === 'function')
+          ? window.p86ProductionPlanning.currentId() : null;
+        if (pid) route.schedPlanId = pid;
+      }
     } else if (top === 'admin') {
       var adEl = document.querySelector('[data-admin-subtab].active');
       var adSub = adEl ? adEl.getAttribute('data-admin-subtab') : null;
@@ -562,6 +602,23 @@
         else if (route.estSub === 'users') virtual = 'users';
         else virtual = 'estimates';   // covers estSub='list' and undefined
         window.markVirtualTabActive(virtual);
+      }
+      if (route.top === 'schedule') {
+        // switchTab('schedule') has already run and called renderSchedule(),
+        // which paints whichever sub-view was last used. A deep link has to
+        // override that, and switchScheduleSubTab repaints.
+        var schedWant = route.schedSub || 'calendar';
+        if (typeof window.switchScheduleSubTab === 'function') window.switchScheduleSubTab(schedWant);
+        if (typeof window.markVirtualTabActive === 'function') {
+          window.markVirtualTabActive('schedule-' + schedWant);
+        }
+        // A link that names a checklist opens THAT checklist. No deferral
+        // to openEntities(): the planning module fetches its own data and
+        // reads nothing out of appData, so it does not wait on the app load.
+        if (route.schedPlanId && window.p86ProductionPlanning &&
+            typeof window.p86ProductionPlanning.render === 'function') {
+          window.p86ProductionPlanning.render({ id: route.schedPlanId });
+        }
       }
       if (route.top === 'admin' && route.adSub && typeof window.switchAdminSubTab === 'function') {
         var origAdSub = window.switchAdminSubTab.__p86RouterOrig || window.switchAdminSubTab;

@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!-- The URL IS the credential. Both metas are the page-level twin of the three
+     headers /pp/:token sets in server/index.js. -->
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Production planning</title>
+<!--
+  THE GUEST CHECKLIST — the sheet John sends the service manager.
+
+  SELF-CONTAINED BY RULE. This page COPIES the app's markup and tokens and
+  loads NO app code: every real renderer in the SPA takes an id and reaches for
+  app state itself, so loading one here would drag the whole app in behind it
+  along with its auth assumptions. Zero script tags and zero app stylesheets —
+  test/guest-pages-no-app-code.test.js holds that as an equality, and it
+  checks the WHOLE file, because a page that merely names an app path is one
+  copy-paste away from loading it.
+
+  WHAT THE HOLDER CAN DO. Three fields on one sheet — how far along, done, and
+  what is left — and nothing else. The server decides that, not this page: the
+  read returns can_update and the page believes it. There is no door here for
+  adding a row, applying anything to a job, or reaching another sheet.
+
+  WHAT THE HOLDER CAN SEE. Whatever the share's hide_financials allows, which
+  defaults to hiding money. Contract value is the only money that can ever
+  appear, and only when the sender turned the flag off deliberately.
+-->
+<style>
+  :root{
+    --bg:#14161a; --surface:#1b1e24; --surface2:#232730; --text:#e8eaed;
+    --text-dim:#9aa2ad; --border:#2d323c; --accent:#4f8cff;
+    --done:#34d399; --done-bg:rgba(52,211,153,.10); --prog:#fbbf24;
+    color-scheme:dark;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#f4f5f7; --surface:#ffffff; --surface2:#eceef2; --text:#1b1e24;
+      --text-dim:#5d6671; --border:#d8dce3; --accent:#2563eb;
+      --done:#15803d; --done-bg:rgba(21,128,61,.08); --prog:#b45309;
+      color-scheme:light;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       padding-top:env(safe-area-inset-top,0);padding-bottom:env(safe-area-inset-bottom,0)}
+  .wrap{max-width:860px;margin:0 auto;padding:18px 16px 60px}
+  h1{font-size:20px;margin:0}
+  .sub{color:var(--text-dim);font-size:13px;margin:4px 0 0}
+  .tally{position:sticky;top:0;z-index:3;display:flex;flex-wrap:wrap;gap:18px;
+         align-items:flex-end;padding:12px 0;margin:12px 0 10px;background:var(--bg);
+         border-bottom:1px solid var(--border)}
+  .stat b{display:block;font-size:24px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+  .stat span{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim)}
+  .stat.done b{color:var(--done)} .stat.prog b{color:var(--prog)}
+  .overall{flex:1 1 200px;min-width:0;font-size:12px;color:var(--text-dim)}
+  .bar{height:8px;border-radius:4px;overflow:hidden;background:var(--surface2);margin-top:4px}
+  .bar>i{display:block;height:100%;background:var(--accent);transition:width .25s}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+  .chip{border:1px solid var(--border);background:var(--surface);color:var(--text);
+        border-radius:999px;padding:6px 13px;font-size:12px;cursor:pointer}
+  .chip[aria-pressed="true"]{background:var(--text);color:var(--bg);border-color:var(--text);font-weight:600}
+  #q{flex:1 1 200px;min-width:0;border:1px solid var(--border);background:var(--surface);
+     color:var(--text);border-radius:999px;padding:6px 13px;font-size:13px}
+  .group{margin-bottom:20px}
+  .group h2{display:flex;justify-content:space-between;gap:8px;align-items:baseline;
+            margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:.05em;
+            text-transform:uppercase;color:var(--text-dim)}
+  .group h2 small{font-weight:500;letter-spacing:0;text-transform:none}
+  .row{display:grid;grid-template-columns:52px 1fr;gap:10px;background:var(--surface);
+       border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px}
+  .row.is-done{background:var(--done-bg);border-color:var(--done)}
+  .check{width:52px;height:52px;border-radius:10px;border:2px solid var(--border);
+         background:var(--surface2);color:transparent;display:grid;place-items:center;cursor:pointer}
+  .check svg{width:26px;height:26px}
+  .row.is-done .check{background:var(--done);border-color:var(--done);color:#fff}
+  .main{min-width:0}
+  .top{display:flex;flex-wrap:wrap;gap:4px 9px;align-items:baseline}
+  .num{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:var(--accent)}
+  .name{font-weight:600;font-size:14px}
+  .row.is-done .name{text-decoration:line-through;text-decoration-color:var(--done)}
+  .tag{font-size:9.5px;font-weight:700;letter-spacing:.06em;padding:1px 6px;border-radius:3px;
+       background:rgba(251,191,36,.16);color:var(--prog)}
+  .contract{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:var(--text-dim)}
+  .pill{margin-left:auto;font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+        padding:2px 8px;border-radius:999px;background:var(--surface2);color:var(--text-dim);white-space:nowrap}
+  .pill.prog{background:rgba(251,191,36,.16);color:var(--prog)}
+  .pill.done{background:var(--done);color:var(--bg)}
+  .addr{font-size:12px;color:var(--text-dim);margin-top:3px}
+  .addr a{color:inherit}
+  .prog-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;margin-top:8px}
+  .steps{display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+  .steps button{border:0;border-right:1px solid var(--border);background:var(--surface);
+                color:var(--text);font-family:ui-monospace,Menlo,Consolas,monospace;
+                font-size:11.5px;padding:8px 0;width:48px;cursor:pointer;font-variant-numeric:tabular-nums}
+  .steps button:last-child{border-right:0}
+  .steps button[aria-pressed="true"]{background:var(--accent);color:#06142e;font-weight:700}
+  .mini{flex:1 1 70px;min-width:60px}
+  .mini .bar{height:5px;margin-top:0}
+  .who{font-size:11px;color:var(--text-dim)}
+  textarea{box-sizing:border-box;width:100%;min-height:36px;resize:vertical;margin-top:8px;
+           border:1px solid var(--border);background:var(--bg);color:var(--text);
+           font:inherit;font-size:13px;padding:7px 9px;border-radius:6px}
+  button:disabled,textarea:disabled{opacity:.6;cursor:not-allowed}
+  .notice{margin:10px 0;padding:9px 12px;border-radius:6px;font-size:13px;
+          background:rgba(251,191,36,.12);color:var(--text)}
+  .empty{text-align:center;padding:40px 10px;color:var(--text-dim)}
+  .check:focus-visible,.chip:focus-visible,.steps button:focus-visible,
+  textarea:focus-visible,#q:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  @media (max-width:560px){
+    .row{grid-template-columns:44px 1fr}
+    .check{width:44px;height:44px}
+    .steps button{width:46px}
+    .pill{margin-left:0}
+  }
+  @media (prefers-reduced-motion:reduce){.bar>i{transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="title">Production planning</h1>
+    <p class="sub" id="sub">Loading…</p>
+  </header>
+  <div id="notice" class="notice" hidden></div>
+  <div class="tally" id="tally" hidden>
+    <div class="stat done"><b id="sDone">0</b><span>Done</span></div>
+    <div class="stat prog"><b id="sProg">0</b><span>In progress</span></div>
+    <div class="stat"><b id="sIdle">0</b><span>Not started</span></div>
+    <div class="overall"><span id="sPct">Overall 0% complete</span><div class="bar"><i id="sBar" style="width:0%"></i></div></div>
+  </div>
+  <div class="controls" id="controls" hidden>
+    <button class="chip" data-f="all" aria-pressed="true">All</button>
+    <button class="chip" data-f="idle" aria-pressed="false">Not started</button>
+    <button class="chip" data-f="prog" aria-pressed="false">In progress</button>
+    <button class="chip" data-f="done" aria-pressed="false">Done</button>
+    <input id="q" type="search" placeholder="Search job, address, property" aria-label="Search">
+  </div>
+  <main id="list"></main>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // The token is the LAST path segment of /pp/<token>. Read from the path and
+  // never from a query string: a query is far more likely to be logged by a
+  // proxy or kept in an analytics payload.
+  var TOKEN = (location.pathname.split('/').filter(Boolean).pop() || '');
+  var WELL_FORMED = /^[a-f0-9]{64}$/;
+
+  var sheet = null;
+  var filter = 'all';
+  var query = '';
+  var timers = {};
+  var CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    if (s == null) return '';
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function money(n) {
+    var v = Number(n);
+    return isFinite(v) ? '$' + Math.round(v).toLocaleString() : '';
+  }
+  function when(ts) {
+    if (!ts) return '';
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' +
+      d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+  function notice(msg) {
+    var n = $('notice');
+    n.textContent = msg || '';
+    n.hidden = !msg;
+  }
+  function statusOf(r) { var p = Number(r.pct) || 0; return p >= 100 ? 'done' : p > 0 ? 'prog' : 'idle'; }
+
+  function api(path, opts) {
+    var o = opts || {};
+    return fetch('/api/production-planning' + path, {
+      method: o.method || 'GET',
+      headers: o.body ? { 'Content-Type': 'application/json' } : undefined,
+      body: o.body ? JSON.stringify(o.body) : undefined
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || 'Something went wrong.');
+        return j;
+      });
+    });
+  }
+
+  function visible(r) {
+    if (filter !== 'all' && statusOf(r) !== filter) return false;
+    if (!query) return true;
+    return [r.job_number, r.job_title, r.client_label, r.address]
+      .filter(Boolean).join(' ').toLowerCase().indexOf(query) !== -1;
+  }
+
+  function render() {
+    if (!sheet) return;
+    $('title').textContent = sheet.title || 'Production planning';
+    var n = (sheet.rows || []).length;
+    $('sub').textContent = (sheet.meeting_date ? 'For the meeting on ' + sheet.meeting_date + ' · ' : '') +
+      n + ' open service job' + (n === 1 ? '' : 's') +
+      (sheet.can_update ? ' · tap a box when a job is done, or set how far along it is' : ' · read only');
+    $('tally').hidden = false;
+    $('controls').hidden = false;
+
+    var s = sheet.summary || { done: 0, in_progress: 0, not_started: 0, overall_pct: 0 };
+    $('sDone').textContent = s.done;
+    $('sProg').textContent = s.in_progress;
+    $('sIdle').textContent = s.not_started;
+    $('sPct').textContent = 'Overall ' + s.overall_pct + '% complete';
+    $('sBar').style.width = s.overall_pct + '%';
+
+    var groups = {};
+    (sheet.rows || []).forEach(function (r) {
+      var k = r.client_label || 'No property';
+      (groups[k] = groups[k] || []).push(r);
+    });
+
+    var html = '';
+    var any = false;
+    Object.keys(groups).sort(function (a, b) { return a.localeCompare(b); }).forEach(function (name) {
+      var all = groups[name];
+      var shown = all.filter(visible);
+      if (!shown.length) return;
+      any = true;
+      var done = all.filter(function (r) { return statusOf(r) === 'done'; }).length;
+      html += '<section class="group"><h2><span>' + esc(name) + '</span>' +
+        '<small>' + done + ' of ' + all.length + ' done</small></h2>';
+      shown.forEach(function (r) { html += rowHTML(r); });
+      html += '</section>';
+    });
+    $('list').innerHTML = any ? html : '<p class="empty">No jobs match this filter.</p>';
+    if (any) wire();
+  }
+
+  function rowHTML(r) {
+    var st = statusOf(r);
+    var pct = Number(r.pct) || 0;
+    var dis = sheet.can_update ? '' : ' disabled';
+    return '<article class="row' + (st === 'done' ? ' is-done' : '') + '" data-row="' + esc(r.id) + '">' +
+      '<button class="check" data-act="toggle" aria-pressed="' + (st === 'done') + '"' + dis +
+        ' aria-label="' + (st === 'done' ? 'Mark not done' : 'Mark done') + '">' + CHECK + '</button>' +
+      '<div class="main">' +
+        '<div class="top">' +
+          '<span class="num">' + esc(r.job_number || '') + '</span>' +
+          '<span class="name">' + esc(r.job_title || '') + '</span>' +
+          (r.is_work_order ? '<span class="tag">WO</span>' : '') +
+          (r.contract_amount != null ? '<span class="contract">' + esc(money(r.contract_amount)) + '</span>' : '') +
+          '<span class="pill ' + st + '">' +
+            (st === 'done' ? 'Done' : st === 'prog' ? pct + '%' : 'Not started') + '</span>' +
+        '</div>' +
+        (r.address
+          ? '<div class="addr"><a target="_blank" rel="noopener noreferrer" href="https://www.google.com/maps/search/?api=1&query=' +
+            encodeURIComponent(r.address) + '">' + esc(r.address) + '</a></div>'
+          : '') +
+        '<div class="prog-row">' +
+          '<div class="steps" role="group" aria-label="Percent complete">' +
+            [0, 25, 50, 75, 100].map(function (p) {
+              return '<button data-act="pct" data-pct="' + p + '" aria-pressed="' +
+                (pct === p ? 'true' : 'false') + '"' + dis + '>' + p + '%</button>';
+            }).join('') +
+          '</div>' +
+          '<div class="mini"><div class="bar"><i style="width:' + pct + '%"></i></div></div>' +
+          '<span class="who">' + (r.updated_at
+            ? 'Updated ' + esc(when(r.updated_at)) + (r.updated_actor ? ' by ' + esc(r.updated_actor) : '')
+            : '') + '</span>' +
+        '</div>' +
+        '<textarea data-act="note" rows="1" placeholder="What’s left"' + dis + '>' +
+          esc(r.note || '') + '</textarea>' +
+      '</div>' +
+    '</article>';
+  }
+
+  function wire() {
+    document.querySelectorAll('.row').forEach(function (el) {
+      var id = el.getAttribute('data-row');
+      var row = (sheet.rows || []).filter(function (r) { return r.id === id; })[0];
+      if (!row) return;
+      el.querySelectorAll('[data-act]').forEach(function (c) {
+        var act = c.getAttribute('data-act');
+        if (act === 'toggle') {
+          c.addEventListener('click', function () { save(id, { done: !row.done }); });
+        } else if (act === 'pct') {
+          c.addEventListener('click', function () { save(id, { pct: Number(c.getAttribute('data-pct')) }); });
+        } else if (act === 'note') {
+          c.addEventListener('input', function () {
+            clearTimeout(timers[id]);
+            timers[id] = setTimeout(function () { save(id, { note: c.value }, true); }, 900);
+          });
+          c.addEventListener('blur', function () {
+            clearTimeout(timers[id]);
+            if ((row.note || '') !== c.value) save(id, { note: c.value }, true);
+          });
+        }
+      });
+    });
+  }
+
+  function summarize(rows) {
+    var d = 0, p = 0, i = 0, sum = 0;
+    (rows || []).forEach(function (r) {
+      var v = Number(r.pct) || 0;
+      sum += v;
+      if (v >= 100) d++; else if (v > 0) p++; else i++;
+    });
+    return { total: rows.length, done: d, in_progress: p, not_started: i,
+      overall_pct: rows.length ? Math.round(sum / rows.length) : 0 };
+  }
+
+  function save(rowId, patch, quiet) {
+    if (!sheet || !sheet.can_update) return;
+    api('/share/' + encodeURIComponent(TOKEN) + '/rows/' + encodeURIComponent(rowId),
+      { method: 'PUT', body: patch }
+    ).then(function (j) {
+      for (var i = 0; i < sheet.rows.length; i++) {
+        if (sheet.rows[i].id === j.row.id) { sheet.rows[i] = j.row; break; }
+      }
+      sheet.summary = summarize(sheet.rows);
+      notice('');
+      render();
+    }).catch(function (e) {
+      if (!quiet) notice(e.message || 'That change did not save. Check your connection and try again.');
+    });
+  }
+
+  document.querySelectorAll('.chip').forEach(function (c) {
+    c.addEventListener('click', function () {
+      filter = c.getAttribute('data-f');
+      document.querySelectorAll('.chip').forEach(function (x) {
+        x.setAttribute('aria-pressed', x === c ? 'true' : 'false');
+      });
+      render();
+    });
+  });
+  $('q').addEventListener('input', function (e) {
+    query = String(e.target.value || '').trim().toLowerCase();
+    render();
+  });
+
+  // A malformed token is refused BEFORE any network call — there is nothing to
+  // ask the server about, and asking would put the bad token in a log.
+  if (!WELL_FORMED.test(TOKEN)) {
+    $('sub').textContent = '';
+    notice('This link is not valid. Ask for a new one.');
+  } else {
+    api('/share/' + encodeURIComponent(TOKEN)).then(function (j) {
+      sheet = j;
+      render();
+    }).catch(function (e) {
+      $('sub').textContent = '';
+      notice(e.message || 'This link could not be opened.');
+    });
+  }
+})();
+</script>
+</body>
+</html>

@@ -1295,7 +1295,24 @@ describe('R4 — classify() is checked, never consulted', () => {
   // tenancy the moment a link was revoked or a building deleted. Their own NOT
   // NULL organization_id is the tenant, and every statement in
   // services/service-ticket-field-capture.js carries it from the ticket row.
-  test('the fixture carries every table server/db.js creates (123) — nothing curated out', () => {
-    expect(TWO.ALL_TABLES.length).toBe(123);
+  //
+  // 123 -> 126: PRODUCTION PLANNING — the service manager's Thursday
+  // checklist, under Schedule. `production_checklists` (one sheet per
+  // meeting), `production_checklist_rows` (one job on one sheet, carrying the
+  // manager's percent, done tick and "what's left" note) and
+  // `production_checklist_shares` (the link sent to a service manager who may
+  // not have a login).
+  //
+  // All three DIRECT, on the service_ticket_shares precedent: each carries its
+  // own NOT NULL organization_id with an ON DELETE CASCADE FK, which this
+  // codebase treats as an anchor rather than a cache. The rows table could be
+  // argued as `parent` through checklist_id — it is not, for the same reason
+  // the flags table is not: a row whose tenant rode a pointer loses its
+  // tenancy the moment that pointer is cleared, and the one statement that
+  // matters here (the ON CONFLICT upsert that tops a sheet up) is keyed on
+  // (organization_id, checklist_id, job_id) precisely so a cross-tenant match
+  // is impossible by construction rather than by a WHERE somebody remembers.
+  test('the fixture carries every table server/db.js creates (126) — nothing curated out', () => {
+    expect(TWO.ALL_TABLES.length).toBe(126);
   });
 });

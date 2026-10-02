@@ -931,9 +931,39 @@
   }
 
   // ── Render: page shell ─────────────────────────────────────
+  // Which half of the Schedule area is on screen. Persisted per device so
+  // re-opening Schedule lands where it was left, the same way the
+  // production/calendar view switch already does.
+  var SUBTAB_KEY = 'p86_schedule_subtab';
+  function currentSubTab() {
+    try {
+      var v = localStorage.getItem(SUBTAB_KEY);
+      return v === 'planning' ? 'planning' : 'calendar';
+    } catch (e) { return 'calendar'; }
+  }
+  function switchScheduleSubTab(sub) {
+    var next = sub === 'planning' ? 'planning' : 'calendar';
+    try { localStorage.setItem(SUBTAB_KEY, next); } catch (e) { /* private window */ }
+    renderSchedule();
+  }
+  window.switchScheduleSubTab = switchScheduleSubTab;
+
   function renderSchedule() {
     var root = document.getElementById('schedule-root');
     if (!root) return;
+    // Production Planning takes the whole area when it is the active
+    // sub-view. It is its own module (js/production-planning.js) rather
+    // than a third segment on the calendar toolbar, because John asked for
+    // it as a page under Schedule and a page needs its own URL to be sent.
+    if (currentSubTab() === 'planning') {
+      if (window.p86ProductionPlanning && typeof window.p86ProductionPlanning.render === 'function') {
+        window.p86ProductionPlanning.render();
+        return;
+      }
+      root.innerHTML = '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);">' +
+        'Production Planning module not loaded.</div>';
+      return;
+    }
     _state.settings = loadSettings();
     if (typeof _state.settings.showWeekends !== 'boolean') _state.settings.showWeekends = true;
     if (!_state.cursor) {

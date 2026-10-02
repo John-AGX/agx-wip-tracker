@@ -373,6 +373,12 @@
                     // Jobs hub accordion children carry data-jobshub-subtab
                     // (purchase-orders / bills / change-orders / rfis /
                     // submittals) — same pattern as data-console-subtab.
+                    // Schedule accordion children carry data-schedule-subtab
+                    // (calendar / planning) — same pattern as the rest.
+                    const scheduleSub = btn.getAttribute('data-schedule-subtab');
+                    if (scheduleSub && typeof window.switchScheduleSubTab === 'function') {
+                        window.switchScheduleSubTab(scheduleSub);
+                    }
                     const jobshubSub = btn.getAttribute('data-jobshub-subtab');
                     if (jobshubSub && typeof window.switchJobsHubSubTab === 'function') {
                         window.switchJobsHubSubTab(jobshubSub);
@@ -2151,6 +2157,9 @@
                     asHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Assembly Studio module not loaded.</div>';
                 }
             } else if (tabName === 'schedule') {
+                // renderSchedule() owns the whole area and dispatches to the
+                // active sub-view (calendar | planning) itself, so the branch
+                // stays one call — see switchScheduleSubTab in js/schedule.js.
                 if (typeof window.renderSchedule === 'function') window.renderSchedule();
             } else if (tabName === 'insights') {
                 if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();

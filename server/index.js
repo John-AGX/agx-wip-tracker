@@ -37,6 +37,8 @@ const subRoutes = require('./routes/sub-routes');
 const subPortalRoutes = require('./routes/sub-portal-routes');
 const messageRoutes = require('./routes/message-routes');
 const scheduleRoutes = require('./routes/schedule-routes');
+// Production planning — the service manager's Thursday checklist, under Schedule.
+const productionPlanningRoutes = require('./routes/production-planning-routes');
 const weatherRoutes = require('./routes/weather-routes');
 const emailRoutes = require('./routes/email-routes');
 const emailCampaignsRoutes = require('./routes/email-campaigns-routes');
@@ -324,6 +326,7 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/agent-jobs', require('./routes/agent-jobs-routes'));
 app.use('/api/push', require('./routes/push-routes'));
 app.use('/api/schedule', scheduleRoutes);
+app.use('/api/production-planning', productionPlanningRoutes);
 app.use('/api/weather', weatherRoutes);
 // Campaigns routes mount BEFORE the generic email mount so the more
 // specific /api/email/campaigns paths win over any future glob in
@@ -477,6 +480,17 @@ app.get('/r/:token', (req, res) => {
 // PATH, so it must not be referred onward, indexed, or cached. Registered
 // BEFORE express.static and the SPA fallback so the token page wins over the
 // app shell.
+// Production planning checklist, opened from the link John sends the service
+// manager. Same three headers as every other credential-bearing page: the URL
+// IS the credential, so it must not be indexed, must not ride the Referer
+// header to wherever the guest clicks next, and must not be cached.
+app.get('/pp/:token', (req, res) => {
+  res.set('Referrer-Policy', 'no-referrer');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.sendFile(path.join(__dirname, '..', 'production-planning-share.html'));
+});
+
 app.get('/st/:token', (req, res) => {
   res.set('Referrer-Policy', 'no-referrer');
   res.set('X-Robots-Tag', 'noindex, nofollow');

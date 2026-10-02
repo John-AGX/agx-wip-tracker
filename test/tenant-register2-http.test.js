@@ -178,7 +178,10 @@ describe('REGISTER 2 — the route population', () => {
     // Neither declares a path that a '/:id' shape on the router in front of it
     // could swallow, and every route on both takes :id, so the driven count is
     // unmoved. The routes themselves are read one by one in the next test.
-    expect(R.mounts + R.unresolved.length).toBe(80);
+    //   80 -> 81  production-planning-routes    twelve routes, the service
+    //             manager's Thursday checklist under Schedule. Mounted at
+    //             /api/production-planning, which no other mount can swallow.
+    expect(R.mounts + R.unresolved.length).toBe(81);
   });
 
   test('the ROUTE count is committed (615 across 79 routers)', () => {
@@ -520,8 +523,20 @@ describe('REGISTER 2 — the route population', () => {
     //      Issues. Office only, on the main ticket router so it inherits
     //      that file’s access rule. It is a path-parameter GET, so it is
     //      waived here and driven by test/work-order-export.test.js.
-    expect(R.routes).toBe(634);
-    expect(R.routers).toBe(79);
+    //      634 -> 646: PRODUCTION PLANNING, twelve doors on one new router.
+    //      Ten are authed and gated JOBS_VIEW_ALL — the same capability that
+    //      already gates every door on schedule-routes.js, because this page
+    //      lives in the Schedule area — except POST /:id/rows/:rowId/apply,
+    //      which is gated PROGRESS_UPDATE: it writes a scope line's
+    //      pctComplete, and that is literally what the capability says.
+    //      The remaining two are GUEST doors reached with a bearer token in
+    //      the path (GET and PUT /share/:token...). They take no auth and no
+    //      requireOrgId because there is no user: the org is DERIVED from the
+    //      share row the token resolves to and then predicates every
+    //      subsequent statement. Both take a path parameter, so both are
+    //      waived here and driven by test/production-planning-share.test.js.
+    expect(R.routes).toBe(646);
+    expect(R.routers).toBe(80);
   });
 
   test('the DRIVEN / COUNTED-WAIVED split is committed (142 driven, 492 counted)', () => {
@@ -539,7 +554,12 @@ describe('REGISTER 2 — the route population', () => {
     // parameter, so even the read is waived and the driven side does not move.
     // 491 -> 492: the zip export. A GET, but it takes :id, so the driven
     // side does not move.
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 142, waived: 492 });
+    // 142 -> 143 / 492 -> 503: production planning. Exactly ONE of its twelve
+    // doors is a param-less GET — GET /api/production-planning, the list of
+    // sheets — so it joins the driven set by construction and is proved
+    // against the synthetic second org here. The other eleven are writes or
+    // take a path parameter, including both guest doors.
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 143, waived: 503 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

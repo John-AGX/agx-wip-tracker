@@ -40,6 +40,10 @@ const GUEST_PAGES = [
   { file: 'report-share.html', scripts: ['/js/report-document.js', '/js/vendor/leaflet.js'], token: true },
   // Read-only work order. Self-contained: zero scripts of any kind.
   { file: 'service-ticket-share.html', scripts: [], token: true },
+  // The service manager's WIP-meeting checklist. Self-contained for the same
+  // reason: zero scripts, and the three fields it collects are decided by the
+  // server (the read returns can_update), not by anything on the page.
+  { file: 'production-planning-share.html', scripts: [], token: true },
 ];
 
 function read(file) {
@@ -107,7 +111,7 @@ describe('every credential-bearing page route sets the three headers', () => {
   // actually apply on a normal navigation. Asserted on the route table rather
   // than the pages, because the header is the server's job.
   const idx = read('server/index.js');
-  test.each([['/t/:token'], ['/r/:token'], ['/st/:token']])('%s', (route) => {
+  test.each([['/t/:token'], ['/r/:token'], ['/st/:token'], ['/pp/:token']])('%s', (route) => {
     const at = idx.indexOf("app.get('" + route + "'");
     expect(at).toBeGreaterThan(-1);
     const block = idx.slice(at, at + 500);

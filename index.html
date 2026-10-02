@@ -260,6 +260,8 @@
     <link rel="stylesheet" href="css/service-ticket-editor.css?v=2">
     <link rel="stylesheet" href="css/work-order-review.css?v=1">
     <link rel="stylesheet" href="css/service-ticket-flags.css?v=1">
+    <!-- Production Planning — the WIP-meeting checklist under Schedule. -->
+    <link rel="stylesheet" href="css/production-planning.css?v=1">
     <link rel="stylesheet" href="css/service-ticket-field-log.css?v=3">
     <link rel="stylesheet" href="css/service-ticket-billing.css?v=3">
     <!-- Start a change order and Print / PDF on a work order (1.30), and the
@@ -711,7 +713,20 @@
                              mirrors listVisibility in server/services/service-ticket-access.js:
                              the edit capabilities alone list nothing, so they do not show it. -->
                         <button class="tab-btn" data-tab="service-tickets" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED LEADS_VIEW" data-p86-icon="daily-logs" title="Service Tickets — every work order across your jobs and leads"><span class="app-nav-label">Service Tickets</span></button>
-                        <button class="tab-btn" data-tab="schedule" data-p86-icon="schedule" title="Schedule"><span class="app-nav-label">Schedule</span></button>
+                        <!-- Schedule became a parent when Production Planning landed:
+                             the calendar and the service manager's WIP-meeting
+                             checklist are two views of the same week. Same accordion
+                             markup as Assembly Studio and Jobs. -->
+                        <div class="app-nav-parent" data-accordion="schedule">
+                            <button class="tab-btn app-nav-parent-btn" data-tab="schedule" data-schedule-subtab="calendar" data-virtual-tab="schedule-calendar" data-p86-icon="schedule" title="Schedule">
+                                <span class="app-nav-label">Schedule</span>
+                                <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle Schedule sub-pages" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
+                            </button>
+                            <div class="app-nav-children" role="group" aria-label="Schedule sub-pages">
+                                <button class="tab-btn app-nav-child" data-tab="schedule" data-schedule-subtab="calendar" data-virtual-tab="schedule-calendar" data-p86-icon="schedule" title="Calendar — production grid and your calendar"><span class="app-nav-label">Calendar</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="schedule" data-schedule-subtab="planning" data-virtual-tab="schedule-planning" data-p86-icon="daily-logs" data-cap="JOBS_VIEW_ALL" title="Production Planning — the service manager's checklist for the WIP meeting"><span class="app-nav-label">Production Planning</span></button>
+                            </div>
+                        </div>
                         <button class="tab-btn" data-tab="cost-inbox" data-p86-icon="materials" title="Cost Inbox — capture receipts &amp; field costs"><span class="app-nav-label">Cost Inbox</span></button>
                         <button class="tab-btn" data-tab="invoices" data-p86-icon="exports" title="Invoices &amp; accounts receivable"><span class="app-nav-label">Invoices</span></button>
                     </div>
@@ -3606,7 +3621,8 @@
     <script src="js/job-costs-import.js?v=19"></script>
     <script src="js/qb-costs-view.js?v=26"></script>
     <script src="js/insights.js?v=14"></script>
-    <script src="js/schedule.js?v=55"></script>
+    <script src="js/schedule.js?v=56"></script>
+    <script src="js/production-planning.js?v=1"></script>
     <script src="js/my-day.js?v=11"></script>
     <!-- Shared entity card (job/lead/estimate Pulse card) — window.p86EntityCard.
          Loads before its callers (entities-map.js, workspace-layout.js). -->
