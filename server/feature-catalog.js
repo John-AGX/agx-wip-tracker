@@ -526,9 +526,23 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.83';
+const APP_VERSION = '1.84';
 
 const releases = [
+  {
+    version: '1.84',
+    date: '2026-10-01',
+    name: 'Project 86 tells you when money moves',
+    summary: 'A proposal decided, a purchase order approved or finished, a bill waiting for approval. All four were already recorded and told to nobody.',
+    changes: [
+      { type: 'new', text: 'Four new notifications, each with its own switch under Money in My Account → Notifications. A proposal recorded as approved or declined goes to whoever sells that lead. A purchase order approved, or its work marked complete, goes to the job’s PM and whoever raised it. A bill sitting unapproved, and a bill approved or voided, go to the job’s PM and whoever entered it. Every one of these already happened in Project 86 and nobody was told — the column was stamped, the list redrew, and the person waiting found out by opening the page.' },
+      { type: 'new', text: 'A bill asks once per wait, not once per click. Sending a bill back to open asks again, because that is a new wait; approving or voiding it does not. Selecting forty purchase orders and setting them all to Work complete sends a handful of notices rather than forty.' },
+      { type: 'improved', text: 'The wording says what actually happened. A proposal message reads “Dana recorded that Citi Lakes HOA approved”, because in Project 86 a person on your side enters the decision — the client does not click it. A purchase order names the sub who signed only when a signature was really taken, which a bulk approval does not do. And a bill that is discarded is called voided, not rejected, because void is also how a duplicate invoice gets thrown away.' },
+      { type: 'fixed', text: 'Approving or declining a proposal twice recorded two decisions. The second click rewrote the date of the first, and nothing stopped a double-click on Decline at all. It now keeps the decision that stands and says so.' },
+      { type: 'fixed', text: 'Declining a proposal left the approval behind it — the approver’s name, the date and the signature all stayed on the record. Anything reading the stamp rather than the status saw a declined proposal as won. Declining now clears them.' },
+      { type: 'fixed', text: 'Comments on a job, lead, estimate or photo could be read, and written, by somebody at another company. The address of a conversation was taken at face value: the app checked that it looked like a job comment thread without checking whose job it was. A comment posted that way was even stamped as belonging to the poster’s company while sitting in somebody else’s thread. Both doors are closed, a conversation whose job has since been deleted is still readable by the people who were in it, and nothing can tell from the refusal whether another company’s record exists.' },
+    ],
+  },
   {
     version: '1.83',
     date: '2026-10-01',
