@@ -169,12 +169,18 @@ function mockRunQuery(sql, params) {
   }
   // The status route's own two statements: the current-status read, scoped
   // through the job, and the transition.
-  if (/^SELECT b\.status FROM job_vendor_bills b JOIN jobs j/.test(text)) {
+  //
+  // It also returns the job's OWNER, because the approval gate added in 1.92
+  // asks whether the caller runs this job. The owner column is served off the
+  // statement rather than assumed: drop `j.owner_id` from the route's SELECT
+  // and this mock stops recognising it, which is how it should read — a gate
+  // that cannot see the owner must not quietly default to allowing.
+  if (/^SELECT b\.status, b\.job_id, j\.owner_id, ja\.access_level FROM job_vendor_bills b JOIN jobs j/.test(text)) {
     const b = rowsOf('bills').find((x) => String(x.id) === String(p[0]));
     if (!b) return { rows: [], rowCount: 0 };
     const j = rowsOf('jobs').find((x) => String(x.id) === String(b.job_id));
     if (!j || !orgOk(j, p[1])) return { rows: [], rowCount: 0 };
-    return { rows: [{ status: b.status }], rowCount: 1 };
+    return { rows: [{ status: b.status, job_id: b.job_id, owner_id: j.owner_id, access_level: null }], rowCount: 1 };
   }
   if (/^UPDATE job_vendor_bills SET status = \$1/.test(text)) {
     const b = rowsOf('bills').find((x) => String(x.id) === String(p[3]));

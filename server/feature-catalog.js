@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.91';
+const APP_VERSION = '1.92';
 
 const releases = [
+  {
+    version: '1.92',
+    date: '2026-10-03',
+    name: 'Approving a bill takes the authority it should',
+    summary: 'Anybody who could edit an estimate could approve a vendor bill for payment, on any job, with no check that they run it — including a role whose description says it sees no financials at all.',
+    changes: [
+      { type: 'fixed', text: 'Approving a vendor bill for payment now takes the authority it should. Until today anybody who could edit an estimate could also approve a bill, mark it paid, or void it — on ANY job, with no check that they run it. That included the Field Crew role, whose own description in Project 86 reads "Estimates and Cost Inbox only. No jobs, no financials." It now takes an administrator, or the manager of that job.' },
+      { type: 'fixed', text: 'Entering a bill no longer entitles you to approve it. The same permission opened all three doors — create it, change the amount, approve it — so one person could key in a payable and sign it off without anybody else seeing it. Recording a bill is still open to the same people as before; deciding its fate is not.' },
+      { type: 'improved', text: 'The rule covers every status move, not just "approve". Voiding a bill is how a real payable gets written off as well as how a duplicate gets thrown away, and un-marking one paid is no smaller a claim than marking it. One rule, so there is no list of exceptions to keep straight.' },
+      { type: 'improved', text: 'If you cannot change a bill’s status, the message says who can — the job’s manager or an administrator — rather than failing with something generic. Nothing else about bills changed: the same people can still raise them, edit them and attach to them.' },
+    ],
+  },
   {
     version: '1.91',
     date: '2026-10-02',
