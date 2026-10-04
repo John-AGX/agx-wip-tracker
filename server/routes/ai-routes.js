@@ -4494,6 +4494,29 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // (lines starting ':') are ignored by the client parser. Cleared on end.
   let _hb = null;
   function clearHeartbeat() { if (_hb) { clearInterval(_hb); _hb = null; } }
+  // The stream the idle watchdog has to be able to cut.
+  //
+  // Ending the RESPONSE does not end the TURN: the upstream iterator keeps
+  // generating with no consumer, and everything it produces is accreted into
+  // the managed session's immutable history, which every later turn re-reads
+  // as cache_read. So an abandoned turn was unbounded in exactly the dimension
+  // this file spends the most effort bounding.
+  //
+  // It also held the user hostage. The lock releases at the
+  // runV2SessionStream CALL SITE (:18602/:18605) — i.e. when this function
+  // returns — so while the loop spun on, a user told "ended after 5 minutes"
+  // got "I'm still finishing your previous message" until ACTIVE_TURN_TTL_MS
+  // (6 min) expired. Cutting the stream makes the loop throw, which returns,
+  // which releases.
+  //
+  // Declared HERE, beside the other turn state and ABOVE the heartbeat, on
+  // purpose: openStreamAndSend's own `stream` is scoped inside that helper
+  // ~420 lines below, and the watchdog runs in a sync timer callback. This
+  // file has twice put Railway into a deploy-restart loop by referencing a
+  // later binding from an earlier position (see the sessionId TDZ note), and
+  // an uncaught throw in a timer takes the process down. A holder assigned on
+  // every successful open — including every reopen — cannot be in a TDZ.
+  let _activeStream = null;
   // What the user has ACTUALLY been shown this turn. The stale-id failure copy
   // below is assembled from these rather than from an assumption about which
   // path reached it: one wording claimed "86 ran the tools for this request"
@@ -4619,6 +4642,18 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
         // the stream loop below, so touching it from this timer risks a
         // ReferenceError, and a throw in a timer takes the process down.
         persistTurnError(idleMsg).catch(() => {});
+        // CUT THE UPSTREAM. Without this the turn was ended for the user and
+        // for nobody else: the iterator kept generating into the session's
+        // immutable history, and the turn lock stayed held until the TTL.
+        // Its own try/catch because abort() may throw synchronously AND may
+        // reject — either one escaping a timer callback ends the process —
+        // and because the user must still get endWithDone() if it does.
+        try {
+          if (_activeStream && _activeStream.controller) {
+            const aborted = _activeStream.controller.abort();
+            if (aborted && typeof aborted.catch === 'function') aborted.catch(() => {});
+          }
+        } catch (_) {}
         endWithDone();
       } catch (e) {
         try { clearHeartbeat(); } catch (_) {}
@@ -4920,6 +4955,10 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     let stream;
     try {
       stream = await anthropic.beta.sessions.events.stream(sessionId);
+      // Every open lands here, including each builtin/stall reopen, so the
+      // watchdog always holds the stream that is currently live rather than
+      // the first one of the turn.
+      _activeStream = stream;
       vDebug('[v2-stream] opened', sessionId);
     } catch (e) {
       console.error('Session stream open failed:', e);

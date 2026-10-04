@@ -526,9 +526,19 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.99';
+const APP_VERSION = '2.00';
 
 const releases = [
+  {
+    version: '2.00',
+    date: '2026-10-04',
+    name: 'A turn that gives up actually stops',
+    summary: 'When 86 stopped responding, the message you got was true for you and not for the server: it kept working on the dead turn in the background. Now the turn really ends, and you can send the next one straight away.',
+    changes: [
+      { type: 'fixed', text: 'A turn that stalls and gets ended after five minutes now stops on the server too. Before, you were told the turn had ended while 86 carried on working on it with nobody listening \u2014 and everything it produced was kept as part of that conversation, so every later message in the thread had to read past it.' },
+      { type: 'fixed', text: 'You can send your next message immediately after a stalled turn ends. It used to answer \u201cI\u2019m still finishing your previous message\u201d for another minute, because the turn only let go once it finished \u2014 and it had not finished.' },
+    ],
+  },
   {
     version: '1.99',
     date: '2026-10-04',
