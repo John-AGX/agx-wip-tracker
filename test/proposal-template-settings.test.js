@@ -190,3 +190,50 @@ describe('the admin editor round-trips the structured fields', () => {
     expect(synced).toMatch(/standard_sections = standardSectionsFromText/);
   });
 });
+
+describe('an install still carrying the PREVIOUS defaults is upgraded — and only then', () => {
+  const upgrades = DB.slice(DB.indexOf('const PREVIOUS_DEFAULTS = {'), DB.indexOf('// BT export mapping'));
+
+  test('each text upgrade is conditioned on the stored value still BEING the old default', () => {
+    // Without the condition this is a blind overwrite of whatever an admin
+    // wrote. The condition is the only thing separating the two.
+    expect(upgrades).toMatch(/WHERE key = 'proposal_template'\s*\r?\n\s*AND value->>\$1::text = \$3/);
+    expect(upgrades).toMatch(/AND value->'exclusions' = \$2::jsonb/);
+  });
+
+  test('it upgrades exactly the four texts that had a previous default, plus the list', () => {
+    const block = DB.slice(DB.indexOf('const PREVIOUS_DEFAULTS = {'), DB.indexOf('};', DB.indexOf('const PREVIOUS_DEFAULTS = {')));
+    ['company_header', 'intro_template', 'about_paragraph', 'signature_text'].forEach((k) => {
+      expect(block.includes(k + ':')).toBe(true);
+    });
+    // Fields that never had a default cannot be "upgraded" — they are filled by
+    // the merge, and listing one here would overwrite an admin's first edit.
+    ['license_line', 'payment_note', 'signer_name', 'standard_sections'].forEach((k) => {
+      expect(block.includes(k + ':')).toBe(false);
+    });
+  });
+
+  test('the OLD letterhead it replaces is the one that carried the phone number', () => {
+    // This is the upgrade that matters on the live install: the old header and
+    // the new contact_line both carry 813-725-5233, so leaving the old header
+    // in place prints the phone twice on every proposal.
+    const block = DB.slice(DB.indexOf('const PREVIOUS_DEFAULTS = {'), DB.indexOf('};', DB.indexOf('const PREVIOUS_DEFAULTS = {')));
+    expect(block).toMatch(/Ste 102 · Clearwater, FL 33760-4030 · Phone: 813-725-5233/);
+    const T = seedTemplate();
+    expect(T.company_header).not.toMatch(/Phone:/);
+    expect(T.contact_line).toMatch(/813-725-5233/);
+  });
+
+  test('the OLD assumptions list it replaces is the 9-item one, matched in full', () => {
+    const block = DB.slice(DB.indexOf('const PREVIOUS_EXCLUSIONS = ['), DB.indexOf('];', DB.indexOf('const PREVIOUS_EXCLUSIONS = [')));
+    const items = block.match(/^\s{6}'/gm) || [];
+    expect(items.length).toBe(9);
+    expect(block).toMatch(/Pricing assumes unfettered access to the property during the project\./);
+    // Compared as jsonb, so a list an admin reordered is not "the old default".
+    expect(upgrades).toMatch(/\$2::jsonb/);
+  });
+
+  test('every upgrade is wrapped so a failure cannot stop boot', () => {
+    expect(upgrades).toMatch(/auto-upgrade skipped/);
+  });
+});

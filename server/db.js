@@ -7175,6 +7175,63 @@ async function initSchema() {
     console.warn('[db] proposal intro_template auto-upgrade skipped:', e.message);
   }
 
+  // TEXT THAT WAS NEVER EDITED IS UPGRADED TO THE HOUSE TEMPLATE; text that was
+  // edited is left alone. Same contract as the intro_template upgrade above and
+  // for the same reason: the fill-missing merge adds the new keys, but an
+  // install still carrying the PREVIOUS DEFAULT letterhead would print its
+  // phone number twice — once in the old company_header, once in the new
+  // contact_line — and would open every proposal with the old paragraph.
+  //
+  // The WHERE clause is the whole guard. Each statement fires only where the
+  // stored text still equals the old default EXACTLY, so an admin's own wording
+  // is never a candidate. Dropping the condition would overwrite it.
+  const PREVIOUS_DEFAULTS = {
+    company_header: '13191 56th Court, Ste 102 · Clearwater, FL 33760-4030 · Phone: 813-725-5233',
+    intro_template: 'AG Exteriors is pleased to provide you with this proposal to complete the work outlined below.',
+    about_paragraph: 'We proudly specialize in a wide range of exterior services, including roofing, siding, painting, deck rebuilding, and more—delivering each with care and attention to detail. Backed by our leadership team with extensive experience in construction, development, and property management. AG Exteriors is committed to bringing a thoughtful, professional approach to every project. With this foundation, we’re committed to providing high-quality work and dependable service on every project.',
+    signature_text: 'I confirm that my action here represents my electronic signature and is binding.'
+  };
+  for (const [key, oldText] of Object.entries(PREVIOUS_DEFAULTS)) {
+    try {
+      await pool.query(
+        `UPDATE app_settings
+            SET value = jsonb_set(value, ARRAY[$1::text], to_jsonb($2::text), false),
+                updated_at = NOW()
+          WHERE key = 'proposal_template'
+            AND value->>$1::text = $3`,
+        [key, DEFAULT_PROPOSAL_TEMPLATE[key], oldText]
+      );
+    } catch (e) {
+      console.warn('[db] proposal ' + key + ' auto-upgrade skipped:', e.message);
+    }
+  }
+
+  // The assumptions list the same way: replaced only where it is still the
+  // exact array the old seed wrote, compared as jsonb so order counts.
+  try {
+    const PREVIOUS_EXCLUSIONS = [
+      'This proposal may be withdrawn by AG Exteriors if not accepted within 30 days.',
+      'Pricing assumes unfettered access to the property during the project.',
+      'If AG Exteriors encounters unforeseen conditions that differ from those anticipated or ordinarily found to exist in the construction activities being provided, AG Exteriors retains the right to make an equitable adjustment to the pricing.',
+      'Client will provide electrical power and water at no charge.',
+      'Client will provide a location for dumpsters on site for trash and material disposal. AG Exteriors will provide the dumpsters for the entire job. However, if we are required to switch out dumpsters due to residents’ use, AG Exteriors reserves the right to charge the Client accordingly.',
+      'Mold/Asbestos/Lead Paint: Any detection or remediation of mold, asbestos, and lead paint is specifically excluded from this proposal. Any costs associated with the detection and/or removal of mold, mold spores, asbestos, and lead paint are the responsibility of others.',
+      'Damage to the physical property that occurred prior to AG Exteriors’ work not specifically called out in the scope of work is excluded.',
+      'Proposal excludes any engineering and/or permit fees. If any of these are required to complete the project, AG Exteriors will charge the client the cost of these fees plus an additional 10%.',
+      'Client acknowledges that markets are experiencing significant, industry-wide economic fluctuations, impacting the price of materials to be supplied in conjunction with the agreement. Client acknowledges that materials pricing has the potential to significantly increase between the time of the issuance of the underlying bid and the date of materials purchase for the Project. If the cost of any given material increases above the amount shown in the bid proposal for such material, this quote shall be adjusted upwards, and the Client will be responsible for the increased cost of the materials. In order to mitigate the potential for material-based price increases, the Client has the option to pay for materials in advance of the job. Material costs are guaranteed if materials are paid for at the time the proposal is accepted. Any prepayment of materials will be in addition to the normal deposit of 35%.'
+    ];
+    await pool.query(
+      `UPDATE app_settings
+          SET value = jsonb_set(value, '{exclusions}', $1::jsonb, false),
+              updated_at = NOW()
+        WHERE key = 'proposal_template'
+          AND value->'exclusions' = $2::jsonb`,
+      [JSON.stringify(DEFAULT_PROPOSAL_TEMPLATE.exclusions), JSON.stringify(PREVIOUS_EXCLUSIONS)]
+    );
+  } catch (e) {
+    console.warn('[db] proposal exclusions auto-upgrade skipped:', e.message);
+  }
+
   // BT export mapping — drives the Buildertrend xlsx exporter. As of
   // the new BT proposal-import format (Phase D), each Project 86 btCategory
   // maps to a single BT Cost Code string. The old Parent Group /
