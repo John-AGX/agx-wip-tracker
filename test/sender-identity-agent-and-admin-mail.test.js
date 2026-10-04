@@ -77,7 +77,11 @@ function seed() {
     INSERT INTO users (id, email, name, role, organization_id, active, notification_prefs) VALUES
       (10, 'admin@agx.test', 'Ada Admin', 'admin', 1, 1, '{}'),
       (11, 'pm@agx.test', 'Pat PM', 'pm', 1, 1, '{}'),
-      (12, 'quiet@agx.test', 'Quiet PM', 'pm', 1, 1, '{"agent_tasks":false}'),
+            -- The key My Account actually writes is the SINGULAR 'agent_task', which is
+      -- what server/notify-events.js registers. This fixture used to carry the
+      -- plural, matching a gate that no stored pref could ever satisfy: muting
+      -- Background tasks silenced push and left the email flowing.
+      (12, 'quiet@agx.test', 'Quiet PM', 'pm', 1, 1, '{"agent_task":false}'),
       (30, 'x@nowhere.test', 'No Org', 'admin', NULL, 1, '{}');
     INSERT INTO roles (name, label, capabilities) VALUES
       ('admin', 'Admin', '["USERS_MANAGE","ROLES_MANAGE"]'), ('pm', 'PM', '[]');

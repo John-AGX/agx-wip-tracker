@@ -16011,7 +16011,10 @@ async function finalizeAgentJob(jobId, job, result, pauseRef, anthropic, session
   const usage = (result && result.usage) || {};
   if (pauseRef && pauseRef.question) {
     await pool.query(
-      "UPDATE agent_jobs SET status='needs_input', pause_kind='question', pause_question=$2, pause_answer=NULL, paused_at=NOW(), " +
+      // seen_at=NULL because this is a NEW question. /answer stamps seen_at when
+      // the last one was answered, and the badge counts `seen_at IS NULL`, so
+      // leaving it set meant a task's second question never badged at all.
+      "UPDATE agent_jobs SET status='needs_input', pause_kind='question', pause_question=$2, pause_answer=NULL, paused_at=NOW(), seen_at=NULL, " +
       " input_tokens=COALESCE(input_tokens,0)+$3, output_tokens=COALESCE(output_tokens,0)+$4, " +
       " cache_creation_tokens=COALESCE(cache_creation_tokens,0)+$5, cache_read_tokens=COALESCE(cache_read_tokens,0)+$6, updated_at=NOW() WHERE id=$1",
       [jobId, pauseRef.question, usage.input_tokens || 0, usage.output_tokens || 0, usage.cache_creation_input_tokens || 0, usage.cache_read_input_tokens || 0]
@@ -16130,7 +16133,7 @@ async function notifyAgentJobNeedsInput(job, question) {
     const u = await pool.query('SELECT email, notification_prefs FROM users WHERE id = $1', [job.user_id]);
     const user = u.rows[0];
     if (!user || !user.email) return;
-    if ((user.notification_prefs || {}).agent_tasks === false) return;
+    if ((user.notification_prefs || {}).agent_task === false) return;   // singular: the key notify-events registers and My Account writes
     const esc = function (s) { return String(s == null ? '' : s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); };
     const appUrl = process.env.APP_URL || process.env.PUBLIC_URL || 'https://project86.net';
     const title = job.title || 'Background task';
@@ -16138,8 +16141,8 @@ async function notifyAgentJobNeedsInput(job, question) {
       '<div style="font:14px/1.6 system-ui,-apple-system,sans-serif;color:#1a1a2e;max-width:560px">' +
       '<p>Your background task <strong>' + esc(title) + '</strong> has a question for you:</p>' +
       '<div style="background:#fff8e6;border:1px solid #f4d98a;border-radius:8px;padding:12px 14px">' + esc(String(question).slice(0, 2000)) + '</div>' +
-      '<p style="margin-top:16px"><a href="' + esc(appUrl) + '" style="background:#4f8cff;color:#fff;text-decoration:none;padding:9px 16px;border-radius:8px;display:inline-block">Answer in Project 86</a></p>' +
-      '<p style="color:#8b90a5;font-size:12px;margin-top:12px">Answer it in your Background Tasks panel and it\'ll pick up right where it left off.</p></div>';
+      '<p style="margin-top:16px"><a href="' + esc(appUrl) + '/queue" style="background:#4f8cff;color:#fff;text-decoration:none;padding:9px 16px;border-radius:8px;display:inline-block">Answer in Project 86</a></p>' +
+      '<p style="color:#8b90a5;font-size:12px;margin-top:12px">Answer it in your Queue and it\'ll pick up right where it left off.</p></div>';
     const { sendEmail } = require('../email');
     // senderOrg brands the From as "<Org> via Project 86" — an EXPLICIT opt-in,
     // because organizationId alone is metering and never implies branding.
@@ -16152,7 +16155,7 @@ async function notifyAgentJobNeedsInput(job, question) {
     // Phone/desktop push — gated on the user's notification prefs (agent_task).
     try {
       const { sendPushForEvent } = require('../notify-events');
-      await sendPushForEvent(job.user_id, 'agent_task', { title: '❓ ' + title + ' needs your answer', body: String(question).slice(0, 300), url: '/' }, user.notification_prefs || {});
+      await sendPushForEvent(job.user_id, 'agent_task', { title: '❓ ' + title + ' needs your answer', body: String(question).slice(0, 300), url: '/queue' }, user.notification_prefs || {});
     } catch (_) {}
   } catch (e) {
     console.warn('[agent-jobs] needs-input notify failed:', e && e.message);
@@ -16170,7 +16173,7 @@ async function notifyAgentJobDone(job, result) {
     const user = u.rows[0];
     if (!user || !user.email) return;
     const prefs = user.notification_prefs || {};
-    if (prefs.agent_tasks === false) return;   // user opted out
+    if (prefs.agent_task === false) return;   // user opted out (singular — the key My Account writes)
     const ok = !(result && result.error);
     const title = job.title || 'Background task';
     const bodyText = ok

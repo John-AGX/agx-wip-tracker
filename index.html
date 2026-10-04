@@ -251,7 +251,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=335">
+    <link rel="stylesheet" href="css/styles.css?v=336">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=70">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -825,6 +825,11 @@
                         <!-- My Day merged into the Summary dashboard (2026-07); its tab redirects to Summary. -->
                         <button class="tab-btn" data-tab="my-tasks" data-p86-icon="check-circle" title="My Tasks"><span class="app-nav-label">My Tasks</span></button>
                         <button class="tab-btn" data-tab="messages" data-p86-icon="envelope" title="Messages"><span class="app-nav-label">Messages</span><span id="navMessagesBadge" style="display:none;margin-left:auto;background:#f87171;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;line-height:1.5;"></span></button>
+                        <!-- Queue — what something is waiting on YOU for. The badge
+                             counts items still waiting, not unseen ones: a question
+                             you have looked at and not answered is still blocking
+                             the thing that asked it. -->
+                        <button class="tab-btn" data-tab="queue" data-p86-icon="conversations" title="Queue — decisions waiting on you"><span class="app-nav-label">Queue</span><span id="navQueueBadge" style="display:none;margin-left:auto;background:#f87171;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;line-height:1.5;"></span></button>
                         <button class="tab-btn" data-tab="email-hub" data-p86-icon="at-symbol" title="Email — your forwarded inbox, readable by the assistant"><span class="app-nav-label">Email</span></button>
                         <!-- Cowork — watch what 86 / the Scribe write, approve
                              drafts, and read the history of what they did.
@@ -1562,6 +1567,11 @@
                      mounts js/cost-inbox.js window.p86CostInbox.render() here. -->
                 <div id="cost-inbox" class="tab-content">
                     <div id="costInboxHost"></div>
+                </div>
+
+                <!-- QUEUE TAB — js/queue.js renders into this host. -->
+                <div id="queue" class="tab-content">
+                    <div id="queueHost"></div>
                 </div>
 
                 <!-- Invoices / AR — switchTab('invoices') mounts js/invoices.js
@@ -3633,7 +3643,7 @@
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
     <script src="js/save-merge.js?v=5"></script>
-    <script src="js/app.js?v=167"></script>
+    <script src="js/app.js?v=168"></script>
     <!-- The visible signal for a write that has not reached the server.
          Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
     <script src="js/save-banner.js?v=3"></script>
@@ -3647,7 +3657,9 @@
     <script src="js/compliance-review-ui.js?v=6"></script>
     <script src="js/messaging.js?v=8"></script>
     <script src="js/email-hub.js?v=27"></script>
-    <script src="js/agent-tasks.js?v=14"></script>
+    <!-- The Queue — decisions parked by a producer that resumes on your answer. -->
+    <script src="js/queue.js?v=1"></script>
+    <script src="js/agent-tasks.js?v=15"></script>
     <script src="js/crew-chip.js?v=3"></script>
     <script src="js/file-explorer.js?v=18"></script>
     <script src="js/my-files.js?v=28"></script>
@@ -3843,7 +3855,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=38"></script>
+    <script src="js/router.js?v=39"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /

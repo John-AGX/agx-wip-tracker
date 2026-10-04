@@ -12461,6 +12461,79 @@ a.ci-store-v:hover { text-decoration: underline; }
 }
 
 
+/* ── The Queue ─────────────────────────────────────────────────────
+   One page for decisions something is waiting on. Built card-first because
+   the place this gets used is a phone on a job site, between visits: the
+   question has to be readable and the answer box reachable with one thumb,
+   so the card is a single column at every width and the action never sits
+   behind a drill-in. Desktop just gets a comfortable measure, not a table. */
+.p86-q-wrap { max-width: 760px; }
+.p86-q-top { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.p86-q-h { font-size: 20px; font-weight: 700; margin: 0; color: var(--text); }
+.p86-q-sub { font-size: 13px; color: var(--text-dim); }
+
+.p86-q-cards { display: flex; flex-direction: column; gap: 12px; }
+.p86-q-card {
+  border: 1px solid var(--border, #2a2a32);
+  border-left: 3px solid var(--accent, #4f8cff);
+  border-radius: 12px;
+  background: var(--card-bg, #141419);
+  padding: 14px 16px;
+}
+/* The item a notification or the Crew panel sent you to. */
+.p86-q-card.is-focus { box-shadow: 0 0 0 2px rgba(79, 140, 255, 0.35); }
+.p86-q-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.p86-q-from {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--accent, #4f8cff); background: rgba(79, 140, 255, 0.12);
+  padding: 2px 7px; border-radius: 999px;
+}
+.p86-q-title { font-size: 14.5px; font-weight: 600; margin: 0; color: var(--text); flex: 1 1 auto; min-width: 0; }
+.p86-q-when { font-size: 11.5px; color: var(--text-dim); flex: 0 0 auto; }
+/* The question itself is the point of the card, so it is the biggest thing on it. */
+.p86-q-ask { font-size: 15px; line-height: 1.45; color: var(--text); margin: 10px 0 12px; white-space: pre-wrap; }
+.p86-q-act { display: flex; gap: 8px; align-items: center; }
+.p86-q-answer {
+  flex: 1 1 auto; min-width: 0; width: auto; margin: 0;
+  height: 38px; padding: 0 12px;
+  /* 16px: iOS zooms the page into any focused field under 16px. */
+  font-size: 16px;
+  border: 1px solid var(--border, #2a2a32); border-radius: 8px;
+  background: var(--bg); color: var(--text);
+}
+.p86-q-act .ee-btn { height: 38px; padding: 0 16px; flex: 0 0 auto; }
+.p86-q-why { margin-top: 10px; font-size: 12.5px; color: var(--text-dim); }
+.p86-q-why summary { cursor: pointer; }
+.p86-q-why p { margin: 6px 0 0; white-space: pre-wrap; }
+
+.p86-q-empty { padding: 28px 4px; color: var(--text-dim); font-size: 14px; }
+.p86-q-clear { text-align: center; border: 1px dashed var(--border, #2a2a32); border-radius: 12px; }
+
+.p86-q-recent { margin-top: 26px; }
+.p86-q-recent-h {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--text-dim); margin: 0 0 8px;
+}
+.p86-q-past-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.p86-q-past { display: flex; align-items: center; gap: 9px; padding: 7px 2px; font-size: 13px; color: var(--text-dim); }
+.p86-q-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--text-dim); }
+.p86-q-dot.is-ok { background: var(--green, #34d399); }
+.p86-q-dot.is-bad { background: var(--red, #f87171); }
+.p86-q-past-title { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p86-q-past-word { margin-left: auto; flex: 0 0 auto; }
+
+body.light-mode .p86-q-card { background: #fff; }
+body.light-mode .p86-q-answer { background: #fff; }
+
+@media (max-width: 640px) {
+  .p86-q-h { font-size: 18px; }
+  /* The answer box takes its own line rather than sharing with the button:
+     at 375px a side-by-side input is about 180px, which is not a sentence. */
+  .p86-q-act { flex-wrap: wrap; }
+  .p86-q-answer { flex: 1 1 100%; height: 42px; }
+  .p86-q-act .ee-btn { flex: 1 1 100%; height: 42px; font-size: 14px; }
+}
+
 /* ── Jobs list ─────────────────────────────────────────────────────
    Toolbar is ONE row on desktop: Add Job, the two quick-filter selects,
    Filter / Views / Map, and a ⋯ menu holding the weekly-at-most

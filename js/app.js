@@ -1910,6 +1910,7 @@
             orgleadsmap: 'Leads Map',
             jobshub:    'Jobs',
             cowork:     'Cowork',
+            queue:      'Queue',
             console:    'Command Center'
         };
 
@@ -2110,6 +2111,14 @@
                     window.renderProjectsInto(projHost);
                 } else if (projHost) {
                     projHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Projects module not loaded.</div>';
+                }
+            } else if (tabName === 'queue') {
+                // The Queue — items a producer parked for a decision (js/queue.js).
+                var qHost = document.getElementById('queueHost');
+                if (qHost && window.p86Queue && typeof window.p86Queue.render === 'function') {
+                    window.p86Queue.render(qHost);
+                } else if (qHost) {
+                    qHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Queue module not loaded.</div>';
                 }
             } else if (tabName === 'cost-inbox') {
                 // Cost Inbox — receipt capture + filterable list (js/cost-inbox.js).

@@ -526,9 +526,24 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.93';
+const APP_VERSION = '1.94';
 
 const releases = [
+  {
+    version: '1.94',
+    date: '2026-10-04',
+    name: 'The Queue \u2014 what is waiting on you, in one place',
+    summary: 'A new Queue page: when a background task stops to ask you something, it waits here, and your answer sends it straight back to work.',
+    changes: [
+      { type: 'new', text: 'Queue, in the Workspace group of the sidebar. When a background task needs a decision \u2014 which client a receipt belongs to, which cluster you meant \u2014 it stops and waits here instead of guessing. Answer it and the task picks up exactly where it left off, with everything it had already worked out still in hand. The sidebar carries a count of what is waiting.' },
+      { type: 'improved', text: 'The count is of decisions still WAITING, not ones you have not looked at. A question you read this morning and did not answer is still holding something up, so it keeps showing until you answer it.' },
+      { type: 'improved', text: 'Answering now happens in one place. The Crew activity panel still shows you the question at a glance, and hands you to the Queue to answer it \u2014 two answer boxes for one question meant two answers could race, and the later one quietly won.' },
+      { type: 'fixed', text: 'A task that asked you a SECOND question never showed up on the count. The badge only counted questions you had not seen, and answering the first one marked the whole task seen.' },
+      { type: 'fixed', text: 'Turning off \u201cBackground tasks\u201d in My Account stopped the phone notifications but left the emails coming. Both now follow the switch.' },
+      { type: 'fixed', text: 'The email and phone notification for a waiting task opened the app at the dashboard. They open the Queue now.' },
+      { type: 'fixed', text: 'An answer that failed to send looked exactly like one that worked \u2014 the box simply cleared. It now tells you, and leaves the question there to answer again.' },
+    ],
+  },
   {
     version: '1.93',
     date: '2026-10-03',

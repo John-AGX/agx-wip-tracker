@@ -108,7 +108,7 @@
   // Schedule's two sub-pages. An allow-list, so /schedule/<anything-else>
   // falls back to the bare Schedule tab rather than inventing a sub-view.
   var KNOWN_SCHEDULE_SUBS = ['calendar', 'planning'];
-  var KNOWN_TOP_TABS = ['summary', 'my-files', 'field-tools', 'jobs', 'jobshub', 'estimates', 'schedule', 'plans', 'assembly-studio', 'insights', 'admin', 'projects', 'orgmap', 'orgleadsmap', 'console', 'cost-inbox', 'invoices', 'service-tickets', 'my-day', 'my-tasks', 'messages', 'email-hub'];
+  var KNOWN_TOP_TABS = ['summary', 'my-files', 'field-tools', 'jobs', 'jobshub', 'estimates', 'schedule', 'plans', 'assembly-studio', 'insights', 'admin', 'projects', 'orgmap', 'orgleadsmap', 'console', 'cost-inbox', 'invoices', 'service-tickets', 'my-day', 'my-tasks', 'messages', 'email-hub', 'queue'];
 
   // ── URL <-> route object ──────────────────────────────────────
   function parsePath(pathname) {
