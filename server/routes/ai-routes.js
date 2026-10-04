@@ -12608,7 +12608,7 @@ async function execStaffTool(name, input, ctx) {
           ? ' — THERE ARE MORE. This is the newest ' + limit + ', so the total above is ' +
             'only these rows and NOT the job\'s QuickBooks cost. Re-call with a higher ' +
             'limit (max 1000), or narrow by cost_code / vendor / date, before quoting a total.'
-          : '') + ':'];
+          : ':')];
       r.rows.forEach(row => {
         const date = row.txn_date ? String(row.txn_date).slice(0, 10) : '?';
         const linkMark = row.linked ? '✓ linked' : '⊘ unlinked';
