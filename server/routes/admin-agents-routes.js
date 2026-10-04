@@ -6194,5 +6194,11 @@ module.exports.ensureManagedEnvironment = ensureManagedEnvironment;
 // two sentences in this file described a job-context block that had not existed
 // since 17 May, and no test in the repo could see it.
 module.exports.AGENT_SYSTEM_BASELINE = AGENT_SYSTEM_BASELINE;
+// The TOOL registry, exported for the same reason as the baseline above: a
+// claim about what an agent can do is only held by reading what it is
+// actually registered with. ai-routes' per-turn <available_tools> hint named
+// emit_payload_file — a tool only the SCRIBE holds — on every turn, and
+// nothing in the repo compared the two lists.
+module.exports.customToolsFor = customToolsFor;
 module.exports.buildReferenceLinksBlock = buildReferenceLinksBlock;
 module.exports.collectMcpServersFor = collectMcpServersFor;

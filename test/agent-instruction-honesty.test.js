@@ -977,3 +977,70 @@ describe('an instruction may not name a payload capability the grammar lacks', (
     expect(hits.length).toBeGreaterThan(2);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// A HINT THAT NAMES A TOOL MUST NAME ONE THE AGENT HAS.
+//
+// The per-turn <available_tools> block is the one piece of per-turn prose
+// this file could not reach. It is not a tool description and not a baseline
+// line — it is generated, so none of the surfaces above collect it, and it
+// said this, once per turn, on every surface:
+//
+//   <available_tools surface="job">
+//   Primary write tools for this surface …:
+//     - emit_payload_file
+//
+// 86 does not have emit_payload_file. Only the SCRIBE is registered with it
+// (customToolsFor filters the payload tools down to that one name for
+// agentKey === 'scribe'); 86 holds `scribe_write`, which hands the change to
+// the Scribe. Step 7 of the Scribe rework moved the primitive and left the
+// hint behind.
+//
+// The cost is not the ~250 characters. It is that the baseline tells 86 "your
+// tool list this turn is authoritative" and then the turn context names a
+// tool that is not on it — the misdirection that the comment above
+// SURFACE_PRIMARY_WRITES had already warned about for the propose_* names it
+// replaced, and then re-introduced.
+//
+// Held by RENDERING the block and comparing against the registry, because
+// that is the only thing that can see it.
+// ══════════════════════════════════════════════════════════════════════════
+describe('the per-turn <available_tools> hint names tools 86 actually holds', () => {
+  // What 86 is registered with. customToolsFor is the function every
+  // managed-agent path feeds from, so this is the real list, not a copy.
+  const heldBy = (agentKey) => new Set(
+    (adminAgents.customToolsFor(agentKey) || [])
+      .map((t) => t && t.name)
+      .filter(Boolean));
+
+  const SURFACES = ['estimate', 'job', 'intake', 'client', 'staff'];
+
+  test('the renderer is reachable, and renders something, or this proves nothing', () => {
+    expect(typeof I.renderAvailableToolsBlock).toBe('function');
+    const names = SURFACES
+      .map((sf) => I.renderAvailableToolsBlock(sf))
+      .flatMap((b) => [...String(b).matchAll(/^ {2}- (\S+)$/gm)].map((m) => m[1]));
+    expect(names.length).toBeGreaterThanOrEqual(SURFACES.length);
+  });
+
+  test.each(SURFACES)('%s: every tool the hint names is one 86 is registered with', (surface) => {
+    const held = heldBy('job');   // 'job' IS 86 — see modelForAgentKey
+    // The registry itself has to be non-trivial, or `has()` would be
+    // vacuously true against an empty set.
+    expect(held.size).toBeGreaterThan(20);
+    expect(held.has('scribe_write')).toBe(true);
+
+    const block = I.renderAvailableToolsBlock(surface);
+    const named = [...String(block).matchAll(/^ {2}- (\S+)$/gm)].map((m) => m[1]);
+    expect(named.length).toBeGreaterThan(0);
+    expect(named.filter((n) => !held.has(n))).toEqual([]);
+  });
+
+  test("emit_payload_file belongs to the Scribe, not to 86 — the fact the hint got wrong", () => {
+    expect(heldBy('scribe').has('emit_payload_file')).toBe(true);
+    expect(heldBy('job').has('emit_payload_file')).toBe(false);
+    // So the old hint text is gone from the renderer entirely.
+    const all = SURFACES.map((sf) => I.renderAvailableToolsBlock(sf)).join('\n');
+    expect(all).not.toContain('emit_payload_file');
+  });
+});

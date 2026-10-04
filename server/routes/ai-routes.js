@@ -17450,19 +17450,28 @@ const WAVE3_EXECUTOR_TOOLS = new Set(['list_workflow_items', 'list_compliance_ex
 // Map of surface (entity_type) -> primary WRITE tool names.
 // Used both for the per-turn <available_tools> hint and as the
 // source of truth for which surfaces a tool "belongs to".
-// The live agent has ONE write primitive — emit_payload_file — which
-// carries its own targets (entity_type + entity_id + ops), so the
-// per-surface hint just points 86 at it. The old per-surface propose_*
-// lists named tools that are no longer registered; surfacing them
-// contradicted the baseline ("your tool list this turn is authoritative")
-// and could push 86 into the silent-stop path. (Step 7 of the Scribe
-// rework swaps this to the scribe.write handoff.)
+// 86's ONE write primitive is `scribe_write` — it hands the change to the
+// Scribe, which is the agent that holds `emit_payload_file`.
+//
+// THIS MAP SAID emit_payload_file, AND THAT IS NOT A TOOL 86 HAS. Step 7 of
+// the Scribe rework moved the primitive and left the hint behind, so every
+// turn on every surface told 86 that its primary write was a tool absent
+// from its own registered list — the exact failure the comment that used to
+// sit here warned about for the propose_* names it replaced ("surfacing
+// them contradicted the baseline, 'your tool list this turn is
+// authoritative', and could push 86 into the silent-stop path"). The names
+// changed; the defect was re-introduced in the same breath as the warning.
+//
+// customToolsFor() in admin-agents-routes.js is the registry, and
+// test/agent-instruction-honesty.test.js now cross-checks every name below
+// against what that function actually registers for 86 — so a future move
+// breaks a test instead of quietly lying once per turn.
 const SURFACE_PRIMARY_WRITES = {
-  estimate: ['emit_payload_file'],
-  job: ['emit_payload_file'],
-  intake: ['emit_payload_file'],
-  client: ['emit_payload_file'],
-  staff: ['emit_payload_file']
+  estimate: ['scribe_write'],
+  job: ['scribe_write'],
+  intake: ['scribe_write'],
+  client: ['scribe_write'],
+  staff: ['scribe_write']
 };
 
 // Strict-gate map: tool name -> required entity_type. ONLY the entity-
@@ -17530,7 +17539,7 @@ function renderAvailableToolsBlock(entityType) {
   if (!Array.isArray(writes) || !writes.length) return '';
   return [
     '<available_tools surface="' + entityType + '">',
-    'Primary write tools for this surface (reads, memory, watches, web search, navigation, and attachment lookups remain available everywhere):',
+    'Primary write path for this surface — hand the change to the Scribe, which writes it (reads, memory, watches, web search, navigation, and attachment lookups remain available everywhere):',
     ...writes.map(n => '  - ' + n),
     '</available_tools>'
   ].join('\n');
@@ -18813,6 +18822,11 @@ module.exports.resolveHostKeyForUser = resolveHostKeyForUser;
 module.exports.archiveActiveAiSession = archiveActiveAiSession;
 module.exports.getAnthropic         = getAnthropic;
 module.exports.internals = {
+  // The per-turn <available_tools> hint. Exported for the same stated reason
+  // as everything else here: this block named a tool 86 does not hold, on
+  // every turn, for months, and no test could see it because the only way to
+  // see it is to RENDER it and compare against the registry.
+  renderAvailableToolsBlock,
   // The interactive turn driver. Exported for the same stated reason as
   // everything else in this block: the per-turn token ledger and the
   // executed-tool ledger are properties of RUNNING this loop, and a test
