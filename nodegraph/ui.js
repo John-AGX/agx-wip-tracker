@@ -3105,7 +3105,8 @@ function renderSidebarJobCard(jobIdOverride){
   var _place=[job.city,job.state].filter(Boolean).join(', ');
   if(_place) _facts.push({icon:'map-pin', text:_place});
 
-  function buildCard(taskVm){
+  // The head slot wants the strip; the sidebar rail wants the column.
+  function buildCard(taskVm, asStrip){
     return window.p86EntityCard.render({
       kind:'job', accent:accentCol, status:{label:job.status||'In Progress', color:statusCol},
       title:(_jn?_jn+' · ':'')+(job.title||job.name||''), subtitle:job.client||'',
@@ -3114,7 +3115,7 @@ function renderSidebarJobCard(jobIdOverride){
       tasks:(taskVm&&taskVm.tasks)||[],
       tasksMore:(taskVm&&taskVm.more)||0,
       canAddTask:!!(window.p86Tasks&&window.p86Tasks.openQuickAdd)
-    }, {compact:true});
+    }, {compact:true, strip:!!asStrip});
   }
 
   // One click from the card to a follow-up linked to this job, then repaint
@@ -3132,7 +3133,9 @@ function renderSidebarJobCard(jobIdOverride){
       });
     }, 1200);
   }
-  var cardHtml=buildCard(_jobCardTasks[jid]||null);
+  // Resolved before the card is built — the shape depends on where it lands.
+  var _headSlotEarly=document.getElementById('jh-job-card');
+  var cardHtml=buildCard(_jobCardTasks[jid]||null, !!_headSlotEarly);
   var actions='<div class="ng-jobcard-actions"><button class="ng-jobcard-btn" data-jobact="edit" title="Edit job details — name, client, address, dates, notes">Edit details</button></div>';
   // The ng-rail host (shown only when the left rail is visible — non-clean modes).
   if(host) host.innerHTML=cardHtml+actions;
@@ -3147,7 +3150,7 @@ function renderSidebarJobCard(jobIdOverride){
   // left job nav as before. The head is the slot that also OPENS Job
   // Information, so the card has to be inside it for the click to mean
   // anything; the sidebar fallback keeps the Site Plan's own rail working.
-  var headSlot=document.getElementById('jh-job-card');
+  var headSlot=_headSlotEarly;
   var jobnav=headSlot || document.getElementById('app-jobnav');
   if(jobnav && railHidden){
     var slot=document.getElementById('ng-jobheadcard');

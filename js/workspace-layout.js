@@ -676,6 +676,16 @@
         cardSlot.className = "jh-job-card";
         jobHead.appendChild(cardSlot);
         var btnBase = "padding:6px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid var(--border,#2a2a32);background:var(--surface,#17171c);color:var(--text,#eef0f6);cursor:pointer;";
+        // WHO MAY PRESS THESE. The bar was built after auth had already run its
+        // document-wide [data-cap] sweep, so these three were the only job
+        // actions in the app nobody checked: a corporate (read-only) login got
+        // Edit, Archive and Delete like everybody else. Delete asks for admin
+        // because the server does (requireRole('admin') on DELETE /api/jobs/:id)
+        // — the button now agrees with the endpoint instead of offering a 403.
+        var _auth = window.p86Auth;
+        var mayEdit = !_auth || !_auth.hasCapability ||
+          _auth.hasCapability('JOBS_EDIT_ANY') || _auth.hasCapability('JOBS_EDIT_OWN');
+        var mayDelete = !_auth || !_auth.isAdmin || _auth.isAdmin();
         // "Open Estimate" — only when this job has a linked estimate (job.estimate_id).
         var estId = jobForActions && jobForActions.estimate_id ? String(jobForActions.estimate_id).replace(/['"\\]/g, '') : '';
         var openEstBtn = estId
@@ -683,9 +693,13 @@
           : '';
         jobActions.innerHTML =
           openEstBtn +
-          '<button type="button" onclick="if(window.p86OpenJobInfo)window.p86OpenJobInfo();if(window.toggleEditJobInfo)window.toggleEditJobInfo()" title="Edit job info" style="' + btnBase + '">Edit</button>' +
-          '<button type="button" onclick="if(window.archiveCurrentJob)window.archiveCurrentJob()" title="Archive job" style="' + btnBase + '">Archive</button>' +
-          '<button type="button" onclick="if(window.deleteCurrentJob)window.deleteCurrentJob()" title="Delete job permanently" style="' + btnBase + 'color:#ff6b6b;border-color:rgba(255,107,107,.45);">Delete</button>';
+          (mayEdit
+            ? '<button type="button" onclick="if(window.p86OpenJobInfo)window.p86OpenJobInfo();if(window.toggleEditJobInfo)window.toggleEditJobInfo()" title="Edit job info" style="' + btnBase + '">Edit</button>' +
+              '<button type="button" onclick="if(window.archiveCurrentJob)window.archiveCurrentJob()" title="Archive job" style="' + btnBase + '">Archive</button>'
+            : '') +
+          (mayDelete
+            ? '<button type="button" onclick="if(window.deleteCurrentJob)window.deleteCurrentJob()" title="Delete job permanently" style="' + btnBase + 'color:#ff6b6b;border-color:rgba(255,107,107,.45);">Delete</button>'
+            : '');
         jobHead.appendChild(jobActions);
         strip.parentNode.insertBefore(jobHead, strip.nextSibling);
 
@@ -700,8 +714,8 @@
         var moreBtn = document.createElement('button');
         moreBtn.type = 'button';
         moreBtn.className = 'jh-job-more';
-        moreBtn.title = 'More';
-        moreBtn.setAttribute('aria-label', 'More job actions');
+        moreBtn.title = 'Job actions';
+        moreBtn.setAttribute('aria-label', 'Job actions');
         moreBtn.setAttribute('aria-haspopup', 'menu');
         moreBtn.setAttribute('aria-expanded', 'false');
         moreBtn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>';
@@ -709,7 +723,11 @@
           e.stopPropagation();
           setJobActionsOpen(!jobActions.classList.contains('is-open'));
         });
-        strip.appendChild(moreBtn);
+        // In the HEAD row now, not the strip: the head is one line — the job's
+        // card across it and this at the end — so the actions stopped taking a
+        // 36px band of their own on every job page. Hidden entirely when the
+        // viewer may press none of them.
+        if (jobActions.innerHTML) jobHead.appendChild(moreBtn);
         // A pick from the menu closes it; the button's own onclick still runs.
         jobActions.addEventListener('click', function (e) {
           if (jobActions.classList.contains('is-open') && e.target.closest('button')) setJobActionsOpen(false);
@@ -728,11 +746,14 @@
     var bar = document.querySelector('.jh-job-actions');
     var more = document.querySelector('.jh-job-more');
     if (!bar) return;
-    if (open && !jobSubnavIsMobile()) open = false;
     if (open) {
-      var strip = document.getElementById('jh-strip-detached');
-      var r = strip ? strip.getBoundingClientRect() : null;
-      bar.style.top = (r ? Math.round(r.bottom + 4) : 60) + 'px';
+      // Dropped from the button that opened it, at every width — the menu used
+      // to refuse to open above the touch breakpoint because the three buttons
+      // were a visible row up there. They are not any more.
+      var anchor = more || document.getElementById('jh-job-head');
+      var r = anchor ? anchor.getBoundingClientRect() : null;
+      bar.style.top = (r ? Math.round(r.bottom + 6) : 60) + 'px';
+      if (r) bar.style.right = Math.max(8, Math.round(window.innerWidth - r.right)) + 'px';
     }
     bar.classList.toggle('is-open', !!open);
     if (more) more.setAttribute('aria-expanded', open ? 'true' : 'false');

@@ -1309,7 +1309,62 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
    3-column grid there: the strip sits outside the scrolling <main>, so on a
    short phone screen every row of chips is pinned height taken from the
    page. */
-.jh-job-more { display: none; }
+/* EDIT / ARCHIVE / DELETE LIVE BEHIND THIS. They used to be a row of three
+   in the head at desktop widths and a menu only on a phone. The menu is now
+   the behaviour at every width: the head is one line — the job's card across
+   it and this at the end — and the three are capability-gated in
+   js/workspace-layout.js, which they never were while they sat in the page. */
+.jh-job-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 9px;
+  background: var(--surface, #17171c);
+  border: 1px solid var(--border, #2a2a32);
+  color: var(--text-dim, #9aa0b4);
+  cursor: pointer;
+}
+.jh-job-more:hover { color: var(--text, #f5f5f7); }
+.jh-job-more[aria-expanded="true"] { border-color: var(--accent, #4f8cff); color: var(--accent, #4f8cff); }
+.jh-job-actions { display: none; }
+.jh-job-actions.is-open {
+  display: flex;
+  position: fixed;
+  right: 8px;
+  z-index: 160;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 212px;
+  padding: 6px;
+  background: var(--surface, #17171c);
+  border: 1px solid var(--border, #2a2a32);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+body.light-mode .jh-job-actions.is-open { box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18); }
+.jh-job-actions.is-open > button {
+  justify-content: flex-start;
+  min-height: 38px;
+  padding: 0 12px !important;
+  font-size: 13px !important;
+  border-color: transparent !important;
+  background: transparent !important;
+  border-radius: 8px !important;
+  text-align: left;
+}
+.jh-job-actions.is-open > button:hover { background: var(--row-hover, #232329) !important; }
+/* Delete last and ruled off, so it is never the neighbour of a pointer aimed
+   at Archive. */
+.jh-job-actions.is-open > button[onclick*="deleteCurrentJob"] {
+  margin-top: 4px;
+  border-top: 1px solid var(--border, #2a2a32) !important;
+  border-radius: 0 0 8px 8px !important;
+}
 @media (max-width: 768px) {
   #jh-strip-detached.jh-metrics-strip {
     padding: 8px 12px;
@@ -1354,32 +1409,17 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
     scroll-snap-align: start;
   }
 
-  /* Edit / Archive / Delete fold behind one More button pinned to the
-     strip's right edge (sticky inside the swipe row, so chips pass under
-     it; the shadow in the page colour fades them out before they reach it).
-     The row itself is inline-styled by buildHeader, hence !important. */
+  /* Edit / Archive / Delete fold behind one button — at every width now,
+     not only here. The button moved out of the metrics strip and into the
+     page head with the job's card, so the sticky-inside-the-swipe-row
+     treatment it had in the strip is gone; what a phone still needs from
+     this block is the 40px target and the roomier menu rows below. */
   #jh-strip-detached.jh-metrics-strip { padding-right: 6px; }
-  #jh-strip-detached .jh-job-more {
-    display: inline-flex;
-    position: sticky;
-    right: 0;
-    z-index: 1;
-    flex: 0 0 auto;
-    align-self: center;
+  .jh-job-more {
     width: 40px;
     height: 40px;
-    padding: 0;
-    margin-left: 6px;
     border-radius: 10px;
-    background: var(--surface, #17171c);
-    border: 1px solid var(--border, #2a2a32);
     color: var(--text, #f5f5f7);
-    box-shadow: -20px 0 14px 10px var(--bg, #101014);
-  }
-  #jh-strip-detached .jh-job-more:hover { background: var(--surface, #17171c); }
-  #jh-strip-detached .jh-job-more[aria-expanded="true"] {
-    border-color: var(--accent, #4f8cff);
-    color: var(--accent, #4f8cff);
   }
   .jh-job-actions { display: none !important; }
   /* Open: a menu dropped from the strip's bottom edge (top is set by
@@ -1470,7 +1510,9 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
   min-width: 0;
 }
 .jh-job-head .jh-job-actions { padding: 0; margin-left: auto; flex: 0 0 auto; }
-.jh-job-card { flex: 1 1 auto; min-width: 0; max-width: 520px; cursor: pointer; border-radius: 12px; }
+/* The card spans the head. It was capped at 520px, which left most of a
+   1,600px row empty — the thing this head was built to stop. */
+.jh-job-card { flex: 1 1 auto; min-width: 0; cursor: pointer; border-radius: 10px; }
 .jh-job-card:focus-visible { outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px; }
 .jh-job-card .ng-jobheadcard { margin: 0; }
 /* The affordance: the card is a disclosure, so it says so on hover and when
@@ -1478,8 +1520,9 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
 .jh-job-card::after {
   content: '';
   position: absolute;
-  right: 14px;
-  top: 16px;
+  right: 12px;
+  top: 50%;
+  margin-top: -4px;
   width: 7px;
   height: 7px;
   border-right: 1.6px solid var(--text-dim, #9aa5ab);

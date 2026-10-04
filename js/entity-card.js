@@ -133,7 +133,41 @@
       '.p86-ecard.compact .p86-ecard-head{align-items:flex-start;}' +
       '.p86-ecard.compact .p86-ecard-headring{flex:0 0 auto;margin:-2px -2px 0 8px;}' +
       '.p86-ecard.compact .p86-ecard-headring svg{width:42px;height:42px;display:block;}' +
-      '.p86-ecard.compact .p86-ecard-title{white-space:normal;overflow:visible;text-overflow:clip;}';
+      '.p86-ecard.compact .p86-ecard-title{white-space:normal;overflow:visible;text-overflow:clip;}' +
+
+      // ── STRIP: the card laid along a page head ───────────────────────
+      // One line, read left to right: ring, status, name, client, then the
+      // facts and follow-ups spread along the rest of the width. The column
+      // version stacks those blocks; here the BODY is the row and each block
+      // keeps its own internal layout, so nothing about the markup changes.
+      '.p86-ecard.strip{border-radius:10px;}' +
+      '.p86-ecard.strip .p86-ecard-body{display:flex;align-items:center;flex-wrap:wrap;' +
+        'gap:6px 18px;padding:8px 14px 8px 16px;}' +
+      // The head stops being a full-width bar: it is the first item in the row.
+      '.p86-ecard.strip .p86-ecard-head{flex:0 0 auto;width:auto;align-items:center;gap:8px;}' +
+      '.p86-ecard.strip .p86-ecard-headring{margin:0;}' +
+      '.p86-ecard.strip .p86-ecard-headring svg{width:34px;height:34px;}' +
+      // Name block: takes the slack, and gives it back when the facts need it.
+      '.p86-ecard.strip .p86-ecard-main{flex:1 1 220px;min-width:0;margin:0;}' +
+      '.p86-ecard.strip .p86-ecard-titlerow{gap:6px;}' +
+      '.p86-ecard.strip .p86-ecard-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+      '.p86-ecard.strip .p86-ecard-sub{margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+      // Facts run ALONG the strip instead of wrapping under the title.
+      '.p86-ecard.strip .p86-ecard-facts{flex:1 1 auto;margin-top:0;gap:4px 16px;}' +
+      '.p86-ecard.strip .p86-ecard-stats{flex:0 0 auto;margin-top:0;gap:18px;}' +
+      // Follow-ups lose the full-width rule above them — a vertical divider
+      // reads as "and also" on a row, where a horizontal one reads as "below".
+      '.p86-ecard.strip .p86-ecard-tasks{flex:0 1 auto;margin-top:0;padding-top:0;padding-left:16px;' +
+        'border-top:none;border-left:1px solid var(--border,#2a2f3e);max-width:330px;}' +
+      '.p86-ecard.strip .p86-ecard-addtask{margin-top:0;}' +
+      // Under ~820px it goes back to being a card: a strip that wraps to four
+      // lines is just a card with the spacing of a strip.
+      '@media (max-width:820px){' +
+        '.p86-ecard.strip .p86-ecard-body{display:block;padding:11px 13px 12px 16px;}' +
+        '.p86-ecard.strip .p86-ecard-facts{margin-top:7px;}' +
+        '.p86-ecard.strip .p86-ecard-tasks{margin-top:9px;padding-top:8px;padding-left:0;' +
+          'border-left:none;border-top:1px solid var(--border,#2a2f3e);max-width:none;}' +
+      '}';
     var el = document.createElement('style');
     el.id = STYLE_ID;
     el.textContent = css;
@@ -178,6 +212,12 @@
     vm = vm || {};
     opts = opts || {};
     var compact = !!opts.compact;
+    // STRIP: the same card laid along a page head instead of down a sidebar —
+    // status, name, facts and follow-ups on ONE line, so a header that is
+    // 1,600px wide is read across rather than down a 520px column with the
+    // rest of the row empty. Markup is unchanged; the shape is CSS, which is
+    // what keeps every other caller (sidebar, map popup, inspector) identical.
+    var strip = !!opts.strip;
     var status = vm.status || {};
     var accent = vm.accent || status.color || 'var(--accent,#4f8cff)';
     var baseData = vm.data || {};
@@ -311,7 +351,7 @@
       actions += '</div>';
     }
 
-    return '<div class="p86-ecard' + (compact ? ' compact' : '') + '" data-kind="' + esc(vm.kind || '') + '">' +
+    return '<div class="p86-ecard' + (compact ? ' compact' : '') + (strip ? ' strip' : '') + '" data-kind="' + esc(vm.kind || '') + '">' +
       '<div class="p86-ecard-accent" style="background:' + accent + ';"></div>' +
       '<div class="p86-ecard-body">' + head + main + facts + stats + tasks + actions + '</div></div>';
   }
