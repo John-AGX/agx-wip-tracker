@@ -327,6 +327,13 @@ function renderNodes(){
       // half a footprint down-and-right of the spot that was clicked, and
       // "locked to that" is exactly what dropping a pin is supposed to mean.
       if(_spSatellite && E.bldgGeom(n)==='pin'){
+        // min-width:190px on .ng-node (nodegraph.css) is NOT reset for a
+        // building — the site-plan reset excludes .ng-tt-t1 deliberately — and
+        // spBuildingFootprint never returns more than 70, so the block was laid
+        // out 190 units (95 m) wide however small the footprint, putting its
+        // real centre 30-41 m east of the pin. Floor the min to the footprint so
+        // the width below is the width that paints and the centring is true.
+        div.style.minWidth=_fp.w+'px';
         div.style.left=(_rx-_fp.w/2)+'px'; div.style.top=(_ry-_fp.h/2)+'px';
       }
       var _pc = n.pctComplete||0;
@@ -1868,7 +1875,7 @@ function ensureOrbit3D(o){
     _orbitEl=document.createElement('div'); _orbitEl.className='ng-orbit-3d';
     // Photorealistic 3D runs in an isolated same-origin iframe (loads Maps beta + Map3DElement).
     var frame=document.createElement('iframe'); frame.className='ng-orbit-3d-frame';
-    frame.src='/orbit3d.html?v=10'; frame.setAttribute('title','3D site view'); frame.setAttribute('allow','fullscreen');
+    frame.src='/orbit3d.html?v=11'; frame.setAttribute('title','3D site view'); frame.setAttribute('allow','fullscreen');
     _orbitEl.appendChild(frame); _orbitEl.__frame=frame;
     var exitB=document.createElement('button'); exitB.type='button'; exitB.className='ng-orbit-exit';
     exitB.innerHTML='&#x2715; Exit 3D'; exitB.addEventListener('click', exitOrbit3D); _orbitEl.appendChild(exitB);
@@ -6563,7 +6570,17 @@ function initEvents(){
       var nid2=nel.getAttribute('data-id'),n3=E.findNode(nid2);if(!n3)return;
       // Deselect old, select new without full re-render
       if(selN&&selN!==nid2){var old=canvasEl.querySelector('[data-id="'+selN+'"]');if(old)old.classList.remove('ng-sel');}
-      selN=nid2; dragN=nid2;
+      selN=nid2;
+      // A geo-positioned building is placed by its PIN or its polygon, not by
+      // n.x/n.y — so it must not be draggable. Dragging one wrote a bogus
+      // abstract x/y, saved it, and let the block snap back to the pin on the
+      // next render, while fitSiteplan and siteplanCentroid went on reading
+      // the position no building occupied. Reposition with Place or Trace.
+      // (Unreachable before pin-only buildings painted: a traced one is
+      // display:none, and a pinned one never rendered.)
+      var _geoFixed = _spSatellite && E.viewMode && E.viewMode()==='siteplan'
+        && n3.type==='t1' && E.bldgGeom(n3)!=='none';
+      dragN = _geoFixed ? null : nid2;
       nel.classList.add('ng-sel');
       updateConnectedHighlight();
       renderInspector();   // populate the right Inspector with the clicked node (cost/scope/sub/PO/CO/invoice) — every type, same behavior

@@ -78,6 +78,10 @@ const bldgGeom = compile(
   [extractFunction(ENGINE_SRC, 'bldgGeom'), extractFunction(ENGINE_SRC, '_coord')],
   [], [], 'bldgGeom'
 );
+const spLatLngToGraph = compile(
+  ['var SP_M_PER_UNIT = 0.5;', extractFunction(ENGINE_SRC, 'spLatLngToGraph')],
+  [], [], 'spLatLngToGraph'
+);
 const spBuildingFootprint = compile(
   ['var SP_M_PER_UNIT = 0.5;', extractFunction(ENGINE_SRC, 'spBuildingFootprint')],
   [], [], 'spBuildingFootprint'
@@ -246,7 +250,7 @@ describe('Place can create a building, and it mints no wire', () => {
         nodes.push(n);
         return n;
       },
-      spLatLngToGraph: (lat, lng, oLat, oLng) => ({ x: (lng - oLng) * 1000, y: (oLat - lat) * 1000 }),
+      spLatLngToGraph,                 // the REAL projection, lifted — a model here hid a sign flip
     };
     const newBuildingAt = compile(
       [extractFunction(UI_SRC, 'newBuildingAt')],
@@ -269,6 +273,41 @@ describe('Place can create a building, and it mints no wire', () => {
     const h = harness();
     h.newBuildingAt(28.5, -81.4);
     expect(h.newBuildingAt(28.501, -81.401).label).toBe('B2');
+  });
+
+  test('the minted x/y is the REAL projection, asserted AWAY from the origin', () => {
+    // At the origin the projection contributes (0,0), so a sign flip, a dropped
+    // projection and a dropped Math.round all survived here. The abstract x/y is
+    // what fitSiteplan, the non-satellite graph view and the persisted node
+    // position all use, so a wrong one stacks every pinned building on the
+    // centroid off-satellite and nothing notices.
+    const h = harness();
+    const g = spLatLngToGraph(28.501, -81.401, 28.5, -81.4);
+    expect(g.x === 0 && g.y === 0).toBe(false);            // the fixture IS off-origin
+    expect(h.newBuildingAt(28.501, -81.401)).toEqual(expect.objectContaining({
+      x: Math.round(500 + g.x), y: Math.round(400 + g.y),
+    }));
+  });
+
+  test('PIN-TO-CREATE ITSELF is driven, not merely named in the source', () => {
+    // Deleting `creating || ` from the shipped guard kills the entire feature:
+    // Place with nothing selected would enter pick mode, find no node, fall to
+    // the else and report "Selection lost". Every source-text assertion in this
+    // file still passed, because `var creating=(...)` and `newBuildingAt(...)`
+    // both remain present — the second merely becomes unreachable.
+    const GATE = sourceLine(UI_SRC, '&& _spOrigin && _spOriginGraph){').trim();
+    expect(GATE.endsWith('){')).toBe(true);                // it really does open a block
+    const creates = compile(
+      ['function creates(creating, sel, _spOrigin, _spOriginGraph){ ' + GATE
+        + ' return true; } return false; }'], [], [], 'creates');
+
+    const bldg = { type: 't1', id: 'n1' };
+    expect(creates(true, null, {}, {})).toBe(true);        // nothing selected -> CREATE
+    expect(creates(false, bldg, {}, {})).toBe(true);       // a building selected -> re-pin
+    expect(creates(false, null, {}, {})).toBe(false);      // selection lost -> refuse
+    expect(creates(false, { type: 'co' }, {}, {})).toBe(false);   // not a building -> refuse
+    expect(creates(true, null, null, {})).toBe(false);     // no geo origin -> refuse
+    expect(creates(true, null, {}, null)).toBe(false);
   });
 
   test('IT ADDS NO WIRE. An edge that buys nothing is an edge that could move money later', () => {
@@ -403,6 +442,125 @@ describe('the massing-block CSS was written for this case and was unreachable', 
     expect(UI_SRC).toContain("if(_geoBldg && E.bldgGeom(n)==='poly') div.classList.add('ng-has-poly');");
   });
 });
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 4c. WHAT AN ADVERSARIAL REVIEW OF THE FIRST PUSH FOUND
+ *
+ * Five real defects, three in the shipped code and two holes in this very file.
+ * They are all one family: making a previously-unreachable element reachable
+ * exposes every rule that was written assuming nothing would reach it.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('the min-width floor does not defeat the footprint', () => {
+  const CSS = read('nodegraph/nodegraph.css');
+
+  test('.ng-node really does floor every node at 190px', () => {
+    // The premise. If this stops being true the fix below is dead weight and
+    // should be reconsidered rather than left as cargo.
+    expect(CSS).toMatch(/\.ng-node\{[^}]*min-width:190px/);
+  });
+
+  test('and the site-plan reset EXCLUDES buildings, so it never helped', () => {
+    expect(CSS).toContain('.ng-node:not(.ng-tt-t1):not(.ng-tt-wip)');
+  });
+
+  test('a footprint can NEVER reach 190, so the clamp always bit', () => {
+    // 12..35 m wide at 0.5 m per unit = 24..70 units. Not close to 190.
+    let max = 0;
+    for (const b of [0, 1, 100, 25000, 50000, 150000, 5e6, 1e12]) {
+      max = Math.max(max, spBuildingFootprint(b).w);
+    }
+    expect(max).toBeLessThan(190);
+  });
+
+  test('so the renderer floors min-width to the footprint itself', () => {
+    // Driven on the three shipped lines. Before the fix the block painted 190
+    // units (95 m) wide whatever the budget, and its centre sat 30-41 m east of
+    // the pin — which made "locked to the spot you clicked" false on the x axis.
+    const lines = [
+      sourceLine(UI_SRC, "div.style.minWidth=_fp.w+'px';"),
+      sourceLine(UI_SRC, "div.style.left=(_rx-_fp.w/2)+'px'"),
+    ].map((l) => l.trim()).join(' ');
+    const place = compile(
+      ['function place(_rx, _ry, _fp, div){ ' + lines + ' return div; }'],
+      [], [], 'place'
+    );
+    const div = { style: {} };
+    place(1000, 800, spBuildingFootprint(50000), div);
+    const fp = spBuildingFootprint(50000);
+    expect(div.style.minWidth).toBe(fp.w + 'px');
+    expect(div.style.left).toBe((1000 - fp.w / 2) + 'px');
+    // the painted centre and the pin are the same point
+    expect(parseFloat(div.style.left) + fp.w / 2).toBe(1000);
+  });
+
+  test('the width and the min-width come from the SAME footprint', () => {
+    // Two different expressions here is how the centring silently drifts again.
+    const w = sourceLine(UI_SRC, "div.style.width=_fp.w+'px'");
+    const mw = sourceLine(UI_SRC, "div.style.minWidth=_fp.w+'px'");
+    expect(w).toContain('_fp.w');
+    expect(mw).toContain('_fp.w');
+  });
+});
+
+describe('a geo-positioned building cannot be dragged', () => {
+  // Its position belongs to its pin or its polygon. Dragging one wrote a bogus
+  // abstract x/y, PERSISTED it, and let the block snap back on the next render,
+  // while fitSiteplan and siteplanCentroid went on reading a position no
+  // building occupied. Unreachable until pin-only buildings painted.
+  const GUARD = sourceLine(UI_SRC, 'var _geoFixed = _spSatellite && E.viewMode')
+    + ' ' + sourceLine(UI_SRC, "&& n3.type==='t1' && E.bldgGeom(n3)!=='none';")
+    + ' ' + sourceLine(UI_SRC, 'dragN = _geoFixed ? null : nid2;');
+  const arm = compile(
+    ['function arm(_spSatellite, E, n3, nid2){ var dragN; ' + GUARD.replace(/\s+/g, ' ') + ' return dragN; }'],
+    [], [], 'arm'
+  );
+  const E = { viewMode: () => 'siteplan', bldgGeom: bldgGeom };
+
+  test('a pinned building does not arm the drag', () => {
+    expect(arm(true, E, t1({ geoLatLng: { lat: 28.5, lng: -81.4 } }), 'n1')).toBeNull();
+  });
+
+  test('nor does a traced one', () => {
+    expect(arm(true, E, t1({ polygon: ring(28.5, -81.4) }), 'n1')).toBeNull();
+  });
+
+  test('a building that is NOWHERE still drags — it has only its abstract x/y', () => {
+    expect(arm(true, E, t1(), 'n1')).toBe('n1');
+  });
+
+  test('a non-building node still drags', () => {
+    expect(arm(true, E, t1({ type: 'co', geoLatLng: { lat: 28.5, lng: -81.4 } }), 'n1')).toBe('n1');
+  });
+
+  test('and off the satellite, or off the site plan, everything drags as before', () => {
+    const pinned = t1({ geoLatLng: { lat: 28.5, lng: -81.4 } });
+    expect(arm(false, E, pinned, 'n1')).toBe('n1');
+    expect(arm(true, { viewMode: () => 'graph', bldgGeom: bldgGeom }, pinned, 'n1')).toBe('n1');
+  });
+
+  test('selection is NOT what was disabled — only the drag', () => {
+    const seg = UI_SRC.slice(UI_SRC.indexOf('var _geoFixed') - 600, UI_SRC.indexOf('var _geoFixed'));
+    expect(seg).toContain('selN=nid2;');
+  });
+});
+
+describe('the 3D card names the geometry it actually has', () => {
+  test('a pinned building is not called "Traced building"', () => {
+    const word = compile(
+      ['function word(b){ ' + sourceLine(ORBIT_SRC, 'var _geomWord=').trim() + ' return _geomWord; }'],
+      [], [], 'word'
+    );
+    expect(word({ path: null })).toBe('Pinned location');
+    expect(word({ path: [1, 2] })).toBe('Pinned location');          // a stub ring is not a trace
+    expect(word({ path: [1, 2, 3] })).toBe('Traced building');
+  });
+
+  test('and the card reads the word rather than a hard-coded one', () => {
+    const line = sourceLine(ORBIT_SRC, "(b.units?b.units+' units':'')");
+    expect(line).toContain('_geomWord');
+    expect(line).not.toContain("'Traced building'");
+  });
+});
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * 5. THE 3D VIEW GETS THE PIN
  * ══════════════════════════════════════════════════════════════════════════*/

@@ -410,7 +410,12 @@
     var ft=Math.round((Number(b.heightM)||8)*3.2808);
     var html='';
     html+='<h3>'+esc(b.label)+'</h3>';
-    html+='<div class="sub">'+(b.levels?b.levels+' level'+(b.levels===1?'':'s'):'')+(b.levels&&b.units?' · ':'')+(b.units?b.units+' units':'')+((b.levels||b.units)?'':'Traced building')+'</div>';
+    // A building with no levels or units falls back to naming its GEOMETRY, and
+    // a pinned one has no trace — calling it "Traced building" contradicted the
+    // one distinction this view exists to keep straight. b.path is already null
+    // for a pinned building (see postOrbitData).
+    var _geomWord=(b.path && b.path.length>=3) ? 'Traced building' : 'Pinned location';
+    html+='<div class="sub">'+(b.levels?b.levels+' level'+(b.levels===1?'':'s'):'')+(b.levels&&b.units?' · ':'')+(b.units?b.units+' units':'')+((b.levels||b.units)?'':_geomWord)+'</div>';
     html+='<div class="bigpct"><b>'+pct+'%</b><span>complete</span></div>';
     html+='<div class="bar"><i style="width:'+pct+'%;background:'+pctColor(pct)+'"></i></div>';
     html+='<div class="kpis">'+

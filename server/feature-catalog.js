@@ -541,6 +541,9 @@ const releases = [
       { type: 'fixed', text: 'The magnifier on a building card works on a pinned building. It used to say “no traced footprint yet” and refuse to move, because it asked whether the building had been traced rather than whether it was anywhere. It still refuses — correctly — for a building that is on no map at all.' },
       { type: 'improved', text: 'Trace a footprint when you want the area: dividing scope by square feet, or a floor plan that has to match real dimensions. Drop a pin when you just need somewhere for costs, photos and progress to land. Both put the building on the map; only tracing measures it.' },
       { type: 'fixed', text: 'A half-written coordinate is no longer treated as a location. A building whose pin was blank used to count as pinned, which put it at latitude 0, longitude 0 — in the Gulf of Guinea — and the camera would fly there.' },
+      { type: 'fixed', text: 'A pinned building is drawn at its real size. It was being stretched to the minimum width every node on the map carries, which made it roughly 95 metres wide whatever the building was — a flat slab — and put its centre well to the east of the pin you dropped. It now matches the footprint it is meant to represent, so the pin really is its centre.' },
+      { type: 'fixed', text: 'A building placed on the map can no longer be dragged off it. Dragging one moved it, saved that position, and then let it snap back to its pin the next time the map drew — while the view kept zooming out to include a spot no building occupied. A placed building’s position belongs to its pin or its traced outline; use Place or Trace to move it.' },
+      { type: 'fixed', text: 'The 3D card no longer describes a pinned building as “Traced building”.' },
     ],
   },
   {
