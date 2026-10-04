@@ -536,14 +536,22 @@
     var MarkerEl=Lib.Marker3DInteractiveElement || Lib.Marker3DElement;
     clearDrawn();
     (lastData.buildings||[]).forEach(function(b){
-      if(!b.path || b.path.length<3) return;
+      // Traced: extrude a block and pin at the footprint centroid. PINNED
+      // ONLY: no footprint to extrude, but it still gets the floating
+      // interactive data pin -- which is the whole point of dropping one.
+      var traced=!!(b.path && b.path.length>=3);
+      var anchor=traced
+        ? centroid(b.path)
+        : ((b.pin && isFinite(Number(b.pin.lat)) && isFinite(Number(b.pin.lng)))
+            ? { lat:Number(b.pin.lat), lng:Number(b.pin.lng) } : null);
+      if(!anchor) return;
       var h=b.heightM || 8;
       var pct=Math.max(0,Math.min(100,Number(b.pct)||0));
       var shade=design.byProgress ? pctColor(pct) : design.shade;
       // Buildings render as a shaded, extruded outline block over the 3D
       // tiles. (The procedural glTF "massing models" + jobsite props were
       // removed — low value and finicky to render.)
-      if(design.blocks){
+      if(design.blocks && traced){
         // Buffer the roofline trace ~2.2m outward so the block ENGULFS the
         // building (walls, eaves) instead of slicing through the roof edge.
         var fat=expandPath(b.path, 2.2);
@@ -566,7 +574,7 @@
       // click for the full building card. Extruded stem ties it to the block.
       if(!MarkerEl) return;
       try{
-        var cen=centroid(b.path);
+        var cen=anchor;
         var mk=new MarkerEl({
           position:{ lat:cen.lat, lng:cen.lng, altitude:h+12 },
           altitudeMode:(AltitudeMode && AltitudeMode.RELATIVE_TO_GROUND) || undefined,

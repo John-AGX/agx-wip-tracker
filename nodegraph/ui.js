@@ -288,10 +288,17 @@ function renderNodes(){
     var _slim = sitePlan && _spSatellite && n.type!=='t1'; // Slice 4: slim at-a-glance chip on the satellite map
     if(sitePlan && window._p86NcDefault && n.type!=='t1') return; // NC-5: children live in the building's docked card stack, not as fanned nodes
     if(sitePlan && !E.spNodeVisible(n.type, n.id)) return; // site-plan: buildings + WIP hub, or a drilled-in building's subgraph
-    // Clean Site Map (satellite): a building with no traced footprint isn't a map object — no
-    // floating seed card (it's managed in the right panel). And a sub is a data relationship
-    // (auto-assigned via its scope), never a floating node on the map.
-    if(sitePlan && _spSatellite && n.type==='t1' && !(n.polygon && n.polygon.length>=3)) return;
+    // Clean Site Map (satellite): a building with NO GEOMETRY AT ALL is not a
+    // map object -- no floating seed card at an arbitrary x/y (it is managed in
+    // the right panel instead). A DROPPED PIN *is* geometry: it already renders
+    // correctly below, as a massing block on its real spot via geoRenderPos +
+    // spBuildingFootprint. That path was complete and unreachable, because this
+    // line asked for a TRACE when the question is whether the building is
+    // anywhere at all. Tracing is what AREA-driven quantities need, not what
+    // being on the map needs.
+    // And a sub is a data relationship (auto-assigned via its scope), never a
+    // floating node on the map.
+    if(sitePlan && _spSatellite && n.type==='t1' && E.bldgGeom(n)==='none') return;
     if(sitePlan && _spSatellite && n.type==='sub') return;
     if(editingId===n.id) return;
     // Watches are never collapsed — always show the flashy KPI
@@ -313,6 +320,15 @@ function renderNodes(){
         ? E.spBuildingFootprint(n.budget)
         : (n.footprint || E.budgetFootprint(n.budget));
       div.style.width=_fp.w+'px'; div.style.minHeight=_fp.h+'px';
+      // A PINNED-only building IS the visible block (a traced one is demoted to
+      // a click-through shell by ng-has-poly below, because its polygon carries
+      // the visual). The pin marks where the building IS, so centre the block on
+      // it rather than hanging its top-left corner there -- otherwise it lands
+      // half a footprint down-and-right of the spot that was clicked, and
+      // "locked to that" is exactly what dropping a pin is supposed to mean.
+      if(_spSatellite && E.bldgGeom(n)==='pin'){
+        div.style.left=(_rx-_fp.w/2)+'px'; div.style.top=(_ry-_fp.h/2)+'px';
+      }
       var _pc = n.pctComplete||0;
       div.classList.add(_pc>=100?'ng-sp-done':(_pc>0?'ng-sp-prog':'ng-sp-todo'));
       // On satellite, a geo-bound building renders as a real 3D MASSING BLOCK
@@ -323,7 +339,7 @@ function renderNodes(){
       if(_geoBldg) div.classList.add('ng-sp-building');
       // Phase 4: a TRACED geo building is represented by its polygon (label + % drawn
       // on it, clicks handled there) — demote this card to a click-through shell.
-      if(_geoBldg && n.polygon && n.polygon.length>=3) div.classList.add('ng-has-poly');
+      if(_geoBldg && E.bldgGeom(n)==='poly') div.classList.add('ng-has-poly');
       // 2.5D massing: extrude the block with a budget-proportional depth so it
       // reads as solid mass (bigger budget = taller). Render-only; gated behind
       // the "3D" toggle (status stays on the border, so off reverts to flat).
@@ -1852,7 +1868,7 @@ function ensureOrbit3D(o){
     _orbitEl=document.createElement('div'); _orbitEl.className='ng-orbit-3d';
     // Photorealistic 3D runs in an isolated same-origin iframe (loads Maps beta + Map3DElement).
     var frame=document.createElement('iframe'); frame.className='ng-orbit-3d-frame';
-    frame.src='/orbit3d.html?v=9'; frame.setAttribute('title','3D site view'); frame.setAttribute('allow','fullscreen');
+    frame.src='/orbit3d.html?v=10'; frame.setAttribute('title','3D site view'); frame.setAttribute('allow','fullscreen');
     _orbitEl.appendChild(frame); _orbitEl.__frame=frame;
     var exitB=document.createElement('button'); exitB.type='button'; exitB.className='ng-orbit-exit';
     exitB.innerHTML='&#x2715; Exit 3D'; exitB.addEventListener('click', exitOrbit3D); _orbitEl.appendChild(exitB);
@@ -1895,7 +1911,9 @@ function postOrbitData(){
   var o=_orbitPending || jobOrigin(); if(!o) return;
   var buildings=[];
   E.nodes().forEach(function(n){
-    if(n.type!=='t1' || !n.polygon || n.polygon.length<3) return;
+    if(n.type!=='t1') return;
+    var _geom=E.bldgGeom(n);
+    if(_geom==='none') return;                 // nowhere to anchor it in 3D either
     // Phases + change orders wired into this building, with their own %.
     var phases=[];
     try{
@@ -1912,7 +1930,11 @@ function postOrbitData(){
     try{ E.resetComp(); actual=E.getActual(n)||0; }catch(_){}
     buildings.push({
       nodeId: n.id,
-      path: n.polygon.map(function(v){ return { lat:Number(v.lat), lng:Number(v.lng) }; }),
+      // A traced building sends its ring and extrudes a block. A PINNED one
+      // sends no ring and gets only the floating data pin -- "we can use the
+      // pins we have for the orbit 3D view instead of a building trace".
+      path: _geom==='poly' ? n.polygon.map(function(v){ return { lat:Number(v.lat), lng:Number(v.lng) }; }) : null,
+      pin: _geom==='poly' ? null : { lat:Number(n.geoLatLng.lat), lng:Number(n.geoLatLng.lng) },
       label: n.label||'Building',
       pct: Math.round((E&&E.getT1WeightedPct)?E.getT1WeightedPct(n):(n.pctComplete||0)),
       // Per-building 3D height: an explicit override (set from the 3D card's
@@ -1949,16 +1971,23 @@ function ensureGeoPickOverlay(){
   _geoPickOverlay.addEventListener('pointerdown',function(e){ e.stopPropagation(); });
   _geoPickOverlay.addEventListener('mouseup',function(e){ e.stopPropagation(); });
   _geoPickOverlay.addEventListener('click',function(e){
-    var sel=_geoPickId && E.findNode(_geoPickId);            // captured at Place time — not live selN
-    if(sel && sel.type==='t1' && _spOrigin && _spOriginGraph){
+    var creating=(_geoPickId===null);                       // Place with nothing selected = drop a NEW building
+    var sel=creating ? null : E.findNode(_geoPickId);        // captured at Place time, not live selN
+    if((creating || (sel && sel.type==='t1')) && _spOrigin && _spOriginGraph){
       var ll=pickLatLngFromEvent(e);
-      E.setNodeGeo(sel.id, ll.lat, ll.lng);
+      var id=creating ? null : sel.id;
+      if(creating){
+        var nn=newBuildingAt(ll.lat, ll.lng);
+        if(!nn){ exitGeoPick(); showSatHint(true, 'Could not create the building \u2014 try again.'); return; }
+        id=nn.id; selN=nn.id;
+      }
+      E.setNodeGeo(id, ll.lat, ll.lng);
       if(E.saveGraph) E.saveGraph();
       render();
       exitGeoPick();
     } else {
       exitGeoPick();
-      showSatHint(true, 'Selection lost — pick a building, then click Place again.');
+      showSatHint(true, 'Selection lost \u2014 pick a building, then click Place again.');
     }
   });
   wrap.appendChild(_geoPickOverlay);
@@ -1974,13 +2003,19 @@ function toggleGeoPick(){
   if(_geoPick){ exitGeoPick(); showSatHint(false); return; }
   if(_tracing) exitTrace();                                   // don't run both picker modes at once
   if(_measuring) exitMeasure();
+  // A selected building -> move ITS pin; otherwise drop a NEW building. This
+  // mirrors toggleTraceMode, the sibling tool, which already re-traces the
+  // selection or draws a new one. Place used to refuse outright with "Select a
+  // building first", which is why there was no way to CREATE one by pinning.
   var sel=selN && E.findNode(selN);
-  if(!sel || sel.type!=='t1'){ showSatHint(true, 'Select a building first, then click Place and tap its spot on the map.'); return; }
+  var existing=(sel && sel.type==='t1') ? sel : null;
   if(!_spOrigin){ showSatHint(true); return; }
-  _geoPick=true; _geoPickId=sel.id;                          // capture the building now (don't depend on selN surviving)
+  _geoPick=true; _geoPickId=existing?existing.id:null;       // capture the building now (don't depend on selN surviving)
   var pb=document.getElementById('ngGeoPlaceBtn'); if(pb) pb.classList.add('ng-on');
   ensureGeoPickOverlay().style.display='block';
-  showSatHint(true, 'Click the map to place “'+(sel.label||'building')+'”.');
+  showSatHint(true, existing
+    ? ('Click the map to place \u201C'+(existing.label||'building')+'\u201D.')
+    : 'Click the building on the imagery to drop a pin and create it. Trace it later if you need its area.');
 }
 
 // ── Building polygons (Phase 1): trace a footprint on the basemap ────────
@@ -1993,6 +2028,20 @@ function _geoOriginNow(){
     o:(_spOrigin && sameJob)?_spOrigin:jobOrigin(),
     og:(_spOriginGraph && sameJob)?_spOriginGraph:siteplanCentroid()
   };
+}
+// Mint a NEW building anchored at a real lat/lng. Shared by trace-to-create
+// and pin-to-create so the two tools cannot drift on what a new building is.
+//
+// NO WIP WIRE HERE -- the caller adds one if it wants it (finishTrace does, so
+// trace-to-create keeps its exact previous behaviour). Pin-to-create
+// deliberately does not: an empty t1 contributes getActual=0/getAccrued=0 so
+// the wire moves no money today, but the phase matrix is the money model now
+// and an edge that buys nothing is an edge that could move something later.
+function newBuildingAt(lat, lng){
+  var or=_geoOriginNow(), gx=0, gy=0;
+  if(or && or.o && or.og){ var g=E.spLatLngToGraph(lat, lng, or.o.lat, or.o.lng); gx=or.og.x+g.x; gy=or.og.y+g.y; }
+  var cnt=E.nodes().filter(function(x){ return x.type==='t1'; }).length;
+  return E.addNode('t1', Math.round(gx), Math.round(gy), 'B'+(cnt+1));
 }
 function renderPolygons(){
   if(!canvasEl) return;
@@ -2225,11 +2274,11 @@ function finishTrace(){
   // Footprint centroid → the building's geo anchor (block/label/wires sit on it).
   var clat=0, clng=0; pts.forEach(function(v){ clat+=v.lat; clng+=v.lng; }); clat/=pts.length; clng/=pts.length;
   if(!id){
-    // Trace-to-create: the drawn footprint IS a new building node, auto-wired to WIP.
-    var or=_geoOriginNow(), gx=0, gy=0;
-    if(or && or.o && or.og){ var g=E.spLatLngToGraph(clat, clng, or.o.lat, or.o.lng); gx=or.og.x+g.x; gy=or.og.y+g.y; }
-    var cnt=E.nodes().filter(function(x){ return x.type==='t1'; }).length;
-    var nn=E.addNode('t1', Math.round(gx), Math.round(gy), 'B'+(cnt+1));
+    // Trace-to-create: the drawn footprint IS a new building node, auto-wired
+    // to WIP. Shares newBuildingAt with pin-to-create so the two tools cannot
+    // drift on what a new building is; the WIP wire is added HERE, by this
+    // caller, so pin-to-create can decline it.
+    var nn=newBuildingAt(clat, clng);
     if(!nn){ showSatHint(true, 'Could not create the building — try again.'); renderPolygons(); return; }
     id=nn.id;
     var wip=E.nodes().find(function(x){ return x.type==='wip'; });
@@ -4709,17 +4758,20 @@ window.p86NgSelect=function(id){
 // site-plan focus set — the same path the polygon dbl-click (renderPolygons)
 // and p86NgSelect drill in through. There is no second focus system here.
 //
-// THE UNTRACED BUILDING IS THE COMMON CASE, not an edge case, and it is the
-// whole reason this is more than three lines. On the satellite site plan a
-// building with no traced footprint is not a map object at all: renderNodes
-// returns early on `!(n.polygon && n.polygon.length>=3)` and renderPolygons
-// only draws polygons. Focusing one would move the camera to a patch of empty
-// grass and report success — a control that reports success while achieving
-// nothing. So instead: no camera move, the building gets SELECTED (which is
-// exactly what Trace Building re-traces), the map's own hint banner names it
-// and the next action, and a toast says so. Returns true ONLY when the map
+// A BUILDING THAT IS NOWHERE IS THE COMMON CASE, not an edge case, and it is
+// the whole reason this is more than three lines. On the satellite site plan a
+// building with no geometry at all is not a map object: renderNodes returns
+// early on E.bldgGeom(n)==='none' and renderPolygons only draws polygons.
+// Focusing one would move the camera to a patch of empty grass and report
+// success -- a control that reports success while achieving nothing. So
+// instead: no camera move, the building gets SELECTED (which is exactly what
+// Trace Building re-traces and Place re-pins), the map's own hint banner names
+// it and the next action, and a toast says so. Returns true ONLY when the map
 // actually framed the building.
-// FUNCTION first, .show second: js/my-files.js publishes p86Toast as a callable
+//
+// A PINNED building is NOT this case. It is somewhere, the renderer paints it
+// there, and framing it reports a move that really happened. Only "nowhere"
+// is refused.
 // with a .show alias, and its own comment says every caller invokes it as a
 // function — an object-shaped probe is what silently killed toasts app-wide once.
 function _zoomBldgToast(msg){
@@ -4740,7 +4792,19 @@ function buildingNodeFor(bldgId){
   }
   return null;
 }
-function buildingIsTraced(n){ return !!(n && n.polygon && n.polygon.length>=3); }
+// "Is it TRACED?" is E.bldgGeom(n)==='poly' and "is it anywhere?" is
+// !=='none'. buildingIsTraced used to be a fourth copy of the first one and
+// had no caller left once the gate, the camera and the Buildings panel all
+// asked the engine, so it is gone rather than sitting here looking live.
+// The points that say WHERE this building is: its traced ring, or the single
+// dropped pin. Null when it is nowhere -- and "nowhere" is the only case the
+// magnifier may refuse, because it is the only case the renderer refuses too.
+function buildingGeoPoints(n){
+  var g=E.bldgGeom(n);
+  if(g==='poly') return n.polygon;
+  if(g==='pin') return [n.geoLatLng];
+  return null;
+}
 // Frame ONE traced building. fitSiteplan() fits n.x/n.y, which for a geo-bound
 // building is its ABSTRACT graph position — not the spot the renderer draws it
 // at (geoRenderPos) — so fitting a lone building lands the camera on the wrong
@@ -4750,16 +4814,25 @@ function buildingIsTraced(n){ return !!(n && n.polygon && n.polygon.length>=3); 
 // untouched, so all five of its existing callers keep their exact behaviour.
 // false = no viewport or no geo origin, i.e. nothing was framed.
 function frameBuildingPolygon(n){
-  if(!wrap || !buildingIsTraced(n)) return false;
+  var _pts=buildingGeoPoints(n);
+  if(!wrap || !_pts) return false;
   var or=_geoOriginNow(), o=or.o, og=or.og;
   if(!o || !og) return false;
   var minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
-  for(var i=0;i<n.polygon.length;i++){
-    var v=n.polygon[i];
+  for(var i=0;i<_pts.length;i++){
+    var v=_pts[i];
     var g=E.spLatLngToGraph(Number(v.lat), Number(v.lng), o.lat, o.lng);
     var px=og.x+g.x, py=og.y+g.y;
     if(!isFinite(px)||!isFinite(py)) return false;
     if(px<minX)minX=px; if(py<minY)minY=py; if(px>maxX)maxX=px; if(py>maxY)maxY=py;
+  }
+  // A PIN is one point, so its bbox has no area. Grow it to the block the
+  // renderer actually draws there (spBuildingFootprint -- the same call the
+  // t1 render uses) so framing a pinned building looks like framing a traced
+  // one instead of slamming to max zoom on a dot.
+  if(_pts.length===1){
+    var _fp=(E.spBuildingFootprint && E.spBuildingFootprint(n.budget)) || { w:60, h:60 };
+    minX-=_fp.w/2; maxX+=_fp.w/2; minY-=_fp.h/2; maxY+=_fp.h/2;
   }
   var bw=Math.max(1,maxX-minX), bh=Math.max(1,maxY-minY), pad=90;
   var vw=Math.max(1,wrap.clientWidth-pad*2), vh=Math.max(1,wrap.clientHeight-pad*2);
@@ -4794,11 +4867,13 @@ function zoomBuildingOnMap(bldgId){
     return false;
   }
   selN=n.id;                                   // Trace / Place both act on the SELECTED building
-  if(!buildingIsTraced(n)){
+  // Refuse only when the building is NOWHERE. A pin is somewhere, and the
+  // renderer paints it, so framing it reports a move that really happened.
+  if(E.bldgGeom(n)==='none'){
     if(_spFocus!==null){ _spFocus=null; applySpFocus(); }   // back out to the whole site so the miss is visible
     render();
-    showSatHint(true, '\u201C'+label+'\u201D has no traced footprint yet \u2014 click Trace Building and click its corners on the imagery.');
-    _zoomBldgToast('\u201C'+label+'\u201D has not been traced on the map yet \u2014 use Trace Building to draw its footprint.');
+    showSatHint(true, '\u201C'+label+'\u201D is not on the map yet \u2014 click Place to drop its pin, or Trace Building to draw its footprint.');
+    _zoomBldgToast('\u201C'+label+'\u201D is not on the map yet \u2014 drop a pin with Place, or draw it with Trace Building.');
     return false;
   }
   if(_spFocus!==n.id){ _spFocus=n.id; applySpFocus(); }
@@ -5234,9 +5309,7 @@ function bldgMapState(b){
     return String(x.label||'').split(' › ')[0].trim().toLowerCase()===nm;
   });
   if(!n) return 'none';
-  if(n.polygon && n.polygon.length>=3) return 'poly';
-  if(n.geoLatLng) return 'pin';
-  return 'none';
+  return E.bldgGeom(n);                  // ONE answer -- see engine.js bldgGeom
 }
 function bldgGeoFlag(b){
   var st=bldgMapState(b);
@@ -7489,9 +7562,11 @@ function init(){
     var or=_geoOriginNow(); if(!or || !or.o || !or.og) return null;   // origin not ready → skip, don't guess
     var g=E.spLatLngToGraph(n.geoLatLng.lat, n.geoLatLng.lng, or.o.lat, or.o.lng);
     var cx=or.og.x + g.x, cy=or.og.y + g.y;        // geoLatLng projected: polygon centroid (traced) or placed point
-    if(n.polygon && n.polygon.length>=3) return { x:cx, y:cy };       // traced: the drawn polygon is centered here
-    var fp=E.spBuildingFootprint(n.budget);        // placed-only: block top-left sits here → shift to its center
-    return { x:cx + fp.w/2, y:cy + fp.h/2 };
+    // Traced or pinned, the block is CENTRED on this point, so the anchor is
+    // the point itself. (The placed-only branch here used to shift by half a
+    // footprint, because a pinned block hung its top-left corner on the pin.
+    // renderNodes centres it now -- see the t1 sizing block.)
+    return { x:cx, y:cy };
   });
   // Site Plan rework: tell the engine when satellite Site Plan is active, so
   // spNodeVisible hides the WIP hub (its totals live in the sidebar panel).

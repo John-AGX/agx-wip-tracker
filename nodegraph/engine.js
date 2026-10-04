@@ -1195,6 +1195,38 @@ function setNodePolygon(id, verts){
     : null;
   return n.polygon;
 }
+// IS THIS BUILDING ON THE MAP, AND HOW?
+//
+//   'poly' -- a traced footprint (>=3 verts). Carries AREA, so it is what
+//            square-foot / area-driven quantities need.
+//   'pin'  -- a dropped anchor. Carries a PLACE but no area. Enough to render,
+//            enough to hang costs and photos on, enough for the 3D data pin.
+//   'none' -- neither. Not a map object: it would float at its abstract x/y,
+//            which on satellite imagery is an arbitrary patch of ground.
+//
+// This lived in THREE places that drifted apart -- renderNodes' early return,
+// the magnifier's buildingIsTraced, and the Buildings panel's bldgMapState --
+// and they disagreed about whether a pin counted. The panel said it did, and
+// told the user "trace a footprint or drop a pin"; the renderer refused to
+// paint one. One answer, in the engine, consulted by all of them.
+//
+// Geometry only. No rollup reads it -- see setNodePolygon above.
+function bldgGeom(n){
+  if(!n) return 'none';
+  if(n.polygon && n.polygon.length>=3) return 'poly';
+  var g=n.geoLatLng;
+  return (_coord(g && g.lat)!==null && _coord(g && g.lng)!==null) ? 'pin' : 'none';
+}
+// Number(null), Number('') and Number([]) are all 0, so isFinite() alone calls
+// a null pin a real coordinate at 0,0 -- the Gulf of Guinea, which the camera
+// would then fly to. Require an actual finite number, or a string that parses
+// as one (geocoders and JSON round-trips hand coordinates back as strings).
+// 0 is a real coordinate and must survive.
+function _coord(v){
+  if(typeof v==='number') return isFinite(v) ? v : null;
+  if(typeof v==='string' && v.trim()!=='' && isFinite(Number(v))) return Number(v);
+  return null;
+}
 
 // ── Formatting ──
 function fmtC(v){ return '$'+v.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0}); }
@@ -1848,7 +1880,7 @@ return {
   // right while the card listed no scopes and folded the whole amount into the
   // "Other contract allocation" plug.
   t1BuildingId:t1BuildingId,
-  spMapZoom:spMapZoom, spGraphToLatLng:spGraphToLatLng, spLatLngToGraph:spLatLngToGraph, setNodeGeo:setNodeGeo, setNodePolygon:setNodePolygon,
+  spMapZoom:spMapZoom, spGraphToLatLng:spGraphToLatLng, spLatLngToGraph:spLatLngToGraph, setNodeGeo:setNodeGeo, setNodePolygon:setNodePolygon, bldgGeom:bldgGeom,
   getOutput:getOutput, getActual:getActual, getAccrued:getAccrued, resetComp:resetComp,
   getPhaseAllocWires:getPhaseAllocWires, rebalancePhaseAllocations:rebalancePhaseAllocations,
   getCOAllocWires:getCOAllocWires, rebalanceCOAllocations:rebalanceCOAllocations,

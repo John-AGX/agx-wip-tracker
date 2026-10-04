@@ -1178,7 +1178,17 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
    gives the walls/height, so it reads like a Google-Maps 3D building you can use
    as the node (double-click to drill in for the numbers). */
 #nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-building > *{display:none !important}
-#nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-building > .ng-node-cap{display:block !important}
+/* The name, below the roof. The display:block above was reachable only in Clean
+   Mode, where rule .ng-clean .ng-node-cap supplies the positioning; a PINNED
+   building (no polygon to carry its label) paints this block outside Clean Mode
+   too, and without the positioning the name rendered inside the roof rectangle.
+   Same geometry as the Clean Mode caption, so the two agree. */
+#nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-building > .ng-node-cap{
+  display:block !important;position:absolute;top:100%;left:-12px;right:-12px;
+  text-align:center;font-size:11.5px;font-weight:700;color:var(--ng-text);
+  padding-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  cursor:text;text-shadow:0 1px 3px var(--ng-bg);
+}
 #nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-building{
   background:linear-gradient(150deg,#d7dae1 0%,#bcc0cb 58%,#a3a8b5 100%) !important; /* roof, lit top-left */
   border:1px solid #767c8a !important;

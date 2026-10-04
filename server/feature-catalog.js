@@ -526,9 +526,23 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.98';
+const APP_VERSION = '1.99';
 
 const releases = [
+  {
+    version: '1.99',
+    date: '2026-10-04',
+    name: 'Drop a pin on a building instead of tracing it',
+    summary: 'The site map asked you to trace a footprint before a building would appear on it. Now a dropped pin is enough — and tracing is for when you actually need the area.',
+    changes: [
+      { type: 'new', text: 'You can put a building on the site map with one click. Press Place and tap the building on the imagery — it is created there, named B1, B2 and so on, locked to the spot you clicked. Before this, Place only moved a building you had already made, and the only way to create one on the map was to trace its whole roofline corner by corner.' },
+      { type: 'new', text: 'A pinned building shows up in the 3D view. It gets the same floating pin with its percent complete and the same card when you click it. There is no extruded block, because a pin has no footprint to extrude — that is what tracing is for.' },
+      { type: 'fixed', text: 'A pinned building used to be invisible. The Buildings panel told you to “trace a footprint or drop a pin”, and marked a pinned one with a 📍 — but the map painted only traced ones, so a building you had pinned simply was not there. It is painted now, on its real spot, at building scale.' },
+      { type: 'fixed', text: 'The magnifier on a building card works on a pinned building. It used to say “no traced footprint yet” and refuse to move, because it asked whether the building had been traced rather than whether it was anywhere. It still refuses — correctly — for a building that is on no map at all.' },
+      { type: 'improved', text: 'Trace a footprint when you want the area: dividing scope by square feet, or a floor plan that has to match real dimensions. Drop a pin when you just need somewhere for costs, photos and progress to land. Both put the building on the map; only tracing measures it.' },
+      { type: 'fixed', text: 'A half-written coordinate is no longer treated as a location. A building whose pin was blank used to count as pinned, which put it at latitude 0, longitude 0 — in the Gulf of Guinea — and the camera would fly there.' },
+    ],
+  },
   {
     version: '1.98',
     date: '2026-10-04',

@@ -12,15 +12,23 @@
  * satellite yet. So the case that decides whether this feature is honest is
  * not an edge case; it is the picture he sent.
  *
- * On the satellite Site Plan an untraced building is not a map object at all.
- * nodegraph/ui.js renderNodes returns early on
- *     !(n.polygon && n.polygon.length >= 3)
+ * On the satellite Site Plan a building with NO GEOMETRY is not a map object at
+ * all. nodegraph/ui.js renderNodes returns early on
+ *     E.bldgGeom(n)==='none'
  * and renderPolygons draws nothing but polygons. A magnifier that focused one
  * would move the camera to a patch of empty grass and report success — the
  * failure class this repo has paid for repeatedly: a control that reports
  * success while achieving nothing. So the properties below hold BOTH halves:
- * the traced building really is framed, and the untraced one produces a
+ * the located building really is framed, and the nowhere one produces a
  * different, visible, honest outcome instead of a silent no-op.
+ *
+ * WHAT CHANGED, 2026-10-04: a building is on the map if it is TRACED *or*
+ * PINNED. The gate used to demand a trace, which left the complete pin-only
+ * render path unreachable and made the Buildings panel a liar — it offered
+ * "trace a footprint or drop a pin" and the renderer painted only the former.
+ * So the refusal is now keyed on "nowhere", not on "untraced". The property is
+ * unchanged, and is why the clause still earns its place: never report a
+ * camera move that did not happen. A pin IS somewhere.
  *
  * WHAT IS HELD, each clause failing on its own:
  *
@@ -118,8 +126,21 @@ const spLatLngToGraph = compile(
   [], [], 'spLatLngToGraph'
 );
 
+/* The geometry predicate and the footprint sizer, out of the ENGINE. Lifted,
+ * not modelled: a model of buggy code is green for as long as the bug lives. */
+// bldgGeom delegates its coordinate check to _coord, so BOTH come across or the
+// lifted copy throws on every call. Lifting half a function is lifting none.
+const bldgGeom = compile(
+  [extractFunction(ENGINE_SRC, 'bldgGeom'), extractFunction(ENGINE_SRC, '_coord')],
+  [], [], 'bldgGeom'
+);
+const spBuildingFootprint = compile(
+  ['var SP_M_PER_UNIT = 0.5;', extractFunction(ENGINE_SRC, 'spBuildingFootprint')],
+  [], [], 'spBuildingFootprint'
+);
+
 const UI_FNS = [
-  'applySpFocus', 'getConnectedIds', 'buildingNodeFor', 'buildingIsTraced',
+  'applySpFocus', 'getConnectedIds', 'buildingNodeFor', 'buildingGeoPoints',
   'frameBuildingPolygon', '_zoomBldgToast', 'showSatHint', 'zoomBuildingOnMap',
 ];
 
@@ -145,6 +166,8 @@ function makeSitePlan(opts) {
     job: () => opts.job === undefined ? 'J1' : opts.job,
     setSitePlanFocusSet: (s) => { rec.focusSets.push(s ? JSON.parse(JSON.stringify(s)) : null); },
     spLatLngToGraph,
+    bldgGeom,                      // the REAL one, lifted out of engine.js
+    spBuildingFootprint,           // ditto -- frameBuildingPolygon sizes a pin with it
     pan: (x, y) => { if (x != null) panX = x; if (y != null) panY = y; return { x: panX, y: panY }; },
     zm: (z) => { if (z != null) zoom = z; return zoom; },
   };
@@ -557,23 +580,51 @@ describe('a building that has never been traced', () => {
     sp.teardown();
   });
 
-  test('a polygon of two corners is NOT a footprint — the renderer\'s own rule', () => {
-    // renderNodes skips a t1 unless polygon.length >= 3. Anything looser here
-    // and the magnifier would frame a building the map does not draw.
+  test('a polygon of two corners is NOT a footprint -- it frames the PIN instead', () => {
+    // renderNodes still skips a stub polygon, so the camera must never be
+    // computed FROM one. But this node also carries a dropped pin, and a pin
+    // is somewhere the renderer paints -- so the honest outcome is a move to
+    // the pin. Held by equivalence: the same node with the stub polygon
+    // removed must frame the camera to the exact same place.
+    const withStub = threeNodes([]);
+    withStub[0].geoLatLng = { lat: 28.501, lng: -81.401 };
+    withStub[0].polygon = footprintAt(28.501, -81.401).slice(0, 2);
+    const a = makeSitePlan({ nodes: withStub, origin: ORIGIN, originGraph: OG });
+    expect(a.api.zoom('b-one')).toBe(true);
+    const framedWithStub = JSON.stringify(a.camera());
+    a.teardown();
+
+    const pinOnly = threeNodes([]);
+    pinOnly[0].geoLatLng = { lat: 28.501, lng: -81.401 };
+    const b = makeSitePlan({ nodes: pinOnly, origin: ORIGIN, originGraph: OG });
+    expect(b.api.zoom('b-one')).toBe(true);
+    expect(JSON.stringify(b.camera())).toBe(framedWithStub);   // the stub contributed nothing
+    b.teardown();
+  });
+
+  test('two corners and NO pin is still nowhere -- no camera move', () => {
+    // The original clause, kept intact: without a pin there is nothing to zoom
+    // to, and a 2-vertex stub must not become one.
     const nodes = threeNodes([]);
-    nodes[0].geoLatLng = { lat: 28.501, lng: -81.401 };
     nodes[0].polygon = footprintAt(28.501, -81.401).slice(0, 2);
     const sp = makeSitePlan({ nodes, origin: ORIGIN, originGraph: OG });
     const before = JSON.stringify(sp.camera());
     expect(sp.api.zoom('b-one')).toBe(false);
     expect(JSON.stringify(sp.camera())).toBe(before);
+    expect(sp.api.hint().style.display).toBe('block');
     sp.teardown();
   });
 
-  test('the guard the magnifier uses is the same string the renderer uses', () => {
-    // Two copies of a predicate drift. Both are read out of the shipped file.
-    expect(UI_SRC).toContain("n.type==='t1' && !(n.polygon && n.polygon.length>=3)");
-    expect(UI_SRC).toContain('function buildingIsTraced(n){ return !!(n && n.polygon && n.polygon.length>=3); }');
+  test('the magnifier and the renderer ask the SAME function, not two strings', () => {
+    // This used to assert that two separate copies of one predicate were
+    // spelled identically. There is now ONE copy, in the engine, and every
+    // caller asks it -- which is what that assertion was really protecting.
+    expect(ENGINE_SRC).toContain('function bldgGeom(n){');
+    expect(ENGINE_SRC).toContain('bldgGeom:bldgGeom,');            // and it is exported
+    expect(UI_SRC).toContain("n.type==='t1' && E.bldgGeom(n)==='none') return;");  // the renderer
+    expect(UI_SRC).toContain("if(E.bldgGeom(n)==='none'){");                      // the magnifier
+    // and ui.js keeps no private copy of the >=3 rule to drift from it
+    expect(UI_SRC).not.toContain('function buildingIsTraced');
   });
 });
 
