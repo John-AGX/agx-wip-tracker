@@ -19,6 +19,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { buildGrandLedger } = require('../services/usage-ledger');
+const evalCorpus = require('../services/agent-eval-corpus');
 const { requireAuth, requireSystemAdmin } = require('../auth');
 
 const router = express.Router();
@@ -319,6 +320,42 @@ router.get('/usage-forensics', requireAuth, requireSystemAdmin, async (req, res)
          AND created_at >= $1 AND created_at < $2
        GROUP BY 1 ORDER BY 2 DESC`, P);
 
+    // ...and the same population SPLIT, because the count above is three
+    // different things added together and was being read as one.
+    //
+    // A failed turn records NULL usage ON PURPOSE — persistTurnError passes
+    // usage = null because "a failed turn has no trustworthy token accounting"
+    // — so every failure is also an "undercount" in the figure above. That is
+    // not a missing measurement, and counting it as one double-reports a number
+    // the taxonomy below already gives. The falsy-zero arm is separate again: a
+    // long fully-cached turn legitimately has input_tokens 0, and
+    // `(usage && usage.input_tokens) || null` stores NULL for it — detectable
+    // because such a row still recorded cache reads.
+    const noUsage = await pool.query(evalCorpus.noUsageSplitSql(), P);
+
+    // THE FAILURE TAXONOMY. The first time this number has been re-runnable.
+    //
+    // ai_messages has no error/status/verdict column, so "48 of 696 turns end
+    // in a visible failure" was a human reading transcripts: unrefreshable, and
+    // unable to show that its own largest bucket was being repaired halfway
+    // through the window it was measured over. persistTurnError writes U+26A0
+    // in front of every failure it persists, which makes the set a predicate
+    // and the kind derivable from sentences this codebase writes on purpose.
+    // See services/agent-eval-corpus.js for why the definition lives there and
+    // not in this SQL.
+    const failures = await pool.query(evalCorpus.corpusSql(), P);
+    const assistantTurns = await pool.query(`
+      SELECT COUNT(*)::int AS n FROM ai_messages
+       WHERE role = 'assistant' AND created_at >= $1 AND created_at < $2`, P);
+    const failureTaxonomy = evalCorpus.buildFailureReport(
+      failures.rows,
+      assistantTurns.rows[0] && assistantTurns.rows[0].n
+    );
+
+    // Unwindowed, so a falling rate is visible as a trend rather than averaged
+    // into a single figure. This is the arm that answers "is the 6.9% stale".
+    const failureByMonth = await pool.query(evalCorpus.rateByMonthSql());
+
     // Watches (proactive runs).
     const watchRuns = await pool.query(`
       SELECT w.name, r.watch_id, COUNT(*)::int AS runs,
@@ -405,6 +442,9 @@ router.get('/usage-forensics', requireAuth, requireSystemAdmin, async (req, res)
       bySurface: bySurface.rows,
       topConversations: topConversations.rows,
       unlogged: unlogged.rows,
+      noUsage: noUsage.rows[0],
+      failureTaxonomy,
+      failureByMonth: failureByMonth.rows,
       watchRuns: watchRuns.rows,
       agentJobs: agentJobs.rows,
       subtasks: subtasks.rows[0],
