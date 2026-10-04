@@ -128,11 +128,18 @@ const PROBE_SETS = [
  *
  * `parts` supplies the live pieces: { system, customTools, skills, model, name }.
  * A set that includes nothing still needs a model and a name, and `system` is
- * sent as a single space rather than omitted so every set has the same shape
- * (an absent field and an empty one are not reliably the same thing across an
- * API version bump, and the floor must not accidentally measure that
+ * sent as SYSTEM_PLACEHOLDER rather than omitted so every set has the same
+ * shape (an absent field and an empty one are not reliably the same thing
+ * across an API version bump, and the floor must not accidentally measure that
  * difference).
  */
+// The smallest system the API will take. A single space — the obvious
+// placeholder, and the one the first live run used — comes back as
+// 400 "system: text content blocks must contain non-whitespace text" and cost
+// six of eight sets. One character of real text is the floor, and because
+// EVERY non-system set carries the same one, it cancels out of every delta.
+const SYSTEM_PLACEHOLDER = 'x';
+
 function buildProbePayload(set, parts) {
   if (!set) throw new Error('prefix-probe: a set is required');
   if (!parts || !parts.model) throw new Error('prefix-probe: parts.model is required');
@@ -145,7 +152,7 @@ function buildProbePayload(set, parts) {
     model: parts.model,
     name: parts.name || 'P86 prefix probe',
     description: 'Throwaway agent for prefix measurement. Safe to delete.',
-    system: inc('system') ? (parts.system || ' ') : ' ',
+    system: inc('system') ? (parts.system || SYSTEM_PLACEHOLDER) : SYSTEM_PLACEHOLDER,
     skills: skills,
     tools: tools,
   };
@@ -276,6 +283,7 @@ function buildProbeReport(measurements, modelled, observedPrefix) {
 
 module.exports = {
   PROBE_SETS,
+  SYSTEM_PLACEHOLDER,
   COMPONENT_DELTAS,
   TOOLSET_FULL,
   toolsetWith,

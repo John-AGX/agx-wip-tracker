@@ -318,7 +318,11 @@ describe('buildProbePayload — each set differs from the floor by exactly one t
     const p = probe.buildProbePayload(setOf('floor'), PARTS);
     expect(p.tools).toEqual([]);
     expect(p.skills).toEqual([]);
-    expect(p.system).toBe(' ');     // present but empty — never an absent field
+    // Present, and NON-WHITESPACE: a single space is refused by the API with
+    // 'system: text content blocks must contain non-whitespace text', which is
+    // how six of eight sets failed on the second live run.
+    expect(p.system).toBe(probe.SYSTEM_PLACEHOLDER);
+    expect(probe.SYSTEM_PLACEHOLDER).toMatch(/\S/);
     expect(p.model).toBe('claude-sonnet-5');
   });
 
@@ -327,7 +331,7 @@ describe('buildProbePayload — each set differs from the floor by exactly one t
     expect(probe.buildProbePayload(setOf('system'), PARTS).tools).toEqual([]);
     const ct = probe.buildProbePayload(setOf('custom_tools'), PARTS);
     expect(ct.tools).toEqual(PARTS.customTools);
-    expect(ct.system).toBe(' ');
+    expect(ct.system).toBe(probe.SYSTEM_PLACEHOLDER);
     expect(ct.skills).toEqual([]);
   });
 
@@ -742,12 +746,40 @@ describe('a run survives its caller', () => {
   });
 
   test('a persist that fails is REPORTED in the response — the run is not quietly unkept', async () => {
-    engine.db.exec('DROP TABLE prefix_probe_runs');
-    const r = await post({ sets: ['floor'] });
-    expect(r.status).toBe(200);
-    expect(typeof r.body.report.not_persisted).toBe('string');
-    expect(r.body.report.not_persisted.length).toBeGreaterThan(0);
-    // The measurement itself still came back.
-    expect(r.body.report.sets.find((s) => s.set === 'floor').measured).toBe(true);
+    // RENAMED, not dropped, and restored in a finally. The first version of
+    // this test dropped the table and left it dropped, so the NEXT test's
+    // seed() died on it — a destructive test that does not put the fixture
+    // back is a test that breaks its neighbours.
+    engine.db.exec('ALTER TABLE prefix_probe_runs RENAME TO prefix_probe_runs_hidden');
+    try {
+      const r = await post({ sets: ['floor'] });
+      expect(r.status).toBe(200);
+      expect(typeof r.body.report.not_persisted).toBe('string');
+      expect(r.body.report.not_persisted.length).toBeGreaterThan(0);
+      // The measurement itself still came back.
+      expect(r.body.report.sets.find((s) => s.set === 'floor').measured).toBe(true);
+    } finally {
+      engine.db.exec('ALTER TABLE prefix_probe_runs_hidden RENAME TO prefix_probe_runs');
+    }
+  });
+});
+
+describe('the placeholder the API will accept', () => {
+  // The second live run lost six of eight sets to
+  // 'system: text content blocks must contain non-whitespace text'. The
+  // placeholder has to be real text, and the same text in every non-system
+  // set so it cancels out of the deltas rather than skewing one of them.
+  test('it is non-whitespace, one character, and identical across every set that does not carry the system', () => {
+    expect(probe.SYSTEM_PLACEHOLDER).toMatch(/^\S$/);
+    const PARTS = { model: 'claude-sonnet-5', system: 'REAL SYSTEM', customTools: [], skills: [] };
+    const nonSystem = probe.PROBE_SETS.filter((s) => (s.includes || []).indexOf('system') === -1);
+    expect(nonSystem.length).toBeGreaterThan(3);
+    for (const s of nonSystem) {
+      expect(probe.buildProbePayload(s, PARTS).system).toBe(probe.SYSTEM_PLACEHOLDER);
+    }
+    // …and the sets that DO carry it get the real thing.
+    for (const s of probe.PROBE_SETS.filter((x) => (x.includes || []).indexOf('system') !== -1)) {
+      expect(probe.buildProbePayload(s, PARTS).system).toBe('REAL SYSTEM');
+    }
   });
 });
