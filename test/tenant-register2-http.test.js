@@ -535,7 +535,17 @@ describe('REGISTER 2 — the route population', () => {
     //      share row the token resolves to and then predicates every
     //      subsequent statement. Both take a path parameter, so both are
     //      waived here and driven by test/production-planning-share.test.js.
-    expect(R.routes).toBe(650);
+    //      650 -> 651, +1 WAIVED: POST /api/admin/agents/managed/prefix-probe,
+    //      the prefix bisection (services/prefix-probe.js). A write, so the
+    //      waiver predicate below holds without an exception. It is also one
+    //      that MUST NOT be driven from this census even if it were a GET:
+    //      each call registers a throwaway agent on the Anthropic account and
+    //      runs real turns, so a route-population sweep would spend money and
+    //      leave agents behind. Its own tenancy is a SYSTEM_ADMIN gate plus
+    //      requireOrg, and it is driven — including the 403 for an org admin
+    //      — in test/prefix-probe.test.js against a programmable fake of the
+    //      managed-agents surface.
+    expect(R.routes).toBe(651);
     expect(R.routers).toBe(81);
   });
 
@@ -566,7 +576,10 @@ describe('REGISTER 2 — the route population', () => {
     // param-taking reads; their tenancy is proved instead in
     // test/preview-routes.test.js, which drives a foreign sub id through both
     // and asserts it answers exactly as a missing one does.
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 145, waived: 505 });
+    // 505 -> 506: the prefix probe (see the note on the count above). A
+    // write, and one that spends real money per call, so it is waived here
+    // and driven in its own file.
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 145, waived: 506 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

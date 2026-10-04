@@ -42,6 +42,8 @@ const router = express.Router();
 // fallback behaviour — the names below are re-bound, not redefined, so
 // every consumer in this file is unchanged. Two copies of a price table
 // is how an alarm ends up disagreeing with the page it is alarming on.
+const probe = require('../services/prefix-probe');
+const turnUsageSvc = require('../services/turn-usage');
 const { MODEL_COSTS, DEFAULT_MODEL_COST, CACHE_WRITE_MULTIPLIER_5M,
         cacheReadMultiplierFor, cacheCostRaw } = require('../services/ai-pricing');
 const { deleteSkillDeep } = require('../services/anthropic-skills');
@@ -5385,6 +5387,238 @@ router.delete('/managed/:agentKey', requireAuth, requireCapability('ROLES_MANAGE
 //   single tenant — omit to sync EVERY tenant the platform owner
 //   manages. The caller's own organization is the default if no
 //   body param is given.
+// ══════════════════════════════════════════════════════════════════════════
+// POST /managed/prefix-probe — MEASURE the part of the cached prefix no
+// server-side ledger can see.
+//
+// agent-prefix-ledger refuses to publish a grand total because three
+// registered components are invisible from here: the expanded
+// agent_toolset_20260401 schemas, the attached Skills' descriptors, and
+// Anthropic's harness preamble. On 86 that gap is ~51,460 of 67,100 tokens —
+// 77% of a prefix paid on the first turn of every session and re-paid as
+// cache_creation on every lapse. The one lever Managed Agents offers for any
+// of it is the partial toolset, which this file already applies to the
+// `assistant` agent on the strength of an UNMEASURED "~30k of dead weight"
+// estimate (see builtinToolsetFor). This endpoint replaces that estimate with
+// a measurement before the same decision is taken for 86.
+//
+// HOW: register a throwaway agent, set it to a known subset of the
+// components, run ONE trivial turn on a fresh session, and read
+// span.model_request_end.model_usage. A fresh session's first turn has no
+// history, so what it reads or writes to cache IS the prefix. Each
+// component's size is the difference between two sets differing only by it.
+// The arithmetic and the honesty contract live in services/prefix-probe.js.
+//
+// COST: one trivial turn per set. The replica set pays ~67k as
+// cache_creation; the whole run is cents. SYSTEM_ADMIN, one at a time, and
+// it reports every id it touched.
+//
+// CLEANUP: @anthropic-ai/sdk 0.94.0 has no beta.agents.delete, so the probe
+// uses ONE agent and updates it through the sets (each update mints a
+// version; each session pins the version it was created against). At the end
+// it ATTEMPTS a raw DELETE /v1/agents/{id} and REPORTS the outcome — a probe
+// that quietly failed to clean up would leave the account dirty and say
+// nothing. Sessions are deleted individually, which the SDK does support.
+// ══════════════════════════════════════════════════════════════════════════
+let _probeRunning = false;
+
+router.post('/managed/prefix-probe', requireAuth, requireSystemAdmin, require('../auth').requireOrg, async (req, res) => {
+  const anthropic = getAnthropic();
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
+  if (_probeRunning) {
+    return res.status(409).json({ error: 'A prefix probe is already running. One at a time — concurrent runs would bill twice and confuse the deltas.' });
+  }
+
+  const agentKey = (req.body && req.body.agent_key) || 'job';
+  const wanted = Array.isArray(req.body && req.body.sets) && req.body.sets.length
+    ? probe.PROBE_SETS.filter((s) => req.body.sets.indexOf(s.key) !== -1)
+    : probe.PROBE_SETS;
+  if (!wanted.length) {
+    return res.status(400).json({ error: 'No known sets requested. Known: ' + probe.PROBE_SETS.map((s) => s.key).join(', ') });
+  }
+  // The floor is the base of every delta. Asking for components without it
+  // would produce a report whose rows are all "unavailable".
+  if (!wanted.some((s) => s.key === 'floor')) {
+    return res.status(400).json({ error: 'The "floor" set is the base of every delta — include it.' });
+  }
+
+  _probeRunning = true;
+  const touched = { agent_id: null, agent_versions: [], session_ids: [] };
+  const measurements = {};
+  try {
+    const baseline = AGENT_SYSTEM_BASELINE[agentKey];
+    if (!baseline) return res.status(400).json({ error: 'Unknown agent key: ' + agentKey });
+    const aiInternals = require('./ai-routes-internals');
+    const parts = {
+      model: modelForAgentKey(agentKey),
+      name: 'P86 PREFIX PROBE — safe to delete (' + new Date().toISOString().slice(0, 16) + ')',
+      system: (aiInternals && aiInternals.composedAgentSystem)
+        ? await aiInternals.composedAgentSystem(agentKey, baseline, req.organization)
+        : baseline,
+      customTools: customToolsFor(agentKey),
+      skills: await collectSkillsFor(agentKey, req.organization),
+    };
+    const env = await ensureManagedEnvironment();
+
+    // The agent starts on the FIRST requested set, then is updated per set.
+    let created = null;
+    for (const set of wanted) {
+      const payload = probe.buildProbePayload(set, parts);
+      try {
+        if (!created) {
+          created = await anthropic.beta.agents.create(payload);
+          touched.agent_id = created.id;
+          touched.agent_versions.push({ set: set.key, version: created.version });
+        } else {
+          const updated = await anthropic.beta.agents.update(created.id, payload);
+          touched.agent_versions.push({ set: set.key, version: updated.version });
+        }
+      } catch (e) {
+        // A set the API refuses is a RESULT, not a crash: a Skills set with
+        // no read tool is a documented 400, and recording it proves the
+        // constraint rather than hiding it.
+        measurements[set.key] = { error: 'agent ' + (created ? 'update' : 'create') + ' refused: ' + (e.message || 'unknown') };
+        continue;
+      }
+      const version = touched.agent_versions[touched.agent_versions.length - 1].version;
+      try {
+        measurements[set.key] = await probeOneSet(anthropic, {
+          agentId: created.id, version, environmentId: env.anthropic_environment_id,
+          label: set.key, sessionIds: touched.session_ids,
+        });
+      } catch (e) {
+        measurements[set.key] = { error: 'turn failed: ' + (e.message || 'unknown') };
+      }
+    }
+
+    // ── cleanup, reported either way ──────────────────────────────────────
+    const cleanup = { sessions_deleted: 0, sessions_failed: [], agent_delete: null };
+    for (const sid of touched.session_ids) {
+      try { await anthropic.beta.sessions.delete(sid); cleanup.sessions_deleted += 1; }
+      catch (e) { cleanup.sessions_failed.push({ id: sid, error: e.message || 'unknown' }); }
+    }
+    if (touched.agent_id) {
+      try {
+        await anthropic.delete('/v1/agents/' + touched.agent_id, {
+          headers: { 'anthropic-beta': 'managed-agents-2026-04-01' },
+        });
+        cleanup.agent_delete = { deleted: true };
+      } catch (e) {
+        cleanup.agent_delete = {
+          deleted: false,
+          agent_id: touched.agent_id,
+          error: e.message || 'unknown',
+          note: 'The SDK exposes no beta.agents.delete; this was a raw DELETE and it did not '
+            + 'succeed. The agent is named "P86 PREFIX PROBE — safe to delete" and is still on '
+            + 'the account. Remove it from the Console.',
+        };
+      }
+    }
+
+    // The prefix a REAL session of this agent was observed to pay, for the
+    // method check. Same statement and same ledger function the prompt-audit
+    // uses, so the two endpoints cannot disagree about ground truth.
+    let observedPrefix = null;
+    let observedPrefixError = null;
+    try {
+      const obsRes = await pool.query(
+        `SELECT DISTINCT ON (m.session_id)
+                m.session_id,
+                COALESCE(m.cache_creation_input_tokens, 0) AS cc,
+                COALESCE(m.cache_read_input_tokens, 0)     AS cr,
+                m.created_at
+           FROM ai_messages m
+           JOIN ai_sessions s ON s.id = m.session_id
+          WHERE m.role = 'assistant'
+            AND s.agent_key = $1
+            AND m.organization_id = $2
+            AND (m.cache_creation_input_tokens IS NOT NULL
+                 OR m.cache_read_input_tokens IS NOT NULL)
+          ORDER BY m.session_id, m.created_at ASC`,
+        [agentKey, req.organization.id]);
+      const newest = obsRes.rows.slice()
+        .sort((x, y) => new Date(y.created_at) - new Date(x.created_at));
+      const obs = ledger.observedFromFirstTurns(newest);
+      observedPrefix = obs ? obs.tokens : null;
+    } catch (e) {
+      // Reported, not swallowed: without it the report simply carries no
+      // method_check, and a reader has to know why.
+      observedPrefixError = e.message || String(e);
+    }
+
+    const est = (s) => Math.round(String(s == null ? '' : s).length / 4);
+    const report = probe.buildProbeReport(measurements, {
+      composed_system_tokens: est(parts.system),
+      custom_tool_schema_tokens: est(JSON.stringify(parts.customTools)),
+    }, observedPrefix);
+
+    res.json({
+      agent_key: agentKey,
+      model: parts.model,
+      probe_message: PROBE_MESSAGE,
+      touched: touched,
+      cleanup: cleanup,
+      observed_prefix_on_real_agent: observedPrefix,
+      observed_prefix_error: observedPrefixError,
+      report: report,
+    });
+  } catch (e) {
+    console.error('POST /managed/prefix-probe error:', e);
+    res.status(500).json({ error: e.message || 'Server error', touched: touched });
+  } finally {
+    _probeRunning = false;
+  }
+});
+
+// The smallest turn that still forces a model request. Deliberately boring:
+// the point is to pay the PREFIX, not to produce output, and every set pays
+// this same message so it cancels out of every delta.
+const PROBE_MESSAGE = 'Reply with the single word: ok';
+const PROBE_TURN_TIMEOUT_MS = 90000;
+
+// One set: fresh session pinned to the agent version, one turn, read the
+// usage the session reports, hand the session id back for cleanup.
+async function probeOneSet(anthropic, o) {
+  const session = await anthropic.beta.sessions.create({
+    agent: { type: 'agent', id: o.agentId, version: o.version },
+    environment_id: o.environmentId,
+    title: 'P86 prefix probe · ' + o.label,
+  });
+  o.sessionIds.push(session.id);
+
+  // Stream FIRST, then send — the ordering openStreamAndSend uses, so an
+  // event emitted immediately cannot be missed.
+  const stream = await anthropic.beta.sessions.events.stream(session.id);
+  await anthropic.beta.sessions.events.send(session.id, {
+    events: [{ type: 'user.message', content: PROBE_MESSAGE }],
+  });
+
+  const acc = turnUsageSvc.blankTurnUsage();
+  const deadline = Date.now() + PROBE_TURN_TIMEOUT_MS;
+  let idle = false;
+  for await (const event of stream) {
+    if (event.type === 'span.model_request_end' && event.model_usage) {
+      turnUsageSvc.addModelRequest(acc, event.model_usage);
+    }
+    if (event.type === 'session.status_idle') { idle = true; break; }
+    if (event.type === 'session.error') {
+      throw new Error((event.error && event.error.message) || 'session error');
+    }
+    if (Date.now() > deadline) break;
+  }
+  try { await stream.controller.abort(); } catch (_) { /* already closed */ }
+
+  return {
+    input_tokens: acc.input_tokens,
+    output_tokens: acc.output_tokens,
+    cache_creation_input_tokens: acc.cache_creation_input_tokens,
+    cache_read_input_tokens: acc.cache_read_input_tokens,
+    model_requests: acc.model_requests,
+    reached_idle: idle,
+    error: acc.model_requests ? null : 'no span.model_request_end carried usage',
+  };
+}
+
 router.post('/managed/sync-all',
   requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg,
   async (req, res) => {
