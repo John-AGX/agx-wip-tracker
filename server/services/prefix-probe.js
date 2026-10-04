@@ -178,10 +178,31 @@ const n = (v) => {
   return Number.isFinite(x) ? x : 0;
 };
 
-/** The prefix a first turn paid: cold lands in cache_creation, warm in cache_read. */
+/**
+ * The CACHED part of what a first turn read: cold lands in cache_creation,
+ * warm in cache_read. This is the measure agent-prefix-ledger uses, and on a
+ * small agent it reads ZERO — prompt caching has a 1,024-token minimum, so a
+ * floor agent with a one-character system and no tools is never cached at
+ * all. The first complete probe run measured the floor at 0 this way while
+ * the same turn plainly consumed input, which makes every delta built on it
+ * meaningless.
+ */
 function prefixTokensOf(measurement) {
   if (!measurement || measurement.error) return null;
   return n(measurement.cache_creation_input_tokens) + n(measurement.cache_read_input_tokens);
+}
+
+/**
+ * TOTAL INPUT: uncached + cache writes + cache reads. This is what a set
+ * actually costs to send, whether or not the platform chose to cache it, and
+ * it is therefore the only apples-to-apples basis for a difference between
+ * two sets. Components are derived from this; prefixTokensOf rides alongside
+ * so the two can be compared rather than conflated.
+ */
+function totalInputOf(measurement) {
+  if (!measurement || measurement.error) return null;
+  return n(measurement.input_tokens) + n(measurement.cache_creation_input_tokens)
+    + n(measurement.cache_read_input_tokens);
 }
 
 /**
@@ -198,7 +219,9 @@ function buildProbeReport(measurements, modelled, observedPrefix) {
     return {
       set: s.key,
       label: s.label,
-      prefix_tokens: prefixTokensOf(raw),
+      total_input_tokens: totalInputOf(raw),
+      cached_tokens: prefixTokensOf(raw),
+      uncached_tokens: raw && !raw.error ? n(raw.input_tokens) : null,
       measured: !!(raw && !raw.error),
       error: (raw && raw.error) || null,
       model_requests: raw ? n(raw.model_requests) : null,
@@ -214,7 +237,7 @@ function buildProbeReport(measurements, modelled, observedPrefix) {
     const row = {
       component: d.component,
       derived_from: d.minus + ' − ' + d.base,
-      tokens: ok ? (hi.prefix_tokens - lo.prefix_tokens) : null,
+      tokens: ok ? (hi.total_input_tokens - lo.total_input_tokens) : null,
       measured: ok,
     };
     if (!ok) {
@@ -236,7 +259,7 @@ function buildProbeReport(measurements, modelled, observedPrefix) {
     components: components,
     // The floor is NOT "the harness preamble": it also contains this probe's
     // own user message and the model's reply. Named for what it is.
-    floor_tokens: floor && floor.measured ? floor.prefix_tokens : null,
+    floor_tokens: floor && floor.measured ? floor.total_input_tokens : null,
     floor_is: PROBE_SETS[0].label,
   };
 
@@ -245,9 +268,9 @@ function buildProbeReport(measurements, modelled, observedPrefix) {
   // measuring something other than what they are labelled.
   if (replica && replica.measured && observedPrefix) {
     report.method_check = {
-      replica_tokens: replica.prefix_tokens,
+      replica_tokens: replica.total_input_tokens,
       observed_on_real_agent: n(observedPrefix),
-      difference: replica.prefix_tokens - n(observedPrefix),
+      difference: replica.total_input_tokens - n(observedPrefix),
       note: 'A replica carries the same components but a different name, description and version, '
         + 'and the real agent may also hold MCP servers. A small difference is expected; a large '
         + 'one means the component labels above are wrong.',
@@ -263,12 +286,12 @@ function buildProbeReport(measurements, modelled, observedPrefix) {
   if (replica && replica.measured && measuredParts.length === 4) {
     const attributed = measuredParts.reduce((a, c) => a + c.tokens, 0);
     report.residual = {
-      tokens: replica.prefix_tokens - attributed,
+      tokens: replica.total_input_tokens - attributed,
       what_it_is: 'the replica prefix minus every component measured above — Anthropic\'s harness '
         + 'preamble plus this probe\'s own message, i.e. the floor, if the method is sound',
       floor_tokens: report.floor_tokens,
       agrees_with_floor: report.floor_tokens != null
-        ? Math.abs((replica.prefix_tokens - attributed) - report.floor_tokens) : null,
+        ? Math.abs((replica.total_input_tokens - attributed) - report.floor_tokens) : null,
     };
   }
 
@@ -283,6 +306,7 @@ function buildProbeReport(measurements, modelled, observedPrefix) {
 
 module.exports = {
   PROBE_SETS,
+  totalInputOf,
   SYSTEM_PLACEHOLDER,
   COMPONENT_DELTAS,
   TOOLSET_FULL,

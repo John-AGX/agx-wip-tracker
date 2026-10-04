@@ -229,7 +229,10 @@ const TOOLSET_FULL_TOK = 30000;
 const TOOLSET_READ_TOK = 3000;
 const TOOLSET_READ_WEB_TOK = 9000;
 const SKILLS_TOK = 500;
-const usage = (prefix) => ({ input_tokens: 12, output_tokens: 3, cache_creation_input_tokens: prefix, cache_read_input_tokens: 0 });
+// MSG_TOKENS is the probe's own message, uncached. It is part of the FLOOR
+// and cancels out of every delta, which is the property the deltas rely on.
+const MSG_TOKENS = 12;
+const usage = (prefix) => ({ input_tokens: MSG_TOKENS, output_tokens: 3, cache_creation_input_tokens: prefix, cache_read_input_tokens: 0 });
 
 function scriptAllSets() {
   sdk.usageByLabel = {
@@ -402,14 +405,14 @@ describe('buildProbeReport — every component is a named difference', () => {
 
   test('P3 the floor says it includes the probe\'s own message, not just the harness', () => {
     const r = probe.buildProbeReport(M(), {}, null);
-    expect(r.floor_tokens).toBe(FLOOR);
+    expect(r.floor_tokens).toBe(FLOOR + MSG_TOKENS);
     expect(r.floor_is).toMatch(/harness preamble/);
     expect(r.floor_is).toMatch(/own message/);
   });
 
   test('the residual lands on the floor when the method is sound, and says what it is', () => {
     const r = probe.buildProbeReport(M(), {}, null);
-    expect(r.residual.tokens).toBe(FLOOR);
+    expect(r.residual.tokens).toBe(FLOOR + MSG_TOKENS);
     expect(r.residual.agrees_with_floor).toBe(0);
     expect(r.residual.what_it_is).toMatch(/harness/);
   });
@@ -422,7 +425,7 @@ describe('buildProbeReport — every component is a named difference', () => {
 
   test('the method checks itself against the prefix a real session paid', () => {
     const r = probe.buildProbeReport(M(), {}, 67100);
-    expect(r.method_check.replica_tokens).toBe(FLOOR + SYSTEM_TOK + CUSTOM_TOK + TOOLSET_FULL_TOK + SKILLS_TOK);
+    expect(r.method_check.replica_tokens).toBe(FLOOR + MSG_TOKENS + SYSTEM_TOK + CUSTOM_TOK + TOOLSET_FULL_TOK + SKILLS_TOK);
     expect(r.method_check.observed_on_real_agent).toBe(67100);
     expect(r.method_check.difference).toBe(r.method_check.replica_tokens - 67100);
   });
@@ -538,7 +541,7 @@ describe('POST /managed/prefix-probe', () => {
     for (const c of rep.components) byName[c.component] = c.tokens;
     expect(byName['builtin toolset — ALL 8 tools']).toBe(TOOLSET_FULL_TOK);
     expect(byName['3 Skills descriptors']).toBe(SKILLS_TOK);
-    expect(rep.floor_tokens).toBe(FLOOR);
+    expect(rep.floor_tokens).toBe(FLOOR + MSG_TOKENS);
   });
 
   test('every turn is one trivial message, and it is the SAME message for every set so it cancels out of the deltas', async () => {
