@@ -195,6 +195,40 @@ describe('buildLeadContext — opts.includePhotos', () => {
   });
 });
 
+describe('L9 the manifest cannot promise a photo that cannot be shown', () => {
+  // loadPhotoAsBlock returns null without `web_key`, and
+  // view_attachment_image then answers "Could not load image bytes for <id>".
+  // The builders filtered on `thumb_key`, so a thumb-only row was counted in
+  // the "# Photos (N)" header AND printed in the manifest with its id — 86
+  // reads the id, asks for the pixels, and spends a turn being told the file
+  // is unreadable. A wasted turn, which is the most expensive failure there is.
+
+  test('a thumb-only row is not counted as a photo and not given an id', async () => {
+    // Strip the web copy from the newest photo, leaving its thumbnail.
+    engine.db.prepare('UPDATE attachments SET web_key = NULL WHERE id = ?').run('att_p30');
+    const { system } = await buildLeadContext(LEAD, ORG);
+    // MUTANT: filtering on thumb_key counts 30 and prints [att_p30].
+    expect(system).toContain('# Photos (29) — newest first');
+    expect(system).not.toContain('[att_p30]');
+    expect(system).toContain('[att_p29]');
+  });
+
+  test('it is not silently dropped either — it falls to the document list', async () => {
+    // Tightening a filter must not vanish a row. The thumb-only image still
+    // appears, as a document, exactly as a thumbless image already did.
+    engine.db.prepare('UPDATE attachments SET web_key = NULL WHERE id = ?').run('att_p30');
+    const { system } = await buildLeadContext(LEAD, ORG);
+    expect(system).toContain('# Documents (3)');
+    expect(system).toContain('IMG_030.jpg');
+  });
+
+  test('and it is never attached as a vision block, because it cannot load', async () => {
+    engine.db.prepare('UPDATE attachments SET web_key = NULL WHERE id = ?').run('att_p30');
+    const ctx = await buildLeadContext(LEAD, ORG, { includePhotos: true });
+    expect(idsOf(ctx.photoBlocks)).not.toContain(undefined);
+    expect(idsOf(ctx.photoBlocks)[0]).toBe('file_p29');
+  });
+});
 describe('L8 all three surfaces agree on the default', () => {
   test('the reason is written down in one place and the behaviour matches it', () => {
     const src = require('fs').readFileSync('server/routes/ai-routes.js', 'utf8');

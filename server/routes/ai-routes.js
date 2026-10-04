@@ -1720,10 +1720,11 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
     allAttachments.push(...leadAtts.rows.map(r => ({ ...r, source: 'lead' })));
   }
 
-  // Partition by mime type. Anything starting with image/ AND with a
-  // thumb_key is a server-side resized photo; everything else is a doc.
-  const photoRows = allAttachments.filter(a => a.mime_type && a.mime_type.startsWith('image/') && a.thumb_key);
-  const docRows = allAttachments.filter(a => !(a.mime_type && a.mime_type.startsWith('image/') && a.thumb_key));
+  // Partition by what can be SHOWN, not by what has a thumbnail — see
+  // isViewablePhoto. An image with no web copy falls to the doc list, exactly
+  // as a thumbless image already did, so this tightening drops nothing.
+  const photoRows = allAttachments.filter(isViewablePhoto);
+  const docRows = allAttachments.filter(a => !isViewablePhoto(a));
 
   if (includePhotos) {
     const cappedPhotos = photoRows.slice(0, 12);
@@ -2355,6 +2356,20 @@ function filterToolsForJobPhase(tools, phase) {
 // Load a photo's web variant from storage and return an Anthropic image
 // content block. Returns null on read failure rather than throwing so a
 // single broken file doesn't kill the chat.
+// A photo the model can actually be SHOWN. The test is `web_key`, not
+// `thumb_key`, because that is what loadPhotoAsBlock below requires: without it
+// the function returns null and view_attachment_image answers "Could not load
+// image bytes for <id> — the underlying file may be missing or unreadable."
+//
+// The three context builders each filtered their photo set on `thumb_key`, so a
+// row with a thumbnail and no web copy was counted in a "# Photos (N)" header
+// and printed in a manifest with its id. That is not merely a wrong count: 86
+// reads the id, calls for the pixels, and spends a turn to be told the file is
+// unreadable. A row that fails this test still appears — as a document — so
+// nothing is dropped by tightening it.
+const isViewablePhoto = (a) =>
+  !!(a && a.mime_type && String(a.mime_type).startsWith('image/') && a.web_key);
+
 async function loadPhotoAsBlock(photoRow) {
   try {
     if (!photoRow.web_key) return null;
@@ -2985,7 +3000,10 @@ async function buildLeadContext(leadId, organization, opts) {
       `SELECT * FROM attachments WHERE entity_type='lead' AND entity_id=$1
          ORDER BY position, uploaded_at`,
       [leadId]);
-    const isPhoto = (a) => a.mime_type && a.mime_type.startsWith('image/') && a.thumb_key;
+    // web_key, not thumb_key — see isViewablePhoto. This manifest prints ids
+    // for 86 to call view_attachment_image on, so listing a row whose pixels
+    // cannot be loaded buys a wasted turn and a confusing refusal.
+    const isPhoto = isViewablePhoto;
     // NEWEST FIRST, and sorted here rather than in the ORDER BY because the
     // test shim parses neither NULLS LAST nor a mixed-direction sort. The
     // old order was `position, uploaded_at` — a human's gallery ordering,
@@ -6115,7 +6133,7 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   const cascadePhotoManifest = []; // {source, filename, id, size} — always built
   const cascadeDocs = [];
   for (const a of linkedAtts) {
-    if (a.mime_type && a.mime_type.startsWith('image/') && a.thumb_key) {
+    if (isViewablePhoto(a)) {
       // Always record in the manifest so 86 sees photos exist and can
       // call view_attachment_image({attachment_id}) on the specific one
       // it needs. Cap inline vision blocks at 12 for the rare turns
