@@ -89,25 +89,42 @@ describe('THE CONTRACT — no grand total unless the ledger is complete', () => 
   });
 });
 
-describe('observed ground truth and the live size of the hole', () => {
-  test('unexplained_tokens is observed minus modeled — self-calibrating', () => {
+describe('a sampled first turn is a TURN, not the registered prefix', () => {
+  test('the difference from modelled is reported, and NOT as the size of the hole', () => {
     const f = buildFirstTurnFloor(Object.assign({}, LIVE, {
       unmeasured: REAL_UNMEASURED,
       observed: { tokens: 26452, method: 'first turn of a fresh session' },
     }));
-    expect(f.observed_first_turn_tokens).toBe(26452);
-    expect(f.unexplained_tokens).toBe(26452 - 12716);
-    // The residual measured by hand on the live agent was ~13,737.
-    expect(f.unexplained_tokens).toBeGreaterThan(13000);
-    expect(f.unexplained_tokens).toBeLessThan(14500);
+    expect(f.observed_first_turn_input_tokens).toBe(26452);
+    expect(f.first_turn_input_minus_modeled_tokens).toBe(26452 - 12716);
+    // The old field names are GONE, because they were the defect: they
+    // invited the difference to be read as the invisible components, and
+    // on 86 that read ~51,460 against a measured 7,084.
+    expect(f.observed_first_turn_tokens).toBeUndefined();
+    expect(f.unexplained_tokens).toBeUndefined();
+    // And the field says where the real measurement comes from.
+    expect(f.measured_prefix_source).toMatch(/prefix-probe/);
+  });
+
+  test('the headline refuses to attribute the difference to the unmeasured components', () => {
+    const f = buildFirstTurnFloor(Object.assign({}, LIVE, {
+      unmeasured: REAL_UNMEASURED,
+      observed: { tokens: 67100, method: 'first turn of a fresh session' },
+    }));
+    expect(f.headline).toMatch(/NOT the size of the components/);
+    expect(f.headline).toMatch(/turn_context/);
+    // It carries the measured numbers rather than leaving a reader to
+    // infer them from the difference.
+    expect(f.headline).toMatch(/30,126/);
+    expect(f.headline).toMatch(/7,084/);
   });
 
   test('with no observation it says the true size is UNKNOWN, not zero', () => {
     const f = buildFirstTurnFloor(Object.assign({}, LIVE, {
       unmeasured: REAL_UNMEASURED, observed: null,
     }));
-    expect(f.observed_first_turn_tokens).toBeNull();
-    expect(f.unexplained_tokens).toBeNull();
+    expect(f.observed_first_turn_input_tokens).toBeNull();
+    expect(f.first_turn_input_minus_modeled_tokens).toBeNull();
     expect(f.headline).toMatch(/UNKNOWN/);
     expect(f.headline).toMatch(/floor under it, not an estimate/);
   });
@@ -220,8 +237,8 @@ describe('the contract detects its own bypasses', () => {
       observed: { tokens: 26452, method: 'm' },
     }));
     expect(f).not.toHaveProperty('grand_total_tokens');
-    expect(f.observed_first_turn_tokens).toBe(26452);
-    expect(f.unexplained_tokens).toBeGreaterThan(0);
+    expect(f.observed_first_turn_input_tokens).toBe(26452);
+    expect(f.first_turn_input_minus_modeled_tokens).toBeGreaterThan(0);
   });
 
   test('RED — declaring components but still emitting a total breaks the gate', () => {

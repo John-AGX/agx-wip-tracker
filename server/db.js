@@ -1891,7 +1891,7 @@ async function initSchema() {
     -- the four columns above hold the LAST request of the last pass.
     --
     -- That is not a bug to repoint. agent-prefix-ledger reads those four as
-    -- per-request on purpose: observed_first_turn_tokens is one request by
+    -- per-request on purpose: a first turn is one request by
     -- definition, and peak_turn_input is a MAX over requests. Widening them
     -- in place would silently restate both.
     --

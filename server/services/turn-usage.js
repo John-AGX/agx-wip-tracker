@@ -75,7 +75,7 @@ function addModelRequest(acc, modelUsage) {
 /**
  * The per-REQUEST snapshot — the shape the four long-standing ai_messages
  * columns hold, and which agent-prefix-ledger reads on purpose
- * (observed_first_turn_tokens is one request by definition; peak_turn_input
+ * (a sampled first turn is one request by definition; peak_turn_input
  * is a MAX over requests). Kept as its own named function so that meaning is
  * declared rather than implied by an assignment.
  */

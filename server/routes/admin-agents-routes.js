@@ -4143,8 +4143,10 @@ router.get('/managed/prompt-audit', requireAuth, requireCapability('ROLES_MANAGE
           'REFERENCE, not the schemas. Anthropic expands it server-side into full tool ' +
           'schemas that ride in the cached prefix and are billed every turn. Their text is ' +
           'Anthropic-owned and versioned — a new toolset version can grow this with no ' +
-          'change on our side, and no P86 endpoint would show it. Only ' +
-          'observed_first_turn_tokens catches that.'
+          'change on our side, and no P86 endpoint would MODEL it. Measured at 5,564 tok ' +
+          'on 2026-10-04 by the prefix probe (POST /managed/prefix-probe), which is the ' +
+          'only instrument that can: a first turn\'s total input cannot separate this ' +
+          'from that turn\'s own context.'
       });
     }
     if (skillsForFloor.length) {

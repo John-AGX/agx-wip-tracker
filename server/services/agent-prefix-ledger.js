@@ -36,9 +36,17 @@
  *   • `grand_total_tokens` EXISTS ONLY WHEN `complete` IS TRUE. There is no
  *     such thing here as a total with a hole in it. A reader who greps for
  *     the total either gets a real one or gets nothing to misread.
- *   • `observed_first_turn_tokens` carries ground truth measured from our own
- *     turn records, and `unexplained_tokens` is observed minus modeled — the
- *     live size of the hole, self-calibrating, no constant to go stale.
+ *   • `observed_first_turn_input_tokens` carries a sampled first turn's TOTAL
+ *     INPUT from our own turn records. It is NOT the registered prefix, and
+ *     `first_turn_input_minus_modeled_tokens` is NOT the size of the hole:
+ *     a first turn has no history, but it carries its own content — the user
+ *     message and the whole <turn_context> block. Both fields were named as
+ *     if the difference were the invisible components, and on 86 that read
+ *     ~51,460 when those components measure 7,084. The lesson is this file's
+ *     own: a number is only as wide as its label, and `observed` was being
+ *     read as `registered`. The prefix is measured by the probe instead —
+ *     POST /api/admin/agents/managed/prefix-probe — which registers
+ *     throwaway agents carrying known subsets and takes differences.
  */
 
 function _tok(chars) { return Math.round(Number(chars || 0) / 4); }
@@ -74,18 +82,40 @@ function buildFirstTurnFloor(a) {
 
   const out = {
     what_this_is:
-      'The tokens Anthropic caches on the REGISTERED AGENT — read via cache_read on the ' +
-      'first turn of every fresh session, and re-written as cache_creation whenever that ' +
-      'cache entry lapses. It is NOT the cost of a turn: session history is added on top ' +
-      'of it and grows without bound (see session_history).',
+      'What this endpoint can MODEL of the registered agent — the system prompt it composes and the custom tool schemas it registers — plus a sample first turn\'s total input for comparison. The registered prefix itself is read via cache_read on the first turn of every fresh session and re-written as cache_creation whenever that entry lapses; it is NOT the cost of a turn (session history is added on top and grows without bound — see session_history), and it is NOT the same thing as a first turn\'s input, which also carries that turn\'s own context. For the prefix itself, measured, see measured_prefix_source.',
     complete: complete,
     modeled: modeled,
     modeled_subtotal_tokens: modeledSubtotal,
     unmeasured_components: unmeasured,
-    observed_first_turn_tokens: observed ? observed.tokens : null,
+    // THE FIRST TURN'S WHOLE INPUT — not the registered prefix. The old
+    // name for this field was observed_first_turn_tokens and the headline
+    // called the remainder "the live size of what this endpoint cannot
+    // see", on the reasoning that a first turn has no history so whatever
+    // it reads must be the prefix. A first turn has no HISTORY, but it
+    // carries its own CONTENT: the user message and the entire
+    // <turn_context> block (entity snapshot, attachment manifest, recent
+    // writes, available tools). On a job turn that is tens of thousands of
+    // tokens and has nothing to do with registration.
+    //
+    // MEASURED 2026-10-04 by routes/admin-agents-routes.js
+    // /managed/prefix-probe, which registers throwaway agents carrying
+    // known subsets and bisects: 86's registered prefix is 30,126 tokens,
+    // against 67,100 for the sampled first turn. The three components this
+    // endpoint cannot see total 7,084 (built-in toolset 5,564, Skills
+    // descriptors 690, harness preamble ~830) — not the ~51,460 the old
+    // headline attributed to them. The rest was that turn's own context.
+    observed_first_turn_input_tokens: observed ? observed.tokens : null,
     observed_method: observed ? observed.method : null,
     observed_sample: observed ? (observed.sample || null) : null,
-    unexplained_tokens: observed ? (observed.tokens - modeledSubtotal) : null,
+    // observed minus modelled, and NOT a size for the unmeasured
+    // components: it also contains the turn's own content. Named for what
+    // it is rather than for what someone hoped it was.
+    first_turn_input_minus_modeled_tokens: observed ? (observed.tokens - modeledSubtotal) : null,
+    measured_prefix_source:
+      'Run POST /api/admin/agents/managed/prefix-probe for a component-by-component '
+      + 'measurement of the registered prefix, and GET .../prefix-probe/runs to read '
+      + 'the last one. This endpoint cannot measure it: it can only model the parts it '
+      + 'composes and report a first turn\'s total input alongside.',
   };
 
   if (complete) {
@@ -96,16 +126,16 @@ function buildFirstTurnFloor(a) {
       'No grand total is reported because ' + unmeasured.length + ' registered component(s) ' +
       'cannot be measured server-side (listed in unmeasured_components). A total that ' +
       'silently omits them would be narrower than its own label — the exact defect this ' +
-      'endpoint used to have when it reported ' + modeledSubtotal + ' as the floor. Use ' +
-      'observed_first_turn_tokens for ground truth.';
+      'endpoint used to have when it reported ' + modeledSubtotal + ' as the floor. For ' +
+      'the registered prefix, measured component by component, run the prefix probe (see ' +
+      'measured_prefix_source) — NOT observed_first_turn_input_tokens, which is a whole ' +
+      'turn and includes that turn\'s own context.';
   }
 
   if (observed) {
     out.headline =
       'Modeled ' + modeledSubtotal + ' tok from ' + Object.keys(modeled).length +
-      ' measured parts; MEASURED ' + observed.tokens + ' tok on a real first turn. ' +
-      out.unexplained_tokens + ' tok is the live size of what this endpoint cannot see ' +
-      '(built-in toolset schemas, skill descriptors, Anthropic harness preamble).';
+      ' measured parts. A sampled first turn read ' + observed.tokens + ' tok of input in total, which is ' + out.first_turn_input_minus_modeled_tokens + ' tok more — but that difference is NOT the size of the components below: it also contains that turn\'s own <turn_context> and user message. Measured by the prefix probe on 2026-10-04, 86\'s registered prefix is 30,126 tok and the three components this endpoint cannot see total 7,084 of it. Run /managed/prefix-probe to re-measure.';
   } else {
     out.headline =
       'Modeled ' + modeledSubtotal + ' tok. NO observed first turn is available for this ' +
