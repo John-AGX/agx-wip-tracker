@@ -149,6 +149,19 @@ describe('bldgGeom is the single answer, and it is hostile-input safe', () => {
     expect(bldgGeom(undefined)).toBe('none');
   });
 
+  test('a lifted _pinSpec carries its fallback — the same trap, second instance', () => {
+    // extractFunction hands back ONE function body. _pinSpec delegates to the
+    // module-level _PIN_FALLBACK, so lifting it alone yields a copy that throws
+    // on its very first fallback path — which is every path that matters.
+    const dir = path.join(REPO, 'test');
+    const offenders = fs.readdirSync(dir).filter((x) => x.endsWith('.test.js')).filter((x) => {
+      const src = fs.readFileSync(path.join(dir, x), 'utf8');
+      if (src.indexOf("extractFunction(UI_SRC, '_pinSpec')") === -1) return false;
+      return src.indexOf('_PIN_FALLBACK') === -1;
+    });
+    expect(offenders).toEqual([]);
+  });
+
   test('every suite that LIFTS bldgGeom lifts _coord with it', () => {
     // extractFunction hands back one function body. bldgGeom delegates to
     // _coord, so a suite that lifts only bldgGeom gets a copy that throws on
@@ -359,145 +372,211 @@ describe('Place can create a building, and it mints no wire', () => {
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * 4. LOCKED TO THE SPOT CLICKED
- * ══════════════════════════════════════════════════════════════════════════*/
-describe('a pinned block is centred on its pin, and the wires agree', () => {
-  const CENTRE_LINE = sourceLine(UI_SRC, "div.style.left=(_rx-_fp.w/2)");
-
-  test('the block is shifted by half a footprint, both axes', () => {
-    const place = compile(
-      ['function place(_rx, _ry, _fp, div){ ' + CENTRE_LINE.trim() + ' return div; }'],
-      [], [], 'place'
-    );
-    const div = { style: {} };
-    place(1000, 800, { w: 60, h: 40 }, div);
-    expect(div.style.left).toBe('970px');
-    expect(div.style.top).toBe('780px');
-  });
-
-  test('it is gated on the PIN state, so a traced building is not moved', () => {
-    const guard = sourceLine(UI_SRC, "if(_spSatellite && E.bldgGeom(n)==='pin'){");
-    expect(guard).toContain("==='pin'");
-  });
-
-  test('the port anchor no longer shifts — the renderer centres the block for it', () => {
-    // These two have to agree about where a pinned building's centre is, or the
-    // wires land half a footprint away from the block they feed.
-    // setGeoPortAnchor takes an anonymous callback, so this reads the file.
-    expect(UI_SRC).toContain('E.setGeoPortAnchor(function(n){');
-    expect(UI_SRC).not.toContain('cx + fp.w/2');
-    expect(UI_SRC).not.toContain('cy + fp.h/2');
-    // and it still returns the projected point for a geo-bound building
-    expect(UI_SRC).toContain('return { x:cx, y:cy };');
-  });
-
-  test('the footprint a pin is sized and framed by is the SAME call the renderer uses', () => {
-    expect(spBuildingFootprint(50000)).toEqual(spBuildingFootprint(50000));
-    const fp = spBuildingFootprint(50000);
-    expect(fp.w).toBeGreaterThan(0);
-    expect(fp.h).toBeGreaterThan(0);
-    expect(UI_SRC).toContain('E.spBuildingFootprint(n.budget)');
-  });
-
-  test('a $0 building still gets a real footprint, not a zero-size block', () => {
-    const fp = spBuildingFootprint(0);
-    expect(fp.w).toBeGreaterThan(0);
-    expect(fp.h).toBeGreaterThan(0);
-  });
-});
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * 4b. THE ROOF BLOCK ONLY EVER PAINTS FOR A PIN
- * ══════════════════════════════════════════════════════════════════════════*/
-describe('the massing-block CSS was written for this case and was unreachable', () => {
-  const CSS = read('nodegraph/nodegraph.css');
-
-  test('a TRACED geo building hides its card entirely — the polygon carries it', () => {
-    // Which is why .ng-sp-building WITHOUT .ng-has-poly never painted: the only
-    // buildings that reached the massing-block rules were traced ones, and those
-    // are display:none. The roof + label styling below it was dead code.
-    expect(CSS).toContain('.ng-sp-building.ng-has-poly{display:none !important}');
-  });
-
-  test('the roof block strips every child EXCEPT the name', () => {
-    expect(CSS).toContain('.ng-sp-building > *{display:none !important}');
-    expect(CSS).toMatch(/.ng-sp-building > .ng-node-cap{[^}]*display:block !important/);
-  });
-
-  test('and the name is POSITIONED, not just un-hidden', () => {
-    // display:block alone left the name inside the roof rectangle: the geometry
-    // lived only on the Clean Mode rule, and a pinned building paints outside
-    // Clean Mode too. Each property is asserted, so dropping one is caught.
-    const m = CSS.match(/.ng-sp-building > .ng-node-cap{([^}]*)}/);
-    expect(m).not.toBeNull();
-    for (const prop of ['position:absolute', 'top:100%', 'text-align:center', 'white-space:nowrap']) {
-      expect([prop, m[1].indexOf(prop) !== -1]).toEqual([prop, true]);
-    }
-  });
-
-  test('a pinned building is the ONLY thing that reaches it, by construction', () => {
-    // renderNodes adds ng-sp-building for any geo-bound building and ng-has-poly
-    // on top when it is traced. So: traced -> hidden, pinned -> roof block.
-    expect(UI_SRC).toContain("if(_geoBldg) div.classList.add('ng-sp-building');");
-    expect(UI_SRC).toContain("if(_geoBldg && E.bldgGeom(n)==='poly') div.classList.add('ng-has-poly');");
-  });
-});
-/* ═══════════════════════════════════════════════════════════════════════════
- * 4c. WHAT AN ADVERSARIAL REVIEW OF THE FIRST PUSH FOUND
+ * 4. LOCKED TO THE SPOT CLICKED — THE TIP IS THE ANCHOR
  *
- * Five real defects, three in the shipped code and two holes in this very file.
- * They are all one family: making a previously-unreachable element reachable
- * exposes every rule that was written assuming nothing would reach it.
+ * The first version painted a pinned building as the same budget-proportional
+ * MASSING BLOCK a traced one gets. John looked at it: every pinned building
+ * came out the same size, none lined up with the roof underneath, and a block
+ * claims an extent that is precisely what a pin does not have. He chose the
+ * teardrop. So the anchor moved from "centre of a block" to "tip of a pin",
+ * which is the literal reading of "have it locked to that".
  * ══════════════════════════════════════════════════════════════════════════*/
-describe('the min-width floor does not defeat the footprint', () => {
+describe('the teardrop tip lands on the stored point, at every zoom', () => {
+  // The two shipped lines that place it. left/top is the projected point
+  // UNTOUCHED; the transform maps the spec's own anchor (ax,ay) onto it.
+  const SIZE = sourceLine(UI_SRC, "div.style.width=_ps.w+'px'").trim() + ' '
+    + sourceLine(UI_SRC, "div.style.height=_ps.h+'px'").trim();
+  const XFORM = sourceLine(UI_SRC, "div.style.transform='scale('").trim();
+
+  const place = compile(
+    ['function place(_ps, E, div){ ' + SIZE + ' '
+      + sourceLine(UI_SRC, "div.style.transformOrigin='0 0';").trim() + ' '
+      + XFORM + ' return div; }'],
+    [], [], 'place'
+  );
+  const SPEC = { url: 'data:image/svg+xml,x', ax: 14, ay: 40, w: 28, h: 40 };
+  const at = (z) => {
+    const div = { style: {} };
+    place(SPEC, { zm: () => z }, div);
+    return div.style;
+  };
+
+  test('the box is the PIN’s size, never the footprint', () => {
+    const s = at(1);
+    expect([s.width, s.height]).toEqual(['28px', '40px']);
+    // and the 190px floor on .ng-node cannot claim it, because min-width is set
+    // inline — the bug that made the old block paint 95 m wide.
+    expect(s.minWidth).toBe('28px');
+  });
+
+  test('the transform puts the ANCHOR on the origin, so the tip is the point', () => {
+    expect(at(1).transformOrigin).toBe('0 0');
+    expect(at(1).transform).toBe('scale(1) translate(-14px,-40px)');
+  });
+
+  test('it holds CONSTANT SCREEN SIZE — the counter-scale is 1/zoom', () => {
+    // A pin that grew with zoom would re-acquire the implied extent John just
+    // rejected. Both point markers this canvas already has are fixed size.
+    expect(at(2).transform).toBe('scale(0.5) translate(-14px,-40px)');
+    expect(at(0.5).transform).toBe('scale(2) translate(-14px,-40px)');
+    expect(at(4).transform).toBe('scale(0.25) translate(-14px,-40px)');
+  });
+
+  test('a zero or missing zoom does not produce Infinity', () => {
+    expect(at(0).transform).toContain('scale(1)');
+    expect(at(undefined).transform).toContain('scale(1)');
+  });
+
+  test('the tip offset comes from the SPEC, not a retyped constant', () => {
+    // A hardcoded 14/40 would silently disagree with the glow variant, whose
+    // box and anchor are different (47x54, anchor 23.3/45.9).
+    const s = at(1);
+    expect(s.transform).toContain('-' + SPEC.ax + 'px');
+    expect(s.transform).toContain('-' + SPEC.ay + 'px');
+    const wide = { url: 'x', ax: 23.3, ay: 45.9, w: 47, h: 54 };
+    const d = { style: {} };
+    place(wide, { zm: () => 1 }, d);
+    expect(d.style.transform).toBe('scale(1) translate(-23.3px,-45.9px)');
+    expect([d.style.width, d.style.height]).toEqual(['47px', '54px']);
+  });
+
+  test('the footprint sizer is NOT what sizes a pin any more', () => {
+    const from = UI_SRC.indexOf('if(_isPinNode){');
+    const branch = UI_SRC.slice(from, UI_SRC.indexOf('} else {', from));
+    expect(branch.length).toBeGreaterThan(40);        // the slice found something
+    expect(branch).toContain('_ps.w');
+    expect(branch).not.toContain('_fp.w');
+  });
+
+  test('a traced building still sizes by footprint — the else arm is untouched', () => {
+    const line = sourceLine(UI_SRC, "div.style.width=_fp.w+'px'; div.style.minHeight=_fp.h+'px';");
+    expect(line).toContain('_fp.w');
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 4b. IT IS THE PRODUCT'S OWN PIN, NOT A NEW ONE
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('the teardrop is the job’s pin from the Jobs map', () => {
+  const PINS_SRC = read('js/map-pins.js');
+  // _pinSpec reads the module-level _PIN_FALLBACK, so that comes across too or
+  // the lifted copy throws. Lifted from source, never retyped here.
+  const FALLBACK_SRC = sourceLine(UI_SRC, 'var _PIN_FALLBACK =').trim();
+  const spec = compile(
+    [FALLBACK_SRC, extractFunction(UI_SRC, '_pinSpec')],
+    ['window', 'E', 'appData'],
+    [
+      { p86MapPins: {
+        specForType: (t) => ({ url: 'data:svg/' + t, ax: 14, ay: 40, w: 28, h: 40 }),
+        typeForEntity: (job) => (String(job.jobNumber || '').indexOf('RV') === 0 ? 'reno' : 'job'),
+      } },
+      { job: () => 'J1' },
+      { jobs: [{ id: 'J1', jobNumber: 'RV-100' }] },
+    ],
+    '_pinSpec'
+  );
+
+  test('it resolves the type from the OWNING JOB, so the two maps agree', () => {
+    expect(spec().url).toBe('data:svg/reno');
+  });
+
+  test('it asks specForType, NOT previewSvg', () => {
+    const fn = extractFunction(UI_SRC, '_pinSpec');
+    expect(fn).toContain('specForType');
+    // previewSvg's override is a WHOLESALE config replacement, so using it would
+    // make this the one pin an org cannot re-skin from Admin.
+    expect(fn).not.toContain('previewSvg');
+  });
+
+  test('a data URI, because inline SVG would collide on its filter id', () => {
+    // pinSvgString hardcodes filter id="p"; N inline pins = N duplicate ids in
+    // one document, and every filter:url(#p) resolves to the first.
+    expect(PINS_SRC).toContain('<filter id="p"');
+    expect(UI_SRC).toContain('_pimg.src=_pinSpec().url;');
+  });
+
+  test('it invents NO seventh pin type — the server whitelists exactly six', () => {
+    const manifest = read('server/routes/org-manifest-routes.js');
+    const m = manifest.match(/MAP_PIN_TYPES\s*=\s*\[([^\]]*)\]/);
+    expect(m).not.toBeNull();
+    expect(m[1]).not.toContain('building');
+    expect(extractFunction(UI_SRC, '_pinSpec')).not.toContain("'building'");
+  });
+
+  test('it never throws and never waits, whatever the page state', () => {
+    const bare = (win, eng, app) => compile(
+      [FALLBACK_SRC, extractFunction(UI_SRC, '_pinSpec')], ['window', 'E', 'appData'], [win, eng, app], '_pinSpec'
+    )();
+    const FALLBACK = { url: '', ax: 14, ay: 40, w: 28, h: 40 };
+    expect(bare({}, { job: () => 'J1' }, { jobs: [] })).toEqual(FALLBACK);          // map-pins absent
+    expect(bare({ p86MapPins: {} }, { job: () => 'J1' }, { jobs: [] })).toEqual(FALLBACK);
+    expect(bare({ p86MapPins: { specForType: () => null } }, { job: () => 'J1' }, { jobs: [] }))
+      .toEqual(FALLBACK);                                                           // spec came back empty
+    expect(bare({ p86MapPins: { specForType: () => { throw new Error('boom'); } } },
+      { job: () => 'J1' }, { jobs: [] })).toEqual(FALLBACK);                        // it threw
+  });
+
+  test('no job on the page still yields a pin — the generic type', () => {
+    const s = compile(
+      [FALLBACK_SRC, extractFunction(UI_SRC, '_pinSpec')], ['window', 'E', 'appData'],
+      [{ p86MapPins: { specForType: (t) => ({ url: 'data:svg/' + t, ax: 14, ay: 40, w: 28, h: 40 }),
+        typeForEntity: () => 'reno' } }, { job: () => 'NOPE' }, { jobs: [] }], '_pinSpec'
+    )();
+    expect(s.url).toBe('data:svg/job');     // typeForEntity is not consulted without a job
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 4c. THE CARD STRIP IS KEPT, THE ROOF IS UNDONE
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('a pinned node keeps ng-sp-building and adds ng-sp-pin', () => {
   const CSS = read('nodegraph/nodegraph.css');
 
-  test('.ng-node really does floor every node at 190px', () => {
-    // The premise. If this stops being true the fix below is dead weight and
-    // should be reconsidered rather than left as cargo.
-    expect(CSS).toMatch(/\.ng-node\{[^}]*min-width:190px/);
+  test('ng-sp-building STAYS — it is what strips the data card and places the name', () => {
+    // Dropping it would make every child visible: the header, the port dots, the
+    // progress bar, the sub-items, the hover tools.
+    expect(UI_SRC).toContain("if(_geoBldg) div.classList.add('ng-sp-building');");
+    expect(CSS).toContain('.ng-sp-building > *{display:none !important}');
+    expect(CSS).toMatch(/\.ng-sp-building > \.ng-node-cap\{[^}]*display:block !important/);
   });
 
-  test('and the site-plan reset EXCLUDES buildings, so it never helped', () => {
-    expect(CSS).toContain('.ng-node:not(.ng-tt-t1):not(.ng-tt-wip)');
-  });
-
-  test('a footprint can NEVER reach 190, so the clamp always bit', () => {
-    // 12..35 m wide at 0.5 m per unit = 24..70 units. Not close to 190.
-    let max = 0;
-    for (const b of [0, 1, 100, 25000, 50000, 150000, 5e6, 1e12]) {
-      max = Math.max(max, spBuildingFootprint(b).w);
+  test('ng-sp-pin is added only for a pin, and only undoes the roof', () => {
+    expect(UI_SRC).toContain("if(_isPinNode) div.classList.add('ng-sp-pin');");
+    const rule = CSS.match(/\.ng-sp-building\.ng-sp-pin\{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    for (const prop of ['background:none', 'border:0', 'box-shadow:none', 'cursor:pointer']) {
+      expect([prop, rule[1].indexOf(prop) !== -1]).toEqual([prop, true]);
     }
-    expect(max).toBeLessThan(190);
   });
 
-  test('so the renderer floors min-width to the footprint itself', () => {
-    // Driven on the three shipped lines. Before the fix the block painted 190
-    // units (95 m) wide whatever the budget, and its centre sat 30-41 m east of
-    // the pin — which made "locked to the spot you clicked" false on the x axis.
-    const lines = [
-      sourceLine(UI_SRC, "div.style.minWidth=_fp.w+'px';"),
-      sourceLine(UI_SRC, "div.style.left=(_rx-_fp.w/2)+'px'"),
-    ].map((l) => l.trim()).join(' ');
-    const place = compile(
-      ['function place(_rx, _ry, _fp, div){ ' + lines + ' return div; }'],
-      [], [], 'place'
-    );
-    const div = { style: {} };
-    place(1000, 800, spBuildingFootprint(50000), div);
-    const fp = spBuildingFootprint(50000);
-    expect(div.style.minWidth).toBe(fp.w + 'px');
-    expect(div.style.left).toBe((1000 - fp.w / 2) + 'px');
-    // the painted centre and the pin are the same point
-    expect(parseFloat(div.style.left) + fp.w / 2).toBe(1000);
+  test('the teardrop is exempted from the card strip by name', () => {
+    expect(CSS).toMatch(/\.ng-sp-pin > \.ng-bldgpin\{[^}]*display:block !important/);
+    expect(UI_SRC).toContain("_pimg.className='ng-bldgpin';");
   });
 
-  test('the width and the min-width come from the SAME footprint', () => {
-    // Two different expressions here is how the centring silently drifts again.
-    const w = sourceLine(UI_SRC, "div.style.width=_fp.w+'px'");
-    const mw = sourceLine(UI_SRC, "div.style.minWidth=_fp.w+'px'");
-    expect(w).toContain('_fp.w');
-    expect(mw).toContain('_fp.w');
+  test('the name is widened, or a 28px pin starves it', () => {
+    const cap = CSS.match(/\.ng-sp-pin > \.ng-node-cap\{([^}]*)\}/);
+    expect(cap).not.toBeNull();
+    expect(cap[1]).toContain('-56px');
+  });
+
+  test('selection moves onto the silhouette, since there is no border left', () => {
+    expect(CSS).toMatch(/\.ng-sp-pin\.ng-sel > \.ng-bldgpin\{[^}]*drop-shadow/);
+    expect(CSS).toMatch(/\.ng-sp-pin\.ng-connected > \.ng-bldgpin\{[^}]*drop-shadow/);
+  });
+
+  test('a teardrop gets no 2.5D extrusion — it is not a mass', () => {
+    expect(UI_SRC).toContain('if(_spMassing && !_isPinNode){');
+  });
+
+  test('the pin flag is per-iteration, not leaked across nodes by var hoisting', () => {
+    // `var` is function-scoped: a flag assigned inside the t1 branch would still
+    // be set for every node drawn after the last building.
+    const decl = sourceLine(UI_SRC, 'var _isPinNode = sitePlan');
+    expect(decl).toContain("n.type==='t1'");
+    expect(decl).toContain("E.bldgGeom(n)==='pin'");
+    // and it is declared before the branch that would otherwise own it
+    expect(UI_SRC.indexOf('var _isPinNode')).toBeLessThan(UI_SRC.indexOf("classList.add('ng-sp-pin')"));
   });
 });
 

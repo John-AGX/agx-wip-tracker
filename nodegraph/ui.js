@@ -273,6 +273,45 @@ function _drawWires(){
   if(window._p86NcDefault && E.viewMode && E.viewMode()==='siteplan'){ if(wireCtx&&wireC) wireCtx.clearRect(0,0,wireC.width,wireC.height); return; }
   if(E.drawWires && wireCtx && wrap) E.drawWires(wireCtx, wrap, wiringFrom, wireMouse);
 }
+// THE TEARDROP A PINNED BUILDING WEARS.
+//
+// It is the SAME pin the owning job shows on the Jobs map, resolved through
+// window.p86MapPins, so the Site Plan and the list maps speak one pin language
+// and an org that re-skins its pins in Admin re-skins this one with no code.
+//
+// specForType, NOT previewSvg, for two reasons. previewSvg's `override` is a
+// WHOLESALE replacement of the config entry, so passing a colour there would
+// bypass the org's own settings and make this the one pin an admin cannot
+// change. And specForType hands back a data: URI: pinSvgString hardcodes
+// `filter id="p"`, so N pins inlined as SVG would put N duplicate ids in one
+// document and every filter:url(#p) would resolve to the first one in document
+// order. A data URI is its own document, which is also how projects-map.js and
+// entities-map.js consume it.
+//
+// No new pin TYPE: server/routes/org-manifest-routes.js whitelists exactly six,
+// on both the admin write and the read-back, so a seventh would be silently
+// dropped on every save.
+//
+// getConfig() is synchronous and yields the built-in defaults until (and if)
+// ensureConfig's fetch lands, so this never waits and never throws.
+var _PIN_FALLBACK = { url:'', ax:14, ay:40, w:28, h:40 };
+function _pinSpec(){
+  try{
+    var P=window.p86MapPins;
+    if(!P || typeof P.specForType!=='function') return _PIN_FALLBACK;
+    var job=null;
+    try{
+      var jid=E.job();
+      job=(typeof appData!=='undefined' && appData.jobs || []).filter(function(j){
+        return j && String(j.id)===String(jid);
+      })[0] || null;
+    }catch(_){}
+    var tk=(job && typeof P.typeForEntity==='function') ? P.typeForEntity(job,'job') : 'job';
+    var spec=P.specForType(tk);
+    return (spec && spec.url) ? spec : _PIN_FALLBACK;
+  }catch(_){ return _PIN_FALLBACK; }
+}
+
 function renderNodes(){
   var nodes=E.nodes(), wires=E.wires();
   canvasEl.querySelectorAll('.ng-node').forEach(function(el){
@@ -303,6 +342,10 @@ function renderNodes(){
     if(editingId===n.id) return;
     // Watches are never collapsed — always show the flashy KPI
     if(n.type==='watch') n.collapsed=false;
+    // Declared per iteration, beside the div it describes: `var` is
+    // function-scoped, so a flag set inside the t1 branch below would leak the
+    // last building's value onto every node drawn after it.
+    var _isPinNode = sitePlan && _spSatellite && n.type==='t1' && E.bldgGeom(n)==='pin';
     var div=document.createElement('div');
     div.className='ng-node ng-t-'+n.cat+' ng-tt-'+n.type+(selN===n.id?' ng-sel':'')+(connectedIds[n.id]?' ng-connected':'')+(n.collapsed?' ng-coll':'');
     div.setAttribute('data-id',n.id);
@@ -319,22 +362,39 @@ function renderNodes(){
       var _fp = (_spSatellite && n.geoLatLng)
         ? E.spBuildingFootprint(n.budget)
         : (n.footprint || E.budgetFootprint(n.budget));
-      div.style.width=_fp.w+'px'; div.style.minHeight=_fp.h+'px';
-      // A PINNED-only building IS the visible block (a traced one is demoted to
-      // a click-through shell by ng-has-poly below, because its polygon carries
-      // the visual). The pin marks where the building IS, so centre the block on
-      // it rather than hanging its top-left corner there -- otherwise it lands
-      // half a footprint down-and-right of the spot that was clicked, and
-      // "locked to that" is exactly what dropping a pin is supposed to mean.
-      if(_spSatellite && E.bldgGeom(n)==='pin'){
-        // min-width:190px on .ng-node (nodegraph.css) is NOT reset for a
-        // building — the site-plan reset excludes .ng-tt-t1 deliberately — and
-        // spBuildingFootprint never returns more than 70, so the block was laid
-        // out 190 units (95 m) wide however small the footprint, putting its
-        // real centre 30-41 m east of the pin. Floor the min to the footprint so
-        // the width below is the width that paints and the centring is true.
-        div.style.minWidth=_fp.w+'px';
-        div.style.left=(_rx-_fp.w/2)+'px'; div.style.top=(_ry-_fp.h/2)+'px';
+      // A PIN HAS NO EXTENT, and rendering it as the same budget-proportional
+      // massing block a traced building gets claimed one: every pinned building
+      // came out the same size, none of them matched the roof underneath, and
+      // the thing that is supposed to mean "nobody has measured this yet" looked
+      // like a failed measurement. John: "just drop the pin on that building and
+      // have it locked to that" — tracing is for "when I want to divide the
+      // scope up by square feet and area".
+      //
+      // So it is a TEARDROP: the same pin this job wears on the Jobs map, via
+      // window.p86MapPins, so the two surfaces speak one language and an org
+      // re-skinning its pins in Admin re-skins this one for free.
+      //
+      // Sized in SCREEN pixels and counter-scaled against the canvas zoom, so it
+      // stays a marker instead of growing back into a footprint — which is what
+      // the two point markers this canvas already has do (.ng-photopin,
+      // .ng-taskpin). Every zoom setter calls render(), so the scale is computed
+      // here rather than hooked into applyTx.
+      //
+      // The TIP lands on the stored lat/lng: left/top is the projected point
+      // untouched, and the transform maps the spec's own anchor (ax,ay) onto it.
+      // That is the literal reading of "locked to that".
+      //
+      // ng-sp-building STAYS on it. Its `> *{display:none}` sweep is exactly the
+      // data-card strip, and its `> .ng-node-cap` rule is exactly the
+      // name-under-the-tip. ng-sp-pin only undoes the roof.
+      if(_isPinNode){
+        var _ps=_pinSpec();
+        div.style.width=_ps.w+'px';  div.style.minWidth=_ps.w+'px';
+        div.style.height=_ps.h+'px'; div.style.minHeight=_ps.h+'px';
+        div.style.transformOrigin='0 0';
+        div.style.transform='scale('+(1/(E.zm()||1))+') translate('+(-_ps.ax)+'px,'+(-_ps.ay)+'px)';
+      } else {
+        div.style.width=_fp.w+'px'; div.style.minHeight=_fp.h+'px';
       }
       var _pc = n.pctComplete||0;
       div.classList.add(_pc>=100?'ng-sp-done':(_pc>0?'ng-sp-prog':'ng-sp-todo'));
@@ -344,13 +404,14 @@ function renderNodes(){
       // extrusion below does the walls (a lighter building grey, not dark depth).
       var _geoBldg = _spSatellite && n.geoLatLng;
       if(_geoBldg) div.classList.add('ng-sp-building');
+      if(_isPinNode) div.classList.add('ng-sp-pin');   // undoes the roof; see nodegraph.css
       // Phase 4: a TRACED geo building is represented by its polygon (label + % drawn
       // on it, clicks handled there) — demote this card to a click-through shell.
       if(_geoBldg && E.bldgGeom(n)==='poly') div.classList.add('ng-has-poly');
       // 2.5D massing: extrude the block with a budget-proportional depth so it
       // reads as solid mass (bigger budget = taller). Render-only; gated behind
       // the "3D" toggle (status stays on the border, so off reverts to flat).
-      if(_spMassing){
+      if(_spMassing && !_isPinNode){        // a teardrop is not a mass; no extrusion
         var _mb=Number(n.budget)||0, _mf=_mb>0?Math.min(1,Math.sqrt(_mb)/Math.sqrt(150000)):0.18, _md=Math.round(5+_mf*13);
         var _wall=_geoBldg?'#8a8f9c':'#0d1019';   // building wall vs abstract-canvas depth
         var _msh=''; for(var _mi=1;_mi<=_md;_mi++){ _msh+=(_msh?',':'')+_mi+'px '+_mi+'px 0 '+_wall; }
@@ -1088,6 +1149,15 @@ function renderNodes(){
 
     }
     div.innerHTML=h;
+    // The teardrop itself, appended AFTER innerHTML so the data-card strip
+    // (.ng-sp-building > *{display:none}) does not take it; .ng-sp-pin > .ng-bldgpin
+    // puts it back. See _pinSpec for why this is a data URI and not inline SVG.
+    if(_isPinNode){
+      var _pimg=document.createElement('img');
+      _pimg.className='ng-bldgpin'; _pimg.alt=''; _pimg.draggable=false;
+      _pimg.src=_pinSpec().url;
+      div.appendChild(_pimg);
+    }
     canvasEl.appendChild(div);
   });
 }

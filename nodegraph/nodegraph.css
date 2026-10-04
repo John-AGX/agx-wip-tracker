@@ -1197,6 +1197,43 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 }
 #nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-building.ng-sel{border-color:#4f8cff !important}
 
+/* ── A PINNED building is a TEARDROP, not a roof ────────────────────────
+   A dropped pin says "this building is here"; a traced footprint says "and it
+   is this big". Painting a pin as the same massing block claimed an extent it
+   does not have — every pinned building the same size, none of them lining up
+   with the roof underneath.
+
+   .ng-sp-building STAYS on a pinned node on purpose: its `> *{display:none}`
+   sweep above is exactly the data-card strip we want, and its `> .ng-node-cap`
+   rule is exactly the name-under-the-tip. These rules only undo the ROOF, and
+   (1,6,0) out-specifies that rule's (1,5,0) !important without adding more. */
+#nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-building.ng-sp-pin{
+  background:none !important;
+  border:0 !important;
+  border-radius:0;
+  box-shadow:none !important;   /* also kills .ng-node.ng-sel's rounded-rect halo */
+  overflow:visible;
+  cursor:pointer;               /* .ng-node says `move`, and a geo building does not drag */
+}
+/* The teardrop. Exempted from the data-card strip by name. */
+#nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-pin > .ng-bldgpin{
+  display:block !important;width:100%;height:100%;pointer-events:none;
+  -webkit-user-drag:none;user-select:none;
+}
+/* The name hangs under the TIP. The block rule bleeds 12px a side, which is
+   right for a 24-70 unit block and starves a 28px pin, so widen it. */
+#nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-pin > .ng-node-cap{
+  left:-56px;right:-56px;
+}
+/* There is no border left to tint, so selection and the connected highlight
+   move onto the silhouette itself. */
+#nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-pin.ng-sel > .ng-bldgpin{
+  filter:drop-shadow(0 0 2px #4f8cff) drop-shadow(0 0 5px #4f8cff);
+}
+#nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-pin.ng-connected > .ng-bldgpin{
+  filter:drop-shadow(0 0 3px #fbbf24);
+}
+
 /* ── Sleek ribbon + popovers (2026-07-04) ─────────────────────────────
    Quieter Console-style strip: transparent buttons, hover pill, tighter
    type. The 👁 Layers and ⋯ More popovers re-home the low-frequency
