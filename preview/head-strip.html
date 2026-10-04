@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Head strip — job and lead cards</title>
+<!-- The SHIPPED files, nothing re-typed: this harness exists so the strip can
+     be looked at, at both widths, without a signed-in app. -->
+<link rel="stylesheet" href="css/workspace-layout.css" />
+<style>
+  :root{
+    --bg:#0e1118; --panel:#151923; --panel-2:#1b2030; --border:#2a2f3e;
+    --text:#e6e9f2; --muted:#8b93a7; --accent:#4f8cff; --font-mono:ui-monospace,monospace;
+  }
+  body{background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif;margin:0;padding:24px;}
+  h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:26px 0 8px;}
+  .frame{border:1px dashed #39405a;padding:0;margin-bottom:6px;}
+  .w-narrow{max-width:420px;}
+</style>
+</head>
+<body>
+  <h2>Job head strip — full width</h2>
+  <div class="frame" id="job-wide"></div>
+
+  <h2>Job head strip — phone fold (420px)</h2>
+  <div class="frame w-narrow" id="job-narrow"></div>
+
+  <h2>Lead head strip — full width</h2>
+  <div class="frame" id="lead-wide"></div>
+
+  <h2>Job card — sidebar column shape (unchanged)</h2>
+  <div class="frame" style="max-width:300px;" id="job-column"></div>
+
+<script src="js/maps-link.js"></script>
+<script src="js/entity-card.js"></script>
+<script>
+  var JOB = {
+    kind: 'job',
+    accent: '#f59e0b',
+    status: { label: 'In Progress', color: '#34d399' },
+    title: 'RV2019 · Lakeside Village — Bldg 14 Reroof',
+    subtitle: 'Vanguard Property Group',
+    ring: { pct: 62 },
+    facts: [
+      { icon: 'calendar', text: 'Sep 24 → Nov 3' },
+      { icon: 'map-pin', text: 'Tampa, FL',
+        map: { address: '5020 Mill Pond Rd, Tampa, FL 33610', lat: 27.9881, lng: -82.4012 } },
+      { icon: 'briefcase', text: 'Renovation' },
+      { icon: 'building-community', text: 'Tampa' },
+      { icon: 'user', text: 'Jennifer Bonilla' },
+      { icon: 'external-link', text: 'BT Open' },
+      { icon: 'hash', text: 'PO 4471' }
+    ],
+    tasks: [
+      { title: 'Confirm crane window with property mgr', due: 'Tomorrow', overdue: false },
+      { title: 'Chase signed CO #3', due: 'Sep 28', overdue: true }
+    ],
+    canAddTask: true
+  };
+  var LEAD = {
+    kind: 'lead',
+    accent: '#a78bfa',
+    status: { label: 'Proposal Sent', color: '#a78bfa' },
+    title: 'Harbor Pointe — Roof + Soffit Replacement',
+    subtitle: 'Harbor Pointe HOA',
+    ring: { pct: 45 },
+    facts: [
+      { icon: '', text: '$312,480.00', tone: 'money' },
+      { icon: 'calendar', text: 'Oct 18' },
+      { icon: 'map-pin', text: 'Clearwater, FL',
+        map: { address: '1800 Harbor Pointe Dr, Clearwater, FL', lat: 27.9659, lng: -82.8001 } }
+    ],
+    stats: [{ label: 'Age', value: '31d' }],
+    tasks: [{ title: 'Follow up on proposal', due: 'Friday', overdue: false }],
+    canAddTask: true
+  };
+  document.getElementById('job-wide').innerHTML = window.p86EntityCard.render(JOB, { compact: true, strip: true });
+  document.getElementById('job-narrow').innerHTML = window.p86EntityCard.render(JOB, { compact: true, strip: true });
+  document.getElementById('lead-wide').innerHTML = window.p86EntityCard.render(LEAD, { compact: true, strip: true });
+  document.getElementById('job-column').innerHTML = window.p86EntityCard.render(JOB, { compact: true });
+</script>
+</body>
+</html>

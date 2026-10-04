@@ -3118,8 +3118,18 @@ function renderSidebarJobCard(jobIdOverride){
   // One date fact, as a span when the job has both ends — "Sep 24 → Nov 3"
   // is the schedule; two separate chips are two numbers to reconcile.
   if(_sd||_ed) _facts.push({icon:'calendar', text:(_sd&&_ed)?(_sd+' → '+_ed):(_sd||_ed)});
+  // THE PLACE IS A LINK. Coordinates when the job has them, the full address
+  // otherwise — window.p86MapLink, the same target the map pins and 86 use.
+  // The crew reads this on a phone; retyping it into Maps was the gap.
   var _place=[job.city,job.state].filter(Boolean).join(', ');
-  if(_place) _facts.push({icon:'map-pin', text:_place});
+  // Built the way every other job surface builds it (jobs.js:4158) — the
+  // structured columns first, job.address only as the legacy fallback.
+  var _addr=[job.street_address,job.city,job.state,job.zip].filter(Boolean).join(', ')
+    ||job.address||job.geocode_address||'';
+  if(_place||_addr){
+    var _mapTarget={ address:(_addr||_place), lat:Number(job.geocode_lat), lng:Number(job.geocode_lng) };
+    _facts.push({icon:'map-pin', text:(_place||_addr), map:_mapTarget});
+  }
   // The job's TYPE as the job carries it (Renovation / Service / Work Order).
   if(job.jobType) _facts.push({icon:'briefcase', text:String(job.jobType)});
   if(job.market) _facts.push({icon:'building-community', text:String(job.market)});

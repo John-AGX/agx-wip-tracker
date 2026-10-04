@@ -136,34 +136,50 @@
       '.p86-ecard.compact .p86-ecard-title{white-space:normal;overflow:visible;text-overflow:clip;}' +
 
       // ── STRIP: the card laid along a page head ───────────────────────
-      // One line, read left to right: ring, status, name, client, then the
-      // facts and follow-ups spread along the rest of the width. The column
-      // version stacks those blocks; here the BODY is the row and each block
-      // keeps its own internal layout, so nothing about the markup changes.
+      // Two short lines across the full width: the NAME on top, the detail
+      // under it, the status ring at the left and the follow-ups at the
+      // right, each spanning both. The column version stacks the same
+      // blocks; here the BODY places them, so the markup never changes.
       '.p86-ecard.strip{border-radius:10px;}' +
-      '.p86-ecard.strip .p86-ecard-body{display:flex;align-items:center;flex-wrap:wrap;' +
-        'gap:6px 18px;padding:8px 14px 8px 16px;}' +
-      // The head stops being a full-width bar: it is the first item in the row.
-      '.p86-ecard.strip .p86-ecard-head{flex:0 0 auto;width:auto;align-items:center;gap:8px;}' +
+      // A GRID, not a single row: the name goes on top in its own line and
+      // everything else runs underneath it, while the status/ring on the left
+      // and the follow-ups on the right each span both lines. A flex row could
+      // not do that — it would put the facts beside the name, which is what
+      // made the name compete with five chips for the eye.
+      '.p86-ecard.strip .p86-ecard-body{display:grid;align-items:center;' +
+        'grid-template-columns:auto minmax(0,1fr) auto;' +
+        'grid-template-areas:\'head name tasks\' \'head facts tasks\' \'head stats tasks\';' +
+        'gap:2px 16px;padding:9px 14px 9px 16px;}' +
+      '.p86-ecard.strip .p86-ecard-head{grid-area:head;width:auto;align-items:center;gap:8px;}' +
+      '.p86-ecard.strip .p86-ecard-main{grid-area:name;}' +
+      '.p86-ecard.strip .p86-ecard-facts{grid-area:facts;}' +
+      '.p86-ecard.strip .p86-ecard-stats{grid-area:stats;}' +
+      '.p86-ecard.strip .p86-ecard-tasks{grid-area:tasks;}' +
       '.p86-ecard.strip .p86-ecard-headring{margin:0;}' +
       '.p86-ecard.strip .p86-ecard-headring svg{width:34px;height:34px;}' +
-      // Name block: takes the slack, and gives it back when the facts need it.
-      '.p86-ecard.strip .p86-ecard-main{flex:1 1 220px;min-width:0;margin:0;}' +
-      '.p86-ecard.strip .p86-ecard-titlerow{gap:6px;}' +
-      '.p86-ecard.strip .p86-ecard-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
-      '.p86-ecard.strip .p86-ecard-sub{margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
-      // Facts run ALONG the strip instead of wrapping under the title.
-      '.p86-ecard.strip .p86-ecard-facts{flex:1 1 auto;margin-top:0;gap:4px 16px;}' +
-      '.p86-ecard.strip .p86-ecard-stats{flex:0 0 auto;margin-top:0;gap:18px;}' +
-      // Follow-ups lose the full-width rule above them — a vertical divider
-      // reads as "and also" on a row, where a horizontal one reads as "below".
-      '.p86-ecard.strip .p86-ecard-tasks{flex:0 1 auto;margin-top:0;padding-top:0;padding-left:16px;' +
-        'border-top:none;border-left:1px solid var(--border,#2a2f3e);max-width:330px;}' +
+      // THE NAME IS THE HEADLINE: job number and title, bigger than anything
+      // else on the strip, on their own line. Everything under it is detail.
+      '.p86-ecard.strip .p86-ecard-main{min-width:0;margin:0;}' +
+      '.p86-ecard.strip .p86-ecard-titlerow{gap:7px;align-items:baseline;}' +
+      '.p86-ecard.strip .p86-ecard-title{font-size:15.5px;font-weight:700;line-height:1.25;' +
+        'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+      // Client, then the facts: the quiet line under the headline.
+      '.p86-ecard.strip .p86-ecard-sub{margin-top:0;font-size:12px;white-space:nowrap;' +
+        'overflow:hidden;text-overflow:ellipsis;}' +
+      '.p86-ecard.strip .p86-ecard-facts{margin-top:2px;gap:2px 14px;}' +
+      '.p86-ecard.strip .p86-ecard-stats{margin-top:2px;gap:18px;}' +
+      // Follow-ups and reminders stay on the RIGHT, spanning the lines beside
+      // them, divided off vertically: on a row a vertical rule reads as "and
+      // also", where a horizontal one reads as "below".
+      '.p86-ecard.strip .p86-ecard-tasks{margin-top:0;padding-top:0;padding-left:16px;' +
+        'border-top:none;border-left:1px solid var(--border,#2a2f3e);max-width:340px;' +
+        'align-self:stretch;display:flex;flex-direction:column;justify-content:center;}' +
       '.p86-ecard.strip .p86-ecard-addtask{margin-top:0;}' +
       // Under ~820px it goes back to being a card: a strip that wraps to four
       // lines is just a card with the spacing of a strip.
       '@media (max-width:820px){' +
         '.p86-ecard.strip .p86-ecard-body{display:block;padding:11px 13px 12px 16px;}' +
+        '.p86-ecard.strip .p86-ecard-title{font-size:14.5px;white-space:normal;}' +
         '.p86-ecard.strip .p86-ecard-facts{margin-top:7px;}' +
         '.p86-ecard.strip .p86-ecard-tasks{margin-top:9px;padding-top:8px;padding-left:0;' +
           'border-left:none;border-top:1px solid var(--border,#2a2f3e);max-width:none;}' +
@@ -278,9 +294,17 @@
       for (var f = 0; f < vm.facts.length; f++) {
         var ft = vm.facts[f];
         if (!ft || !ft.text) continue;
+        // A fact carrying `map` is a PLACE: its text opens Google Maps, the
+        // same link the pins and the chat use (window.p86MapLink), so an
+        // address on a card is something you can drive to rather than
+        // something to retype into a phone. Everything else is plain text —
+        // esc() either way, the link builder escapes its own label.
+        var factBody = (ft.map && window.p86MapLink)
+          ? window.p86MapLink.linkHTML(ft.text, ft.map, { noIcon: true })
+          : esc(ft.text);
         facts += '<span class="p86-ecard-fact' + (ft.tone === 'money' ? ' money' : '') + '">' +
           (ft.icon ? '<i class="ti ti-' + esc(ft.icon) + '" aria-hidden="true"></i>' : '') +
-          '<span>' + esc(ft.text) + '</span></span>';
+          '<span>' + factBody + '</span></span>';
       }
       facts += '</div>';
     }

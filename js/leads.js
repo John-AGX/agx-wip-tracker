@@ -2176,7 +2176,15 @@ function p86Ask(message, opts) {
     if (rev != null) facts.push({ icon: '', text: sm(rev), tone: 'money' });
     if (dc.due) facts.push({ icon: 'calendar', text: dc.due });
     var place = [l.city, l.state].filter(Boolean).join(', ');
-    if (place) facts.push({ icon: 'map-pin', text: place });
+    // The place opens Maps, like the job card's — the card already had a maps
+    // ICON doing this; the address itself now does it too, which is the thing
+    // a thumb aims at.
+    if (place) {
+      facts.push({ icon: 'map-pin', text: place, map: {
+        address: [l.street_address, l.city, l.state].filter(Boolean).join(', ') || place,
+        lat: Number(l.latitude), lng: Number(l.longitude)
+      } });
+    }
 
     // Card actions. NOTE: no 'info' icon — this card only exists while the
     // lead detail is already open, so "open the lead" would go nowhere.

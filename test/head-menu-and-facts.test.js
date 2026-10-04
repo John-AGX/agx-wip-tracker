@@ -119,6 +119,12 @@ describe('the lead head: actions behind the button, Delete gated', () => {
     expect(LEADS).toMatch(/btn\.style\.display = any \? '' : 'none';/);
   });
 
+  test('the lead place is a Maps target too — one card, one behaviour', () => {
+    const card = LEADS.slice(LEADS.indexOf('function mountLeadCard'), LEADS.indexOf('function onAct'));
+    expect(card).toMatch(/icon: 'map-pin', text: place, map: \{/);
+    expect(card).toMatch(/lat: Number\(l\.latitude\)\, lng: Number\(l\.longitude\)/);
+  });
+
   test('the lead card takes the strip shape in the head, the column in the sidebar', () => {
     const subnav = fs.readFileSync(path.join(ROOT, 'js', 'entity-subnav.js'), 'utf8');
     expect(subnav).toMatch(/\{ compact: true, strip: !!headSlot \}/);
@@ -143,6 +149,18 @@ describe('the job strip fills the space with facts, not with money again', () =>
     expect(block).toMatch(/job\.jobType/);
     expect(block).toMatch(/job\.market/);
     expect(block).toMatch(/findUserById\(job\.owner_id\)/);
+  });
+
+  // The crew reads this address on a phone. A fact that only LOOKS like an
+  // address is one somebody retypes into Maps; one carrying `map` renders as
+  // the deep link the pins and 86 already use.
+  test('the place is something you can drive to, not text about a place', () => {
+    expect(block).toMatch(/map:_mapTarget/);
+    // coords when the job has them — they need no geocoder
+    expect(block).toMatch(/lat:Number\(job\.geocode_lat\)\, lng:Number\(job\.geocode_lng\)/);
+    // and the address it falls back to is the one every other job surface builds
+    expect(block).toMatch(/job\.street_address,job\.city,job\.state,job\.zip/);
+    expect(block).not.toMatch(/propertyAddr/);
   });
 
   test('the dates read as one span, not two chips to reconcile', () => {
