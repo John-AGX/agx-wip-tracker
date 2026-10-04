@@ -123,6 +123,12 @@ describe('the head is the card and that button, nothing else', () => {
     const css = require('fs').readFileSync(require('path').join(__dirname, '..', 'css', 'workspace-layout.css'), 'utf8');
     expect(css).toMatch(/\n\.jh-job-actions \{ display: none; \}/);
     expect(css).toMatch(/\n\.jh-job-actions\.is-open \{/);
+    // ...and NOTHING sets display on that element inline. It shipped once with
+    // the three buttons still sitting in the head, because buildHeader set
+    // style.cssText = "display:flex;…" on this element and an inline display
+    // beats a stylesheet rule that is not !important. Asserted on the element,
+    // so a future inline style fails here rather than on the live page.
+    expect(bar().style.display).toBe('');
   });
 
   test('the card spans the head instead of being capped at a column width', async () => {

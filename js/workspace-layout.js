@@ -660,8 +660,10 @@
         var jobForActions = (typeof appData !== 'undefined' && appData.jobs)
           ? appData.jobs.find(function (j) { return j.id === currentJobId; }) : null;
         var jobActions = document.createElement("div");
-        jobActions.className = "jh-job-actions";
-        jobActions.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;padding:6px 16px 0;";
+        jobActions.className = "jh-job-actions";        // NO inline display here. The menu is closed until .is-open, and an
+        // inline display:flex beats the stylesheet — which is exactly why the
+        // three buttons were still sitting in the head after they were moved
+        // into the menu. Layout lives in css/workspace-layout.css now.
         // THE PAGE HEAD. The actions used to sit alone in a right-aligned row
         // with ~1,400px of empty bar beside them, while the job's identity card
         // lived in the left sidebar. The card moves HERE, into that space, and

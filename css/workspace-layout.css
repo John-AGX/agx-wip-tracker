@@ -1504,6 +1504,9 @@ body.light-mode .jh-job-actions.is-open { box-shadow: 0 12px 32px rgba(15, 23, 4
    element into the ⋯ menu, and wrapping it would have taken the card with it. */
 .jh-job-head {
   display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  align-self: stretch;
   align-items: center;
   gap: 12px;
   padding: 6px 16px 0;
