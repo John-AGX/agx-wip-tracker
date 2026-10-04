@@ -130,3 +130,25 @@ describe('the page it was built for', () => {
     expect(header).toMatch(/id="ld-status-pill" style="display:none;"/);
   });
 });
+
+describe('the slot is wide enough to actually show the card', () => {
+  test('it carries a real flex basis, not auto beside a flexible spacer', () => {
+    // Measured on the live page: with `flex: 1 1 auto` the card mounted into
+    // the slot correctly and rendered 254px tall and 0px WIDE — #ld-header's
+    // row ends with <span style="flex:1;min-width:0"> and that spacer took the
+    // free space first, leaving a zero-basis item nothing to grow from.
+    const css = fs.readFileSync(path.join(ROOT, 'css', 'workspace-layout.css'), 'utf8');
+    const rule = css.split('\n').find((l) => l.includes('.ld-head-card.has-card') && l.includes('flex:'));
+    expect(rule).toBeTruthy();
+    expect(rule).toMatch(/flex:\s*1\s+1\s+\d+px/);
+    expect(rule).toMatch(/min-width:\s*\d+px/);
+  });
+
+  test('the header row it sits in really does end with that spacer', () => {
+    // If the spacer ever goes, the basis above is harmless; if it stays, the
+    // basis is the only thing keeping the card on screen.
+    const index = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    const header = index.slice(index.indexOf('id="ld-header"'), index.indexOf('id="ld-status-msg"'));
+    expect(header).toMatch(/<span style="flex:1;min-width:0;"><\/span>/);
+  });
+});

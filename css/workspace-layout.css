@@ -1508,7 +1508,7 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
    until a card is in it, so the New Lead form (no lead id, no card) keeps the
    header it always had. */
 .ld-head-card { flex: 0 0 0; min-width: 0; }
-.ld-head-card.has-card { flex: 1 1 auto; max-width: 460px; }
+.ld-head-card.has-card { flex: 1 1 320px; min-width: 260px; max-width: 460px; }
 .ld-head-card .app-entitynav { margin: 0; padding: 0; }
 @media (max-width: 760px) {
   .ld-head-card.has-card { flex: 1 1 100%; max-width: none; order: 9; }
