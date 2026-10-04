@@ -22,9 +22,19 @@
   'use strict';
   if (window.p86EntitySubnav) return;
 
+  // WHERE THE CARD GOES. A detail page that offers a head slot
+  // (#<kind>-head-card) gets the card in its own header, beside that page's
+  // actions — the job page's arrangement, and the reason its header stopped
+  // being an empty bar. Everything else keeps the sidebar mount, which is what
+  // the estimate editor and the modal lead form still use.
+  function hostFor(kind) {
+    return document.getElementById(kind + '-head-card');
+  }
+
   function mount(kind, vm, onAct) {
     var sb = document.getElementById('app-sidebar');
-    if (!sb || !window.p86EntityCard || !kind) return;
+    var headSlot = hostFor(kind);
+    if ((!sb && !headSlot) || !window.p86EntityCard || !kind) return;
     clearAll();  // single-card rule: only one lead/estimate context card at a time
     var wrap = document.createElement('div');
     wrap.id = 'app-' + kind + 'nav';
@@ -42,6 +52,14 @@
         try { onAct(btn.getAttribute('data-act'), btn.dataset || {}); } catch (err) {}
       });
     }
+    if (headSlot) {
+      // The page's own header owns it now. clearAll() above has already taken
+      // the previous card out of this slot, which is what keeps a repaint
+      // (every follow-up load repaints) from stacking a second one.
+      headSlot.appendChild(wrap);
+      headSlot.classList.add('has-card');
+      return;
+    }
     // Insert above .app-nav using its REAL parent (it may sit inside a
     // scroll wrapper), mirroring how the job subnav inserts #app-jobnav.
     var nav = sb.querySelector('.app-nav');
@@ -52,6 +70,10 @@
   function unmount(kind) {
     var el = document.getElementById('app-' + (kind || '') + 'nav');
     if (el && el.parentNode) el.parentNode.removeChild(el);
+    // The slot stays in the page (it is the page's markup); it just stops
+    // claiming the space it only has while a card is in it.
+    var slot = hostFor(kind);
+    if (slot) slot.classList.remove('has-card');
   }
 
   // Remove every lead/estimate context card (the job uses its own #app-jobnav,
