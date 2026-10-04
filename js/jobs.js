@@ -1004,7 +1004,9 @@ function renderJobsMain() {
                         '<td style="white-space:nowrap;padding:8px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(c.co_number || 'CO') + '</strong>' + btWhereBadge(c) + '</td>' +
                         '<td style="padding:8px 10px;font-size:12.5px;color:var(--text,#fff);">' + escapeHTML(c.title || '(untitled)') + fromWorkOrderLine(c) + '</td>' +
                         '<td style="white-space:nowrap;padding:8px 10px;">' + statusBadge(c.status || 'draft') + '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:inherit;font-size:13px;color:var(--green,#34d399);font-weight:600;">' + formatCurrency(total) + '</td>' +
+                        // Green is the ADD colour. A deductive (credit) change order takes
+                        // money off the contract, so it must not render in the profit colour.
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:inherit;font-size:13px;color:' + (total < 0 ? 'var(--red,#f87171)' : 'var(--green,#34d399)') + ';font-weight:600;">' + formatCurrency(total) + '</td>' +
                         '<td style="white-space:nowrap;padding:8px 10px;font-size:11px;">' + costCell(c) + '</td>' +
                         '<td style="white-space:nowrap;padding:8px 10px;font-size:11px;color:var(--text-dim,#888);">' + (c.linked_node_id ? '⛓ Linked' : '—') + '</td>' +
                     '</tr>';

@@ -414,10 +414,21 @@ function validateCostSource(payload, ctx) {
     }
   }
 
+  // Math.abs, the same reading js/pay-applications.js and nodegraph/ui.js give a
+  // credit: the ceiling is the SIZE of the cost, whichever way it points.
+  //
+  // A deductive CO's cost is negative and normalizeDraws drops every amount that
+  // is not > 0, so `drawn` is always >= 0 and a bare `drawn > cost` was true for
+  // EVERY payload — including the empty one, with no draws at all. That made
+  // POST /api/change-orders/:id/cost-source answer 422 on every deductive CO, and
+  // because the allocation overlay chains that write IN FRONT of setAllocations,
+  // a credit could never save its per-building split or its completion mode.
+  // On a positive CO the cap is the cost, so nothing about those moves.
   const cost = r2(ctx && ctx.coCost);
+  const cap = Math.abs(cost);
   const drawn = r2(draws.reduce((s, d) => s + d.amount, 0));
-  if (drawn > cost + EPS) {
-    errs.push(`Draws total ${drawn}, above this change order's cost of ${cost}.`);
+  if (drawn > cap + EPS) {
+    errs.push(`Draws total ${drawn}, above this change order's cost of ${cap}.`);
   }
 
   // A sub on the CO is IDENTITY (who performs the work); the PO is MONEY. They

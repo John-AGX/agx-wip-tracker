@@ -248,6 +248,31 @@ describe('server-side validation', () => {
     expect(errs[0]).toMatch(/above this change order's cost/);
   });
 
+  // A DEDUCTIVE (credit) change order carries a NEGATIVE cost, and normalizeDraws
+  // drops every amount that is not > 0 — so `drawn` is always >= 0, and the bare
+  // `drawn > cost` this used to be was true for EVERY payload, the empty one
+  // included. POST /api/change-orders/:id/cost-source answered 422 on every
+  // deductive CO, and because the allocation overlay chains that write IN FRONT
+  // of setAllocations, a credit could never save its per-building split or its
+  // completion mode at all. Buildertrend's CO-0001 on RV2000 (-$1,686, approved)
+  // is the real record that found this.
+  test('a deductive change order can save a cost source at all', () => {
+    expect(V({ costSource: '' }, [], -1686)).toEqual([]);
+    expect(V({ costSource: 'self' }, [], -1686)).toEqual([]);
+    expect(V({ costSource: 'unfunded' }, [], -1686)).toEqual([]);
+  });
+
+  test('a deductive change order still has a ceiling — the SIZE of its cost', () => {
+    expect(V({ costSource: 'po', costDraws: [{ poId: 'po1', amount: 1000, mode: 'within' }] }, [po()], -1686)).toEqual([]);
+    const over = V({ costSource: 'po', costDraws: [{ poId: 'po1', amount: 2000, mode: 'within' }] }, [po()], -1686);
+    expect(over[0]).toMatch(/above this change order's cost of 1686/);
+  });
+
+  test('the ceiling message on a positive change order is unchanged', () => {
+    const errs = V({ costSource: 'po', costDraws: [{ poId: 'po1', amount: 50000, mode: 'within' }] }, [po()], 27500);
+    expect(errs[0]).toMatch(/above this change order's cost of 27500/);
+  });
+
   test('a PO on another job is REFUSED (the route only ever passes this job\'s POs)', () => {
     const errs = V({ costSource: 'po', costDraws: [{ poId: 'po_elsewhere', amount: 100, mode: 'within' }] }, [po()], 27500);
     expect(errs[0]).toMatch(/is not on this job/);

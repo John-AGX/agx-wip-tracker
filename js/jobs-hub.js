@@ -186,7 +186,9 @@ function p86Ask(message, opts) {
     return (parseFloat(l.qty) || 0) * (parseFloat(l.unitCost) || 0);
   }
   function poSum(po) { return ((po && po.lines) || []).reduce(function (s, l) { return s + poLineTotal(l); }, 0); }
-  function money(n) { n = Number(n) || 0; return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  // The sign goes OUTSIDE the currency: a deductive change order is "-$1,686.00",
+  // the way js/app.js formatCurrency's Intl formatter writes it, not "$-1,686.00".
+  function money(n) { n = Number(n) || 0; return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
   // The chip is shared with purchase orders, RFIs, submittals and bills, so a
   // word is overridden per list rather than in the title-caser.
   var CO_STATUS_LABEL = { pending: 'Pending approval' };
