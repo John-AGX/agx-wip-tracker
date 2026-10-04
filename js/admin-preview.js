@@ -142,5 +142,49 @@
       });
   }
 
+  // ── CREW AND CLIENT ──────────────────────────────────────────────
+  //
+  // Neither logs in, so neither has a portal to frame. What they have is a
+  // LINK, and the honest preview is the page behind it:
+  //
+  //   crew    the work-order page, run through its own handler with the
+  //           recording suppressed. Opening the real link stamps opened_at,
+  //           bumps view_count and raises a crew-activity notice — so looking
+  //           at it the obvious way would tell the office their crew had
+  //           opened it. No token is minted either.
+  //   client  the document they were actually SENT. A report share stores a
+  //           snapshot at publish time, so this shows that copy rather than
+  //           the report as it stands today. A report nobody shared has
+  //           nothing to preview, which is the true answer.
+  function openJson(title, path, note) {
+    var stage = el('p86-prev-stage');
+    if (!stage) return;
+    stage.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;">Loading…</div>';
+    get(path).then(function (data) {
+      stage.innerHTML = ''
+        + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">'
+        + '<strong style="font-size:13px;">' + esc(title) + '</strong>'
+        + '<button class="secondary" id="p86-prev-close" style="font-size:12px;padding:3px 9px;margin-left:auto;">Close</button>'
+        + '</div>'
+        + (note ? '<p style="margin:0 0 8px;font-size:12px;color:var(--text-dim,#888);">' + esc(note) + '</p>' : '')
+        + '<pre style="max-height:520px;overflow:auto;background:var(--card-bg,#141419);border:1px solid var(--border,#2a2a3a);border-radius:10px;padding:12px;font-size:11px;line-height:1.5;white-space:pre-wrap;">'
+        + esc(JSON.stringify(data, null, 2)) + '</pre>';
+      var c = el('p86-prev-close');
+      if (c) c.addEventListener('click', function () { stage.innerHTML = ''; });
+      stage.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }).catch(function (e) {
+      stage.innerHTML = '<div style="color:var(--danger,#f87171);font-size:12px;">' + esc(e.message || 'error') + '</div>';
+    });
+  }
+  window.p86PreviewWorkOrder = function (ticketId, shareId) {
+    openJson('What the crew sees', '/api/preview/work-order/' + encodeURIComponent(ticketId)
+      + (shareId ? '?share=' + encodeURIComponent(shareId) : ''),
+      'Exactly what the link shows them. Looking here does not mark it opened.');
+  };
+  window.p86PreviewClientReport = function (shareId) {
+    openJson('What the client was sent', '/api/preview/client/report-share/' + encodeURIComponent(shareId),
+      'The copy that was published to them, not the report as it stands now.');
+  };
+
   window.renderAdminPreview = renderAdminPreview;
 })();

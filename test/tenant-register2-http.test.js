@@ -554,7 +554,13 @@ describe('REGISTER 2 — the route population', () => {
     //      before the response arrived; the findings are now persisted and
     //      read back through here. SYSTEM_ADMIN, and its rows are scoped
     //      by organization_id (classified `direct`).
-    expect(R.routes).toBe(652);
+    //      652 -> 656, +4: the crew and client previews
+    //      (routes/preview-routes.js). Four read-only doors: the shares on
+    //      one work order, the crew page itself run through the crew page’s
+    //      OWN handler with recording suppressed, the client report-share
+    //      list, and one stored report snapshot. None of them writes, and
+    //      none mints a token.
+    expect(R.routes).toBe(656);
     expect(R.routers).toBe(81);
   });
 
@@ -591,7 +597,12 @@ describe('REGISTER 2 — the route population', () => {
     // 145 -> 146: the prefix probe's history reader (see the note on the
     // count above) — a param-less GET, so the driven side moves and the
     // waived side does not.
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 146, waived: 506 });
+    // 146 -> 147 / 506 -> 509: the crew and client previews. Exactly ONE of
+    // the four is a param-less GET — the client report-share list — so it
+    // joins the driven set by construction. The other three take a path
+    // parameter and are waived here; their tenancy is driven instead in
+    // test/preview-routes.test.js, which pushes a foreign id through each.
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 147, waived: 509 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

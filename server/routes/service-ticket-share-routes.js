@@ -931,25 +931,49 @@ async function crewFinishState(ticket, share) {
 }
 
 // T1 — read the work order.
-router.get('/service-ticket-share/:token',
-  stShareIpLimiter, stShareViewLimiter, loadTicketShare, async (req, res) => {
+//
+// THE BODY IS NAMED because two callers run it: this route, for a crew
+// member holding the link, and the admin preview in routes/preview-routes.js
+// for somebody internal who wants to see what that crew member sees. A
+// preview that rebuilt this payload would drift from it, and a crew page
+// that quietly differs from what the office previewed is worse than no
+// preview at all.
+//
+// req.preview distinguishes them, and it only ever SUPPRESSES: the open
+// counters and the crew-activity notice below are skipped, because an
+// office preview is not a crew member opening their link and must never be
+// reported as one. Nothing is added to the payload for a preview.
+async function crewPageBody(req, res) {
     try {
       const share = req.share;
       const ticket = req.ticket;
 
       // First open is recorded once; every open bumps the counter. Both are
       // best-effort — a failed stat must never fail the read.
-      pool.query(
-        `UPDATE service_ticket_shares
-            SET opened_at = COALESCE(opened_at, NOW()), last_used_at = NOW(),
-                view_count = view_count + 1
-          WHERE id = $1 AND organization_id = $2`, [share.id, ticket.organization_id]
-      ).catch(function () { /* a stat is not worth failing a read over */ });
-      if (!share.opened_at) {
-        logEvent(ticket, 'share_opened', {
-          actorKind: 'share', shareId: share.id,
-          actorLabel: share.recipient_name || share.recipient_email || null,
-        });
+      //
+      // NOT WHEN SOMEBODY INTERNAL IS LOOKING. An office preview is not the
+      // crew opening their link, and recording it as one would be a lie told
+      // to the office by the office: opened_at is what "they have seen it"
+      // means on the ticket, view_count is the evidence behind it, and
+      // share_opened raises a crew-activity notice to everybody watching.
+      // Previewing a link would have announced that the crew had opened it.
+      //
+      // This is the ONLY thing req.preview changes. Nothing is added to the
+      // payload and nothing is hidden from it: what comes back is byte for
+      // byte what the holder of that link receives.
+      if (!req.preview) {
+        pool.query(
+          `UPDATE service_ticket_shares
+              SET opened_at = COALESCE(opened_at, NOW()), last_used_at = NOW(),
+                  view_count = view_count + 1
+            WHERE id = $1 AND organization_id = $2`, [share.id, ticket.organization_id]
+        ).catch(function () { /* a stat is not worth failing a read over */ });
+        if (!share.opened_at) {
+          logEvent(ticket, 'share_opened', {
+            actorKind: 'share', shareId: share.id,
+            actorLabel: share.recipient_name || share.recipient_email || null,
+          });
+        }
       }
 
       // Child reads carry the ticket's OWN organization_id — taken from the
@@ -1086,7 +1110,10 @@ router.get('/service-ticket-share/:token',
       console.error('[service-ticket-share] read failed', e);
       res.status(500).json({ error: 'Something went wrong opening this link.' });
     }
-  });
+}
+
+router.get('/service-ticket-share/:token',
+  stShareIpLimiter, stShareViewLimiter, loadTicketShare, crewPageBody);
 
 // T1b — open the takeoff file, through the token.
 //
@@ -2103,4 +2130,8 @@ require('./service-ticket-field-routes').registerFieldCaptureRoutes(router, {
   upload: { single: function () { return multerOnePhoto; } },
 });
 
+// crewPageBody is exported so routes/preview-routes.js can run the SAME body
+// for an internal viewer. Exported as a property rather than replacing the
+// module's export, which is the router every mount in server/index.js takes.
 module.exports = router;
+module.exports.crewPageBody = crewPageBody;

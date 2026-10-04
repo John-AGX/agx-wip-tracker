@@ -108,6 +108,34 @@ function mockRunQuery(sql, params) {
       }) };
   }
 
+  if (/^SELECT \* FROM service_tickets WHERE id = \$1/.test(text)) {
+    // The org term is read OFF THE STATEMENT. Applying it on this mock's own
+    // authority made "the ticket read loses its org predicate" invisible — the
+    // third time in this session a mock has hidden exactly that mutation.
+    const scoped = /organization_id = \$2/.test(text);
+    const t = rowsOf('tickets').find((x) => String(x.id) === String(p[0])
+      && (!scoped || String(x.organization_id) === String(p[1])));
+    return { rows: t ? [t] : [] };
+  }
+  // The column is ticket_id. An earlier version of this mock matched on a
+  // regex and keyed the fixture on service_ticket_id — a column that does not
+  // exist — so the tests passed while both queries would have thrown at
+  // runtime. test/schema-truth.test.js caught it; this mock could not, because
+  // a mock that does not know the schema cannot police it. The fixture now
+  // carries the real column name, which at least makes the mismatch visible.
+  if (/FROM service_ticket_shares s/.test(text) && /JOIN service_tickets t/.test(text)) {
+    return { rows: rowsOf('ticketShares').filter((x) => String(x.ticket_id) === String(p[0])) };
+  }
+  if (/^SELECT id, entity_type, entity_id, report_id/.test(text)) {
+    const scoped = /organization_id = \$1/.test(text);
+    return { rows: rowsOf('reportShares').filter((x) => !scoped || String(x.organization_id) === String(p[0])) };
+  }
+  if (/^SELECT id, document, revoked_at, expires_at FROM report_shares/.test(text)) {
+    const scoped = /organization_id = \$2/.test(text);
+    const r = rowsOf('reportShares').find((x) => String(x.id) === String(p[0])
+      && (!scoped || String(x.organization_id) === String(p[1])));
+    return { rows: r ? [r] : [] };
+  }
   return { rows: [], rowCount: 0 };
 }
 
@@ -131,6 +159,22 @@ function freshTables() {
       { id: 'sub_x', name: 'Someone Else’s Sub', trade: 'Paving', email: null, organization_id: OTHER_ORG },
     ],
     jobs: [{ id: 'j1', data: { jobNumber: '1042', title: 'River Landing' }, organization_id: ORG }],
+    tickets: [
+      { id: 't1', organization_id: ORG, title: 'Pool pump', status: 'scheduled' },
+      { id: 't_other', organization_id: OTHER_ORG, title: 'Not yours', status: 'scheduled' },
+    ],
+    ticketShares: [
+      { id: 'sh1', ticket_id: 't1', scope: 'respond', hide_financials: true,
+        recipient_name: 'Ray', recipient_email: 'ray@crew.test', opened_at: null, view_count: 0 },
+    ],
+    reportShares: [
+      { id: 'rs1', organization_id: ORG, entity_type: 'job', entity_id: 'j1', report_id: 'rep1',
+        recipient_email: 'client@example.test', document: { title: 'Final report', blocks: ['x'] },
+        revoked_at: null, expires_at: null, opened_at: null, view_count: 0, created_at: '2026-10-01' },
+      { id: 'rs_other', organization_id: OTHER_ORG, entity_type: 'job', entity_id: 'jx', report_id: 'r2',
+        recipient_email: 'nope@other.test', document: { title: 'Theirs' },
+        revoked_at: null, expires_at: null, opened_at: null, view_count: 0, created_at: '2026-10-01' },
+    ],
     grants: [{ sub_id: 'sub_1', entity_type: 'job', entity_id: 'j1', folder: 'compliance' }],
     attachments: [{
       id: 'att_1', filename: 'COI.pdf', mime_type: 'application/pdf', size_bytes: 4096,
@@ -309,9 +353,91 @@ describe('the catalogue', () => {
     expect(byKey.sub.ready).toBe(true);
     // A client never signs in to Project 86. Offering a "client portal"
     // preview would be inventing a surface that does not exist.
-    expect(byKey.client.ready).toBe(false);
+    expect(byKey.client.ready).toBe(true);
     expect(byKey.client.how).toBe('no login');
     expect(byKey.crew.how).toBe('token link');
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * CREW — AND THE ONE THING A PREVIEW MUST NOT DO
+ *
+ * Opening a crew link stamps opened_at, bumps view_count and raises a
+ * crew-activity notice. Those are how the office knows the crew has seen the
+ * work order. An internal preview that recorded them would be the office
+ * lying to itself — and it is the reason this preview runs the real handler
+ * with a flag rather than opening the real link.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('previewing a crew link records nothing', () => {
+  test('no open is stamped, no counter moves', async () => {
+    await call('/api/preview/work-order/t1', USER('admin', 10));
+    const writes = queries.filter(function (q) {
+      return /UPDATE service_ticket_shares/.test(q.sql);
+    });
+    expect(writes).toEqual([]);
+  });
+
+  test('it reaches the real handler rather than 404ing early', async () => {
+    await call('/api/preview/work-order/t1', USER('admin', 10));
+    // The ticket lookup happened and the body ran far enough to read the
+    // ticket's own child rows — which is how we know it is the real body and
+    // not a stub that returns early.
+    expect(queries.some(function (q) { return /FROM service_tickets WHERE id/.test(q.sql); })).toBe(true);
+  });
+
+  test('another tenant’s work order is not found', async () => {
+    const r = await call('/api/preview/work-order/t_other', USER('admin', 10));
+    expect(r.status).toBe(404);
+  });
+
+  test('its shares are listed so you can pick WHOSE link to look through', async () => {
+    const r = await call('/api/preview/work-order/t1/shares', USER('admin', 10));
+    expect(r.status).toBe(200);
+    expect(r.body.shares[0].recipient_name).toBe('Ray');
+  });
+
+  test('the recording is inside the preview guard, in the crew page itself', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'routes', 'service-ticket-share-routes.js'), 'utf8');
+    expect(liveLines(src, 'if (!req.preview) {').length).toBe(1);
+    const i = src.indexOf('if (!req.preview) {');
+    const guarded = src.slice(i, i + 900);
+    expect(guarded).toContain('UPDATE service_ticket_shares');
+    expect(guarded).toContain("'share_opened'");
+  });
+
+  test('the preview runs the crew page’s OWN body, not a copy of it', () => {
+    const prev = fs.readFileSync(path.join(__dirname, '..', 'server', 'routes', 'preview-routes.js'), 'utf8');
+    expect(liveLines(prev, "require('./service-ticket-share-routes').crewPageBody(req, res)").length).toBe(1);
+    // and it does not rebuild the payload
+    expect(/publicTicket|site_photos:|send_back:/.test(prev)).toBe(false);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * CLIENT — THE DOCUMENT THEY WERE ACTUALLY SENT
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('the client view is what was sent, not what exists now', () => {
+  test('it serves the stored snapshot', async () => {
+    const r = await call('/api/preview/client/report-share/rs1', USER('admin', 10));
+    expect(r.status).toBe(200);
+    expect(r.body.document.title).toBe('Final report');
+    expect(r.body.preview).toBe(true);
+  });
+
+  test('reading it does not forge evidence that the client read it', async () => {
+    await call('/api/preview/client/report-share/rs1', USER('admin', 10));
+    const writes = queries.filter(function (q) { return /UPDATE report_shares/.test(q.sql); });
+    expect(writes).toEqual([]);
+  });
+
+  test('another tenant’s share is not found', async () => {
+    const r = await call('/api/preview/client/report-share/rs_other', USER('admin', 10));
+    expect(r.status).toBe(404);
+  });
+
+  test('the list is scoped to this organisation', async () => {
+    const r = await call('/api/preview/client/report-shares', USER('admin', 10));
+    expect(r.body.shares.map(function (x) { return x.id; })).toEqual(['rs1']);
   });
 });
 

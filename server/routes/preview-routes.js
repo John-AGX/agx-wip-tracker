@@ -90,18 +90,19 @@ router.get('/audiences', guard, async (req, res) => {
         key: 'crew',
         label: 'Crew link (work order)',
         how: 'token link',
-        ready: false,
-        note: 'No login. A crew member opens a link with a token in it. '
-            + 'Previewing one opens the real page — next slice.',
+        ready: true,
+        note: 'No login. A crew member opens a link with a token in it. This '
+            + 'shows that page as the holder sees it, without marking the link '
+            + 'opened or telling anybody the crew looked.',
       },
       {
         key: 'client',
         label: 'Client',
         how: 'no login',
-        ready: false,
+        ready: true,
         note: 'A client never logs in to Project 86. They receive links: a '
-            + 'proposal to sign, a report to read, a live room. There is no '
-            + 'client portal to show, so this will preview what they are sent.',
+            + 'report to read, a proposal to sign. There is no client portal, so '
+            + 'this shows the document they were actually sent.',
       },
     ],
   });
@@ -187,6 +188,133 @@ router.get('/sub-portal/:subId/attachments', guard, async (req, res) => {
     res.json({ preview: true, attachments: attachments });
   } catch (e) {
     console.error('GET /api/preview/sub-portal/:subId/attachments error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/* ── CREW: the work-order link ──────────────────────────────────────────
+ *
+ * Shares, so the viewer can pick WHICH crew member’s link to look through:
+ * scope and hide_financials differ per share, so "what the crew sees" is not
+ * one answer. A ticket with no share yet still previews, against the
+ * defaults a new share would carry, and says so.
+ */
+router.get('/work-order/:ticketId/shares', guard, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT s.id, s.recipient_name, s.recipient_email, s.scope, s.hide_financials,
+              s.expires_at, s.revoked_at, s.opened_at, s.view_count
+         FROM service_ticket_shares s
+         JOIN service_tickets t ON t.id = s.ticket_id
+        WHERE s.ticket_id = $1 AND t.organization_id = $2
+        ORDER BY s.id DESC LIMIT 50`,
+      [req.params.ticketId, req.user.organization_id]
+    );
+    res.json({ shares: rows });
+  } catch (e) {
+    console.error('GET /api/preview/work-order/:id/shares error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/* GET /api/preview/work-order/:ticketId  [?share=<id>]
+ *
+ * Runs the crew page’s OWN handler — crewPageBody, exported from
+ * routes/service-ticket-share-routes.js — against a ticket this caller may
+ * see. req.preview tells that body to record nothing: no opened_at, no
+ * view_count, no share_opened event. Previewing a link must never announce
+ * that the crew opened it.
+ *
+ * No token is minted, now or ever. The feature asked for a way to LOOK; a
+ * preview that created a working credential to do it would be a worse
+ * trade than the problem it solved.
+ */
+router.get('/work-order/:ticketId', guard, async (req, res) => {
+  try {
+    const t = await pool.query(
+      'SELECT * FROM service_tickets WHERE id = $1 AND organization_id = $2',
+      [req.params.ticketId, req.user.organization_id]
+    );
+    if (!t.rows.length) return res.status(404).json({ error: 'Work order not found' });
+
+    // The share decides what the holder sees — hide_financials above all — so
+    // a named share is read back and used as-is. Without one, the defaults a
+    // new share would carry, which is the cautious direction: money hidden.
+    let share = null;
+    if (req.query.share) {
+      const r = await pool.query(
+        `SELECT s.* FROM service_ticket_shares s
+           JOIN service_tickets t2 ON t2.id = s.ticket_id
+          WHERE s.id = $1 AND s.ticket_id = $2 AND t2.organization_id = $3`,
+        [req.query.share, req.params.ticketId, req.user.organization_id]
+      );
+      if (!r.rows.length) return res.status(404).json({ error: 'Share not found' });
+      share = r.rows[0];
+    }
+    if (!share) {
+      share = {
+        id: null, ticket_id: t.rows[0].id, scope: 'view',
+        hide_financials: true, opened_at: null, recipient_name: null,
+        recipient_email: null, expires_at: null, revoked_at: null,
+      };
+    }
+
+    req.share = share;
+    req.ticket = t.rows[0];
+    req.preview = true;   // the ONLY thing this changes is what is recorded
+    return require('./service-ticket-share-routes').crewPageBody(req, res);
+  } catch (e) {
+    console.error('GET /api/preview/work-order/:id error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/* ── CLIENT: the report they were sent ──────────────────────────────────
+ *
+ * A client has no login and no portal, so the only honest "client view" is
+ * the document they actually received. A report share stores a SNAPSHOT of
+ * the document at publish time — report_shares.document — because a report
+ * is finished, unlike a checklist. So the preview is that stored snapshot,
+ * read back: not a re-render of the report as it stands today, which could
+ * differ from the copy in the client’s hands.
+ *
+ * It follows that a report nobody has shared has nothing to preview. That is
+ * not a gap to paper over — the client has not been sent anything.
+ */
+router.get('/client/report-shares', guard, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, entity_type, entity_id, report_id, recipient_email,
+              expires_at, revoked_at, opened_at, view_count, created_at
+         FROM report_shares
+        WHERE organization_id = $1
+        ORDER BY created_at DESC LIMIT 100`,
+      [req.user.organization_id]
+    );
+    res.json({ shares: rows });
+  } catch (e) {
+    console.error('GET /api/preview/client/report-shares error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/client/report-share/:shareId', guard, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, document, revoked_at, expires_at FROM report_shares WHERE id = $1 AND organization_id = $2',
+      [req.params.shareId, req.user.organization_id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Share not found' });
+    // opened_at and view_count are NOT touched. They are how the office
+    // knows the client has read it; an internal look must not forge that.
+    res.json({
+      preview: true,
+      document: rows[0].document,
+      revoked: !!rows[0].revoked_at,
+      expires_at: rows[0].expires_at,
+    });
+  } catch (e) {
+    console.error('GET /api/preview/client/report-share/:id error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

@@ -526,9 +526,22 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.96';
+const APP_VERSION = '1.97';
 
 const releases = [
+  {
+    version: '1.97',
+    date: '2026-10-04',
+    name: 'Their view: the crew and the client',
+    summary: 'The page a crew member opens from their link, and the document a client was sent — both read-only, neither recording that anybody looked.',
+    changes: [
+      { type: 'new', text: 'Their view now covers the crew and the client too. For a work order you can see the page the crew opens from their link — the same buildings, photos and notes, with money hidden or shown exactly as that particular link has it.' },
+      { type: 'improved', text: 'Looking does not mark the link opened. A crew link records when it was first opened, counts the views, and tells everyone watching the work order that the crew has seen it. Previewing used to be impossible for that reason: it would have announced that the crew opened a link they have not touched. Now nothing is recorded when you look.' },
+      { type: 'new', text: 'For a client, you see the document they were actually sent — the copy published to them, not the report as it stands today, which may have moved on. Reading it does not mark it read, so “have they opened it yet” still means what it says.' },
+      { type: 'improved', text: 'Nothing creates a link to let you look. No new code is sent out, nothing extra exists afterwards that somebody could find and use. You are reading what is already there.' },
+      { type: 'improved', text: 'Where a work order has been sent to more than one person, you pick whose link to look through — because what they see is not one answer: each link carries its own setting for whether money is shown.' },
+    ],
+  },
   {
     version: '1.96',
     date: '2026-10-04',
