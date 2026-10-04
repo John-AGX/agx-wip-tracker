@@ -32,6 +32,8 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const http = require('http');
+// liveLines: a needle that a commented-out line does NOT satisfy.
+const { liveLines } = require('./helpers/live-line');
 
 let tables;
 
@@ -81,6 +83,25 @@ function mockRunQuery(sql, params) {
     b.approved_by = b.approved_by == null && (p[0] === 'approved' || p[0] === 'paid') ? p[1] : b.approved_by;
     return { rows: [Object.assign({}, b)], rowCount: 1 };
   }
+  if (/^SELECT po\.status, po\.data,/.test(text) && /FROM job_purchase_orders po/.test(text)) {
+    const po = rowsOf('pos').find((x) => String(x.id) === String(p[0]));
+    if (!po) return { rows: [], rowCount: 0 };
+    const j = rowsOf('jobs').find((x) => String(x.id) === String(po.job_id));
+    if (!j || !orgOk(j, p[1])) return { rows: [], rowCount: 0 };
+    const byUser = /ja\.user_id = \$3/.test(text);
+    const g = rowsOf('grants').find((x) => String(x.job_id) === String(po.job_id)
+      && (!byUser || Number(x.user_id) === Number(p[2])));
+    return { rows: [{ status: po.status, data: po.data, job_number: null, job_title: null,
+      owner_id: j.owner_id, access_level: g ? g.access_level : null }], rowCount: 1 };
+  }
+  if (/^UPDATE job_purchase_orders SET/.test(text)) {
+    const po = rowsOf('pos').find((x) => String(x.id) === String(p[p.length - 1]))
+      || rowsOf('pos')[0];
+    if (!po) return { rows: [], rowCount: 0 };
+    const moved = (p || []).find((v) => ['draft', 'issued', 'approved', 'work_complete', 'closed'].includes(v));
+    if (moved) po.status = moved;
+    return { rows: [Object.assign({}, po)], rowCount: 1 };
+  }
   if (/^SELECT id, owner_id, data FROM jobs WHERE id = \$1/.test(text)) {
     const j = rowsOf('jobs').find((x) => String(x.id) === String(p[0]));
     if (!j || !orgOk(j, p[1])) return { rows: [] };
@@ -111,6 +132,8 @@ function freshTables() {
     bills: [{ id: 'bill_1', job_id: 'job_1', owner_id: 10, organization_id: 1, status: 'open', amount: 15440 }],
     // Job Sharing grants. Empty by default; the tests that need one add it.
     grants: [],
+    pos: [{ id: 'po_1', job_id: 'job_1', organization_id: 1, status: 'draft',
+      po_number: '0014', data: { title: 'Balcony work', total: 5050 } }],
   };
 }
 
@@ -133,6 +156,7 @@ beforeAll(async () => {
   const app = express();
   app.use(express.json());
   app.use('/api', require('../server/routes/bill-routes'));
+  app.use('/api', require('../server/routes/purchase-order-routes'));
   await new Promise((done) => {
     server = http.createServer(app);
     server.listen(0, '127.0.0.1', () => { base = 'http://127.0.0.1:' + server.address().port; done(); });
@@ -195,7 +219,7 @@ describe('who may move a bill’s status', () => {
   test('FIELD CREW may not approve a bill for payment', async () => {
     const r = await setStatus(USER('field_crew', 20), 'approved');
     expect(r.status).toBe(403);
-    expect(r.body.code).toBe('bill_status_forbidden');
+    expect(r.body.code).toBe('job_money_forbidden');
     expect(tables.bills[0].status).toBe('open');
   });
 
@@ -297,15 +321,99 @@ describe('who may move a bill’s status', () => {
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * THE SAME RULE ON PURCHASE ORDERS
+ *
+ * POs carried the identical weak gate. Issuing one is not a lesser act than
+ * approving it: leaving draft is what LOCKS the PO's price and freezes its
+ * baseline, so the company is committed to a figure at that moment.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('who may move a purchase order’s status', () => {
+  async function setPoStatus(user, status, poId) {
+    const res = await fetch(base + '/api/purchase-orders/' + (poId || 'po_1') + '/status', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + signToken(user) },
+      body: JSON.stringify({ status: status }),
+    });
+    let body = {};
+    try { body = await res.json(); } catch (_) {}
+    return { status: res.status, body: body };
+  }
+
+  test('FIELD CREW may not issue a purchase order to a subcontractor', async () => {
+    const r = await setPoStatus(USER('field_crew', 20), 'issued');
+    expect(r.status).toBe(403);
+    expect(r.body.code).toBe('job_money_forbidden');
+    expect(tables.pos[0].status).toBe('draft');
+  });
+
+  test('an admin may', async () => {
+    const r = await setPoStatus(USER('admin', 30), 'issued');
+    expect(r.status).toBe(200);
+    expect(tables.pos[0].status).toBe('issued');
+  });
+
+  test('the PM who runs the job may', async () => {
+    const r = await setPoStatus(USER('pm', 11), 'issued');
+    expect(r.status).toBe(200);
+  });
+
+  test('a PM shared onto the job may; a view grant is not enough', async () => {
+    tables.grants.push({ job_id: 'job_1', user_id: 12, access_level: 'edit' });
+    expect((await setPoStatus(USER('pm', 12), 'issued')).status).toBe(200);
+    tables = freshTables();
+    tables.grants.push({ job_id: 'job_1', user_id: 12, access_level: 'view' });
+    expect((await setPoStatus(USER('pm', 12), 'issued')).status).toBe(403);
+  });
+
+  test('a share does not let the field crew in here either', async () => {
+    tables.grants.push({ job_id: 'job_1', user_id: 20, access_level: 'edit' });
+    const r = await setPoStatus(USER('field_crew', 20), 'issued');
+    expect(r.status).toBe(403);
+  });
+
+  test('every transition is gated, not just approve — leaving draft locks the price', async () => {
+    tables.pos[0].status = 'issued';
+    for (const s of ['approved', 'draft']) {
+      tables.grants.length = 0;
+      const r = await setPoStatus(USER('field_crew', 20), s);
+      expect([s, r.status]).toEqual([s, 403]);
+    }
+  });
+
+  test('a PO in another tenant is a 404, not a 403', async () => {
+    tables.jobs.push({ id: 'job_x', owner_id: 90, organization_id: 2, data: {} });
+    tables.pos.push({ id: 'po_x', job_id: 'job_x', organization_id: 2, status: 'draft', data: {} });
+    const r = await setPoStatus(USER('admin', 30), 'issued', 'po_x');
+    expect(r.status).toBe(404);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * THE SHAPE: IT CAN ONLY REMOVE ACCESS
  * ══════════════════════════════════════════════════════════════════════════*/
 describe('the gate never grants', () => {
   const SRC = fs.readFileSync(path.join(__dirname, '..', 'server', 'routes', 'bill-routes.js'), 'utf8');
+  const GATE = fs.readFileSync(path.join(__dirname, '..', 'server', 'services', 'job-money-gate.js'), 'utf8');
+  // Every money door that asks the shared rule. A new one belongs here.
+  const DOORS = ['server/routes/bill-routes.js', 'server/routes/purchase-order-routes.js'];
 
-  test('ESTIMATES_EDIT is still the outer door on the status route', () => {
-    const i = SRC.indexOf("router.post('/bills/:id/status'");
-    expect(i).toBeGreaterThan(-1);
-    expect(SRC.slice(i, i + 200)).toContain("requireCapability('ESTIMATES_EDIT')");
+  test('ESTIMATES_EDIT is still the outer door on EVERY money status route', () => {
+    // Asserted per door, not just for bills. Mutation showed why: deleting the
+    // outer capability from the PO route alone left this file green, because
+    // the inner rule still refused field crew — so the suite proved the gate
+    // and missed that the route had been opened to roles which previously
+    // could not reach it at all.
+    const ROUTES = [
+      ['server/routes/bill-routes.js', "router.post('/bills/:id/status'"],
+      ['server/routes/purchase-order-routes.js', "router.post('/purchase-orders/:id/status'"],
+    ];
+    for (const [file, decl] of ROUTES) {
+      const src = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+      const i = src.indexOf(decl);
+      expect([file, i > -1]).toEqual([file, true]);
+      expect([file, src.slice(i, i + 220).includes("requireCapability('ESTIMATES_EDIT')")])
+        .toEqual([file, true]);
+    }
   });
 
   test('a role with no ESTIMATES_EDIT cannot reach the route at all', () => {
@@ -316,48 +424,58 @@ describe('the gate never grants', () => {
     }
   });
 
-  test("'corporate' is NOT named as privileged here, unlike the change-order gate", () => {
+  test("'corporate' is NOT named as privileged, unlike the change-order gate", () => {
     // change-order-routes treats corporate as privileged. Corporate is
-    // "read-only across all jobs"; writing it in here would hand a read-only
-    // role approval authority the day somebody adds ESTIMATES_EDIT to it.
-    // Bounded by the refusal itself rather than a character count: the first
-    // version of this sliced a fixed 3000 chars and went red when the comment
-    // above the gate grew, which teaches the next person to widen the number
-    // rather than read the gate.
-    const i = SRC.indexOf('MOVING A PAYABLE');
-    const j = SRC.indexOf('bill_status_forbidden', i);
-    expect(i).toBeGreaterThan(-1);
-    expect(j).toBeGreaterThan(i);
-    const gate = SRC.slice(i, j);
-    expect(gate).toContain("req.user.role === 'admin'");
-    expect(gate).toContain("hasCapability(req.user, 'JOBS_EDIT_ANY')");
-    expect(gate).not.toMatch(/role === 'corporate'/);
+    // "read-only across all jobs"; naming it here would hand a read-only role
+    // settlement authority the day somebody adds ESTIMATES_EDIT to it.
+    expect(GATE).toContain("user.role === 'admin'");
+    expect(GATE).toContain("hasCapability(user, 'JOBS_EDIT_ANY')");
+    expect(GATE).not.toMatch(/role === 'corporate'/);
   });
 
   test('the two questions are asked separately, so a job share cannot confer money authority', () => {
-    const i = SRC.indexOf('MOVING A PAYABLE');
-    const j = SRC.indexOf('bill_status_forbidden', i);
-    const gate = SRC.slice(i, j);
     // "may you edit jobs at all" and "is this one of yours" are distinct
-    // conditions, ANDed. Collapsing them to the grant alone reopens the hole
-    // for field crew the moment anybody shares a job with them.
-    expect(gate).toContain("hasCapability(req.user, 'JOBS_EDIT_OWN')");
-    expect(gate).toContain("access_level === 'edit'");
-    expect(gate).toMatch(/!canEditAnyJob && !\(canEditOwnJobs && runsThisJob\)/);
+    // conditions. Collapsing them to the grant alone reopens the hole for
+    // field crew the moment anybody shares a job with them.
+    expect(GATE).toContain("hasCapability(user, 'JOBS_EDIT_OWN')");
+    expect(GATE).toContain("row.access_level === 'edit'");
+    expect(GATE).toContain('row.owner_id === user.id');
   });
 
+  test('the rule is a MODULE, and both money doors ask it rather than keeping a copy', () => {
+    // Two copies of an authorisation rule drift, and the drift is silent:
+    // nothing fails, one door just quietly becomes the lenient one. This is
+    // the assertion that stops a third money door re-implementing it.
+    for (const f of DOORS) {
+      const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+      expect([f, liveLines(src, "require('../services/job-money-gate')").length]).toEqual([f, 1]);
+      expect([f, liveLines(src, 'gate.maySettleJobMoney(req.user, cur.rows[0])').length]).toEqual([f, 1]);
+      expect([f, liveLines(src, 'gate.jobAccessJoin(').length]).toEqual([f, 1]);
+      // and no door keeps its own copy of the logic
+      expect([f, /canEditOwnJobs|access_level === 'edit'/.test(src)]).toEqual([f, false]);
+    }
+  });
+
+  test('the join carries the caller predicate — one share must not open a job to everybody', () => {
+    const g = require('../server/services/job-money-gate');
+    expect(g.jobAccessJoin('b', 3)).toBe('LEFT JOIN job_access ja ON ja.job_id = b.job_id AND ja.user_id = $3');
+    expect(g.jobAccessJoin('po', 3)).toContain('ja.user_id = $3');
+    // and it refuses anything it cannot vouch for rather than interpolating it
+    expect(() => g.jobAccessJoin('b; DROP TABLE users; --', 3)).toThrow();
+    expect(() => g.jobAccessJoin('b', 0)).toThrow();
+  });
   test('creating and editing a bill are NOT tightened — only the status move is', () => {
     for (const route of ["router.post('/jobs/:jobId/bills'", "router.put('/bills/:id'"]) {
       const i = SRC.indexOf(route);
       expect([route, i > -1]).toEqual([route, true]);
       expect(SRC.slice(i, i + 200)).toContain("requireCapability('ESTIMATES_EDIT')");
       // and no ownership gate crept into them
-      expect(SRC.slice(i, i + 400)).not.toContain('bill_status_forbidden');
+      expect(SRC.slice(i, i + 400)).not.toContain('maySettleJobMoney');
     }
   });
 
   test('the gate runs BEFORE the transition check, so a refusal cannot be probed for state', () => {
-    const i = SRC.indexOf('bill_status_forbidden');
+    const i = SRC.indexOf('maySettleJobMoney');
     const j = SRC.indexOf('Transition not allowed');
     expect(i).toBeGreaterThan(-1);
     expect(j).toBeGreaterThan(-1);

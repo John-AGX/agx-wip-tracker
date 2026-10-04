@@ -24,6 +24,10 @@ const express = require('express');
 const { pool } = require('../db');
 // requireOrgId — see the note in client-routes.js. A PO is a subcontract.
 const { requireAuth, requireCapability, hasCapability, requireOrgId } = require('../auth');
+// Who may settle money on a job — shared with vendor bills so the two doors
+// cannot drift apart. See that file's header for the rule and for the two ways
+// it was got wrong before it settled.
+const gate = require('../services/job-money-gate');
 const { captureExample, TASKS } = require('../services/training-capture');
 const jobFin = require('../services/job-financials');
 // The tenant boundary on a caller-supplied SUB id. This file wrote
@@ -445,14 +449,37 @@ router.post('/purchase-orders/:id/status', requireAuth, requireCapability('ESTIM
     const cur = await pool.query(
       `SELECT po.status, po.data,
               j.data->>'jobNumber' AS job_number,
-              j.data->>'title'     AS job_title
+              j.data->>'title'     AS job_title,
+              ${gate.SELECT_COLUMNS}
          FROM job_purchase_orders po
          JOIN jobs j ON j.id = po.job_id
+         ${gate.jobAccessJoin('po', 3)}
         WHERE po.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
-      [id, req.user.organization_id]
+      [id, req.user.organization_id, req.user.id]
     );
     if (!cur.rowCount) return res.status(404).json({ error: 'Not found' });
     const current = cur.rows[0].status;
+
+    // ── ISSUING OR APPROVING A PURCHASE ORDER IS A FINANCIAL DECISION ──────
+    //
+    // Same weak gate bills carried until 1.92: ESTIMATES_EDIT alone, which is
+    // also the capability that edits the PO's lines, and which field_crew holds
+    // despite its own description reading "No jobs, no financials." The rule is
+    // in services/job-money-gate.js so this door and the bill door cannot drift.
+    //
+    // IT GATES EVERY TRANSITION. For a PO that is not pedantry: leaving draft
+    // is what LOCKS the price and freezes the baseline (see just below), so
+    // 'issued' commits the company to a figure every bit as much as 'approved'
+    // does — and reverting to draft is what unlocks it again. There is no
+    // transition here that is merely administrative.
+    //
+    // No subcontractor is blocked by this, because no subcontractor has a door:
+    // the "sub acceptance" recorded on approve is a name an internal user types
+    // into a box on THIS route, with approved_by set to that internal user.
+    if (!gate.maySettleJobMoney(req.user, cur.rows[0])) {
+      return res.status(403).json(gate.refusal('change a purchase order’s status'));
+    }
+
     if (!ALLOWED_TRANSITIONS[current].includes(next)) {
       return res.status(409).json({ error: 'Transition not allowed: ' + current + ' -> ' + next });
     }

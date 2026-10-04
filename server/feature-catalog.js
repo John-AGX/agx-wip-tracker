@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.92';
+const APP_VERSION = '1.93';
 
 const releases = [
+  {
+    version: '1.93',
+    date: '2026-10-03',
+    name: 'Purchase orders get the same gate as bills',
+    summary: 'The permission that edits a purchase order was also the permission that issued and approved it — on any job, with no check that you run it.',
+    changes: [
+      { type: 'fixed', text: 'Issuing or approving a purchase order now takes the same authority approving a bill does. It was gated on the permission that edits the PO’s own lines — so anybody who could change what a purchase order says could also send it to the subcontractor and approve it, on any job. It now takes an administrator, or somebody who runs that job.' },
+      { type: 'improved', text: 'Issuing a PO is treated as seriously as approving one, because it is the moment the price locks. Moving a PO out of draft freezes its figure and commits the company to it, so every step is held to the same rule rather than only the one called “approve”.' },
+      { type: 'improved', text: 'When a bulk status change fails, the message says why. Setting the status on a batch from the Jobs hub used to report only “N failed”, which could mean the step was not available for those rows or that they are not your jobs. It now says so — the same way the bulk delete already did.' },
+      { type: 'improved', text: 'Bills and purchase orders now answer to ONE rule rather than two copies of it. Two copies drift silently: nothing breaks, one door just quietly becomes the lenient one.' },
+    ],
+  },
   {
     version: '1.92',
     date: '2026-10-03',

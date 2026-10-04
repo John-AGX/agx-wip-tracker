@@ -51,6 +51,9 @@ async function noticeJob(jobId, orgId) {
   return r.rows[0] || null;
 }
 const { requireAuth, requireCapability, hasCapability } = require('../auth');
+// Who may settle money on a job — shared with purchase orders so the two
+// doors cannot drift apart. See that file's header for the rule.
+const gate = require('../services/job-money-gate');
 const { poEffectiveTotal } = require('../services/job-financials');
 const { overbillVerdict } = require('../services/money/overbill');
 
@@ -445,10 +448,10 @@ router.post('/bills/:id/status', requireAuth, requireCapability('ESTIMATES_EDIT'
     // than two more: the approval gate below needs both, and the row is already
     // being joined.
     const cur = await pool.query(
-      `SELECT b.status, b.job_id, j.owner_id, ja.access_level
+      `SELECT b.status, b.job_id, ${gate.SELECT_COLUMNS}
          FROM job_vendor_bills b
          JOIN jobs j ON j.id = b.job_id
-         LEFT JOIN job_access ja ON ja.job_id = b.job_id AND ja.user_id = $3
+         ${gate.jobAccessJoin('b', 3)}
         WHERE b.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
       [id, req.user.organization_id, req.user.id]);
     if (!cur.rowCount) return res.status(404).json({ error: 'Not found' });
@@ -495,33 +498,15 @@ router.post('/bills/:id/status', requireAuth, requireCapability('ESTIMATES_EDIT'
     // PMs the product considers managers of the job — and they could not have
     // fixed it themselves, because reassignment is admin-only.
     //
-    // A grant of any level lets you SEE a job; only 'edit' lets you change what
-    // hangs off it. That is the same split job-routes.js and the work-order
-    // access rule both draw, and a payable hangs off a job.
-    //
-    // BUT A GRANT ALONE IS NOT ENOUGH, and getting this wrong would have undone
-    // the whole fix. If an 'edit' grant by itself admitted anybody, then
-    // sharing a job with a FIELD CREW member — an ordinary thing the office
-    // does so somebody can work on it — would hand that member bill approval
-    // again, on the one job that matters to them. The hole would reopen for
-    // exactly the role this gate was written to close out.
-    //
-    // So the two questions are asked separately, in the repo's own vocabulary:
-    //   MAY YOU EDIT JOBS AT ALL?   JOBS_EDIT_ANY, or JOBS_EDIT_OWN
-    //   IS THIS ONE OF YOURS?       you own it, or you hold an 'edit' grant
-    // which is precisely what JOBS_EDIT_OWN already means here — "the jobs I
-    // own or have been granted" (services/service-ticket-access.js). field_crew
-    // holds NEITHER job capability, so a share never lets them in; a PM holds
-    // JOBS_EDIT_OWN, so a share does.
-    const canEditAnyJob = req.user.role === 'admin' || hasCapability(req.user, 'JOBS_EDIT_ANY');
-    const canEditOwnJobs = hasCapability(req.user, 'JOBS_EDIT_OWN');
-    const runsThisJob = cur.rows[0].owner_id === req.user.id
-                     || cur.rows[0].access_level === 'edit';
-    if (!canEditAnyJob && !(canEditOwnJobs && runsThisJob)) {
-      return res.status(403).json({
-        error: 'Only the manager of this job, or an administrator, can change a bill’s status.',
-        code: 'bill_status_forbidden',
-      });
+    // THE RULE ITSELF LIVES IN services/job-money-gate.js, because purchase
+    // orders need exactly the same one and two copies of an authorisation rule
+    // drift invisibly — nothing fails, one door just quietly becomes the
+    // lenient one. Its header has the full argument, including the two ways
+    // this was got wrong before it settled: owner-only locks out a PM who has
+    // been SHARED onto a job, and a share alone hands the right back to the
+    // field crew.
+    if (!gate.maySettleJobMoney(req.user, cur.rows[0])) {
+      return res.status(403).json(gate.refusal('change a bill’s status'));
     }
 
     if (!ALLOWED_TRANSITIONS[current].includes(next)) return res.status(409).json({ error: 'Transition not allowed: ' + current + ' -> ' + next });

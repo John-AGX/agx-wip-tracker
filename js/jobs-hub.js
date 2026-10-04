@@ -435,7 +435,16 @@ function p86Ask(message, opts) {
           Promise.all(ids.map(function (id) { return cfg.bulk.setStatus(id, v).then(function () { return true; }).catch(function () { return false; }); }))
             .then(function (res) {
               var okc = res.filter(Boolean).length, fail = res.length - okc;
-              if (typeof window.p86Toast === 'function') window.p86Toast('Status set on ' + okc + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
+              // The failure count SAYS WHY, the way bulkDelete's already does.
+              // It was a bare number, which was survivable while the only cause
+              // was a 409 from a mixed-status selection — the Set status menu
+              // offers the union of steps legal for at least one row, so some
+              // failures are expected and routine. From 1.93 a second cause
+              // exists: settling money on a job you do not run is refused, and
+              // "20 failed." with no reason is not something anybody can act on.
+              // The per-row rejection is swallowed into a boolean here, so this
+              // names both causes rather than guessing at one.
+              if (typeof window.p86Toast === 'function') window.p86Toast('Status set on ' + okc + (fail ? ', ' + fail + ' failed (not an allowed step, or not your job)' : '') + '.', fail ? 'error' : 'success');
               afterBulk(ids);
             });
         });
