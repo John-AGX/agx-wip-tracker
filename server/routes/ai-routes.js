@@ -31,6 +31,11 @@ const { logContextLoad } = require('../services/context-registry');
 // below so the two drivers cannot drift apart again (they had: one summed,
 // one overwrote). See services/turn-usage.js.
 const turnUsageSvc = require('../services/turn-usage');
+// What a job status FILTER means when somebody says 'active', and how to
+// count jobs by state without enumerating them. One writer, shared by
+// read_jobs and read_wip_summary — see services/job-status-filter.js for the
+// measured reason it exists.
+const jobStatusFilter = require('../services/job-status-filter');
 const { auditActor, auditActorCritical } = require('../audit');
 // The job type registry. A LEAD's project_type is the same vocabulary as a
 // JOB's type — it is the hint that pre-selects the number prefix at
@@ -7436,7 +7441,8 @@ async function execClientDirectoryTool(name, input, ctx) {
           pm: d.pm || null
         };
       });
-      if (status) rows = rows.filter(j => String(j.status || '').toLowerCase() === status.toLowerCase());
+      // 'active' is four statuses, not one — see services/job-status-filter.js.
+      if (status) rows = rows.filter(j => jobStatusFilter.matchesJobStatus(j.status, status));
       if (q) {
         rows = rows.filter(j => {
           const hay = (
@@ -7446,9 +7452,18 @@ async function execClientDirectoryTool(name, input, ctx) {
           return hay.indexOf(q) !== -1;
         });
       }
+      // THE TOTAL BEFORE THE CAP. This list used to slice and say nothing,
+      // so 20 rows out of 46 read as "that is all of them" — and the only way
+      // to discover otherwise was another call. A cap that cannot be seen is
+      // the silent-truncation defect this codebase treats as a bug.
+      const matchTotal = rows.length;
       rows = rows.slice(0, limit);
       if (!rows.length) return 'No jobs match the filters.';
-      return rows.map(j =>
+      const jobsHead = matchTotal > rows.length
+        ? matchTotal + ' jobs match; showing ' + rows.length +
+          ', most recently updated first. Re-call with a higher limit (max 100) or a narrower filter for the rest.\n'
+        : matchTotal + ' job' + (matchTotal === 1 ? '' : 's') + ' match.\n';
+      return jobsHead + rows.map(j =>
         // The human label first (owner's standard), then the canonical row id
         // in brackets — the targeting key for writes / navigate / scribe_write,
         // which reads used to omit entirely. The label is what 86 repeats to
@@ -7512,8 +7527,22 @@ async function execClientDirectoryTool(name, input, ctx) {
         };
       });
       const filtered = statusFilter
-        ? allJobs.filter(j => String(j.status || '').toLowerCase() === statusFilter.toLowerCase())
+        ? allJobs.filter(j => jobStatusFilter.matchesJobStatus(j.status, statusFilter))
         : allJobs;
+      // A COUNT COSTS A COUNT. mode:'count' returns one line — the total,
+      // broken down by state and by the statuses inside each state — instead
+      // of the roll-up's portfolio totals, red flags and per-job money. The
+      // measured question ("how many active jobs are there right now?") took
+      // three calls and ~27,000 characters to answer with the number 46.
+      //
+      // It is computed from the SAME filtered set the rows would come from,
+      // so the count and the list can never disagree.
+      if (String(input.mode || '').toLowerCase() === 'count') {
+        const hist = jobStatusFilter.jobStateHistogram(filtered.map(j => j.status));
+        return jobStatusFilter.formatJobCount(hist, {
+          scope: statusFilter ? 'matching status "' + statusFilter + '"' : ''
+        });
+      }
       if (!filtered.length) {
         return statusFilter
           ? 'No jobs with status "' + statusFilter + '".'
@@ -7589,7 +7618,11 @@ async function execClientDirectoryTool(name, input, ctx) {
 
       out.push('### Top ' + top.length + ' job' + (top.length === 1 ? '' : 's') + ' by ' + sortBy + (sortBy === 'margin' ? ' (worst first)' : ' (descending)'));
       top.forEach(j => {
+        // The id, in read_jobs' exact spelling (:7456): this roll-up ranked 46
+        // jobs and named none of them in a way another tool could take, so
+        // every drill-in cost a second search.
         out.push('- ' + jobLabel.fromJob(j, { fallback: '(untitled)' }) +
+          ' [id ' + j.id + ']' +
           (j.client ? ' (' + j.client + ')' : '') +
           (j.status ? ' · ' + j.status : '') +
           (j.pm ? ' · PM ' + j.pm : ''));
@@ -8525,7 +8558,15 @@ const READ_TOOLS = [
           maxItems: 12,
           description: 'Batch mode — array of substring filters (max 12). One tool call replaces N separate searches. Results grouped per filter so you can map outputs to inputs.'
         },
-        status: { type: 'string', description: 'Optional status filter (entity_types that have one).' },
+        mode: {
+          type: 'string',
+          enum: ['count'],
+          description: 'Pass mode:"count" to get ONLY a count — for job/wip it is one line with the total broken down by state and status. Use it for "how many…" questions; it costs a line instead of a page of rows, and it cannot disagree with the list because both come from the same filtered set.'
+        },
+        status: {
+          type: 'string',
+          description: 'Optional status filter. For job/wip you may pass a STATE WORD — active | warranty | completed | archived — where active covers New, Backlog, In Progress and On Hold; or one exact status (New | Backlog | In Progress | On Hold | Warranty | Completed | Archived). For lead/task pass that type\'s own status. A status this app does not use matches nothing and says so.'
+        },
         assignee: { type: 'string', description: 'entity_type:"task" only. Pass "me" to return ONLY the current user\'s own to-dos (for "do I have any tasks", "my tasks"); "unassigned" for unassigned; omit for all org tasks.' },
         sort_by: { type: 'string', enum: ['backlog', 'contract', 'margin', 'pct_complete'], description: 'Only used when entity_type is "wip" or "job" without a filter. backlog: highest unrecognized revenue. contract: highest total income (= "top producing"). margin: worst JTD margin first. pct_complete: most complete first.' },
         limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Per-filter row cap. Default 20.' },
@@ -9271,7 +9312,11 @@ async function execConsolidatedRead(name, input, ctx) {
             return dispatchReadTool('read_wip_summary', {
               status: inp.status,
               sort_by: sortBy || 'contract',
-              limit
+              limit,
+              // mode:'count' turns the roll-up into one line (see the
+              // read_wip_summary case). Forwarded rather than handled here so
+              // the count comes off the same filtered set as the rows.
+              mode: inp.mode
             }, ctx);
           }
           return dispatchReadTool('read_jobs', { q, status: inp.status, limit }, ctx);
@@ -9279,7 +9324,7 @@ async function execConsolidatedRead(name, input, ctx) {
           // Explicit WIP rollup route for when 86 already knows the user
           // wants metrics. sort_by controls ranking.
           return dispatchReadTool('read_wip_summary', {
-            status: inp.status, sort_by: sortBy || 'contract', limit
+            status: inp.status, sort_by: sortBy || 'contract', limit, mode: inp.mode
           }, ctx);
         case 'client':   return dispatchReadTool('read_clients',  { q, limit }, ctx);
         case 'lead':     return dispatchReadTool('read_leads',    { q, status: inp.status, limit }, ctx);
@@ -11241,7 +11286,10 @@ async function execStaffTool(name, input, ctx) {
           else tag = '';
           return c.cert_type + ': ' + String(c.expires).slice(0, 10) + tag;
         });
-        out.push('- ' + s.name +
+        // The id. read_subs SELECTed it (:11200) and then threw it away, so a
+        // sub could be listed but never addressed — the Scribe's purchase-order
+        // payload takes sub_id, and nothing in this result could supply it.
+        out.push('- ' + s.name + ' [id=' + s.id + ']' +
           (s.trade ? ' · ' + s.trade : '') +
           ' · ' + s.status +
           (fullName ? ' · ' + fullName : '') +

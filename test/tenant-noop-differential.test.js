@@ -282,7 +282,29 @@ function stable(s) {
     .replace(/,"cache_creation":\d+,"cache_read":\d+/g, '')
     .replace(/,"tool_calls_executed":\d+,"model_requests":\d+/g, '')
     .replace(/,"token_basis":"(?:turn|mixed|request)"/g, '')
-    .replace(/,"cost_estimated":(?:true|false)/g, '');
+    .replace(/,"cost_estimated":(?:true|false)/g, '')
+    // ── the per-turn cuts, 2026-10-04 ────────────────────────────────────
+    // Three read tools gained bytes ON PURPOSE, each anchored on its own
+    // literal so every other byte of every door stays held to the
+    // pre-repair answer.
+    //
+    // read_jobs now opens with the real total. It used to slice to `limit`
+    // and say nothing, so 20 rows out of 46 read as all of them — the
+    // silent-truncation defect, measured costing three calls and ~27,000
+    // characters for one count. The notice is a whole leading line, so it is
+    // removed rather than blanked: what follows it is the byte-identical row
+    // list the golden captured.
+    .replace(/^\d+ jobs? match(; showing \d+, most recently updated first\.[^\n]*)?\.?\n/m, '')
+    // read_subs now prints the id it was already SELECTing and discarding,
+    // because the Scribe's purchase-order payload takes sub_id and nothing in
+    // this result could supply one. Both spellings an id can take are
+    // listed: production's sub_*, and this fixture's subs-<prefix>-<n> — a
+    // wildcard here would blind every other door that prints [id=...].
+    .replace(/ \[id=(?:sub_[A-Za-z0-9_]+|subs-[A-Za-z]+-[0-9]+)\]/g, '')
+    // The WIP roll-up now names each ranked job with an id, in read_jobs’
+    // exact spelling, so a ranking can be drilled into without a second
+    // search. Same literal as the job rows above, which already carried it.
+    .replace(/ \[id (?:jobs|j)[A-Za-z0-9_-]*\]/g, '');
 }
 
 // Anything left that still looks like it was computed from the wall clock. This
