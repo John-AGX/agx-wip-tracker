@@ -51,6 +51,11 @@ const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches } = require('../util/
 // Batched polymorphic label resolver. Job labels go through js/job-label.js
 // inside it, so the sub sees the same "RV2006 Waterside 1" the office does.
 const { resolveEntityLabels } = require('../services/entity-labels');
+// WHAT A SUB SEES lives in one place, because the admin "see what they see"
+// preview reads it too. A preview that re-implements the read is worse than
+// no preview: it is wrong in one of two directions and both mislead the
+// office. See that file's header.
+const subView = require('../services/sub-portal-view');
 // Tenancy on the PM-side invite doors. The rule is already stated on this key
 // in services/sub-org-scope.js — subInOrg — for sub-routes.js; these three
 // endpoints are keyed on the same subId and were never asked.
@@ -440,12 +445,9 @@ router.get('/sub-portal/me',
     try {
       const subId = req.user && req.user.sub_id;
       if (!subId) return res.status(403).json({ error: 'Not a sub-portal user' });
-      const { rows } = await pool.query(
-        'SELECT id, name, trade, email, primary_contact_first, primary_contact_last FROM subs WHERE id = $1',
-        [subId]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Sub record not found' });
-      res.json({ user: { email: req.user.email, name: req.user.name }, sub: rows[0] });
+      const sub = await subView.subIdentity(subId, req.user.organization_id);
+      if (!sub) return res.status(404).json({ error: 'Sub record not found' });
+      res.json({ user: { email: req.user.email, name: req.user.name }, sub: sub });
     } catch (e) {
       console.error('GET /api/sub-portal/me error:', e);
       res.status(500).json({ error: 'Server error: ' + e.message });
@@ -453,47 +455,10 @@ router.get('/sub-portal/me',
   }
 );
 
-// ── Sub-facing display projection ────────────────────────────────────
-//
-// EVERY key a subcontractor receives from the attachment list, and nothing
-// else. The query below still reads `a.*` (the folder match needs the whole
-// row shape), but only these keys are serialised, so a column added to
-// `attachments` — or a table joined into the query later — cannot reach a
-// sub by accident. That inversion is the point: the safe list is declared
-// here in code, not implied by whatever the SELECT happens to return.
-// Pinned by test/sub-portal-payload.test.js; adding a key means changing
-// that test on purpose.
-//
-// Deliberately absent: uploaded_by (an internal user id), extracted_text
-// (full OCR body), annotations, tags, anthropic_file_id, lat/lng,
-// created_at/updated_at, and every storage key. And no money field exists
-// on this payload at all — no contract, cost, margin, budget or client.
-const SUB_ATTACHMENT_FIELDS = [
-  'id', 'filename', 'mime_type', 'size_bytes',
-  'thumb_url', 'web_url', 'original_url',
-  // The grant coordinates portal.html echoes back on upload — these must
-  // stay RAW (the POST re-checks the grant on them), so they are ids, not
-  // labels, by design.
-  'entity_type', 'entity_id', 'folder',
-  'grant_entity_type', 'grant_entity_id', 'grant_folder',
-  // The human label composed from those coordinates (see below).
-  'grant_entity_label'
-];
-
-// Which grant types get a resolved label. A WHITELIST, so an unrecognised
-// or future grant type fails closed to "no label" rather than leaking.
-//   job  → jobNumber + ' ' + title, via js/job-label.js
-//   lead → the lead title
-// Deliberately NOT here: client (a client's name), sub (another
-// subcontractor's name), estimate (titles routinely carry the client).
-// Those grants render a neutral header instead.
-const PORTAL_LABEL_TYPES = new Set(['job', 'lead']);
-
-function publicAttachment(row) {
-  const out = {};
-  for (const k of SUB_ATTACHMENT_FIELDS) out[k] = row[k] === undefined ? null : row[k];
-  return out;
-}
+// The sub-facing projection, the grant join and the label whitelist all live
+// in services/sub-portal-view.js now — one read, shared with the admin
+// preview. They were here, and a second copy for the preview would have been
+// the bug.
 
 // GET /api/sub-portal/attachments — every attachment in any granted
 // folder, scoped to req.user.sub_id. Reuses the same join shape as
@@ -505,48 +470,7 @@ router.get('/sub-portal/attachments',
     try {
       const subId = req.user && req.user.sub_id;
       if (!subId) return res.status(403).json({ error: 'Not a sub-portal user' });
-      // Additive match: a file belongs to a grant if its legacy folder
-      // STRING matches OR (when the grant carries a folder_id) its
-      // folder_id matches. The two agree in steady state (the string is
-      // dual-written = folder.path), but the OR guarantees no lockout in
-      // any transient state where one drifted from the other.
-      const { rows } = await pool.query(
-        `SELECT a.*, g.entity_type AS grant_entity_type,
-                g.entity_id AS grant_entity_id,
-                g.folder AS grant_folder
-           FROM attachment_folder_grants g
-           JOIN attachments a
-             ON a.entity_type = g.entity_type
-            AND a.entity_id   = g.entity_id
-            AND ( a.folder = g.folder
-                  OR (g.folder_id IS NOT NULL AND a.folder_id = g.folder_id) )
-          WHERE g.sub_id = $1
-          ORDER BY g.entity_type, g.entity_id, g.folder, a.position`,
-        [subId]
-      );
-
-      // Human folder headers. The sub used to see the raw entity_type — a
-      // folder literally titled "job". Resolve a label for the grant types
-      // on the whitelist above.
-      //
-      // Direction matters, and it is grants → jobs, never the reverse: the
-      // id list handed to the resolver is built ENTIRELY from rows the
-      // sub_id-scoped query already returned, and the resolver looks those
-      // ids up by primary key. It cannot enumerate, cannot widen, and
-      // cannot add or drop a row from `rows` — worst case a lookup fails
-      // and the header falls back to a neutral word.
-      const items = rows
-        .filter((r) => PORTAL_LABEL_TYPES.has(r.grant_entity_type))
-        .map((r) => ({ entity_type: r.grant_entity_type, entity_id: r.grant_entity_id }));
-      const labels = await resolveEntityLabels((req.user && req.user.organization_id) || null, items);
-
-      const attachments = rows.map((r) => {
-        const out = publicAttachment(r);
-        out.grant_entity_label = PORTAL_LABEL_TYPES.has(r.grant_entity_type)
-          ? (labels.get(r.grant_entity_type + ':' + String(r.grant_entity_id)) || null)
-          : null;
-        return out;
-      });
+      const attachments = await subView.sharedAttachments(subId, req.user.organization_id);
       res.json({ attachments: attachments });
     } catch (e) {
       console.error('GET /api/sub-portal/attachments error:', e);

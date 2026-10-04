@@ -153,6 +153,9 @@
   </div>
 </header>
 <main class="portal-main">
+  <!-- Shown only in preview (?preview=<subId>): says whose portal this is
+       and that it cannot be acted on. Absent entirely for a real sub. -->
+  <div id="preview-banner" style="display:none;margin:0 0 14px;padding:10px 14px;border:1px solid #4f8cff;background:rgba(79,140,255,0.10);border-radius:8px;font-size:13px;line-height:1.5;"></div>
   <div id="portal-content" class="portal-loading">Loading your files...</div>
 </main>
 
@@ -274,11 +277,14 @@
           ? '<div class="portal-files">' + fileTiles + '</div>'
           : '<div style="padding:18px;text-align:center;color:var(--text-dim);font-size:12px;">No files in this folder yet.</div>') +
         // Upload zone — sub can add into folders they have access to.
+        // REMOVED in preview rather than disabled: a control that looks live
+        // and is not is its own kind of lie, and the viewer is not the sub.
+        (IS_PREVIEW ? '' :
         '<div class="portal-upload">' +
           '<input type="file" data-upload-input data-entity-type="' + escapeAttr(g.entity_type) + '" data-entity-id="' + escapeAttr(g.entity_id) + '" data-folder="' + escapeAttr(g.folder) + '" />' +
           '<button type="button" data-upload-btn>Upload</button>' +
           '<span class="status"></span>' +
-        '</div>' +
+        '</div>') +
       '</section>';
     }).join('');
 
@@ -365,8 +371,50 @@
     if (b) b.onclick = doPortalLogout;
   }
 
+  // ── PREVIEW MODE ────────────────────────────────────────────────
+  //
+  // ?preview=<subId> makes THIS PAGE the preview an admin looks at. Not a
+  // copy of it: the same markup, the same grouping, the same empty states,
+  // reading the same projection through /api/preview/* instead of
+  // /api/sub-portal/*. A second page that redrew the portal would drift
+  // from it, and a preview that quietly differs from the real thing is
+  // worse than none — the office would chase a document the sub already
+  // has, or stop chasing one they do not.
+  //
+  // IT IS A WINDOW, NOT A SESSION. The viewer is still themselves: their
+  // own cookie authorises the preview endpoints, which are read-only and
+  // gated on JOBS_VIEW_ALL. Nothing here signs anybody in as the sub, and
+  // the upload control is removed rather than merely disabled, because a
+  // control that looks live and is not is its own kind of lie.
+  var PREVIEW_SUB_ID = (function () {
+    try {
+      var m = /[?&]preview=([^&]+)/.exec(window.location.search || '');
+      return m ? decodeURIComponent(m[1]) : null;
+    } catch (e) { return null; }
+  })();
+  var IS_PREVIEW = !!PREVIEW_SUB_ID;
+
+  function apiPath(which) {
+    if (!IS_PREVIEW) return '/api/sub-portal/' + which;
+    return '/api/preview/sub-portal/' + encodeURIComponent(PREVIEW_SUB_ID) + '/' + which;
+  }
+
+  // Said at the top of the page, in the viewer’s words rather than the
+  // sub’s: whose portal this is, and that it cannot be changed from here.
+  function renderPreviewBanner(sub, hasPortal) {
+    var el = document.getElementById('preview-banner');
+    if (!el) return;
+    var name = (sub && sub.name) || 'this subcontractor';
+    el.innerHTML =
+      '<strong>Preview</strong> — this is what ' + escapeHTML(name) +
+      ' sees when they open their portal. You are looking, not signed in as them, ' +
+      'and nothing here can be changed.' +
+      (hasPortal ? '' : ' <em>They have not been invited yet, so nobody can open this portal today.</em>');
+    el.style.display = 'block';
+  }
+
   function loadProfile() {
-    return fetch('/api/sub-portal/me', { credentials: 'include' })
+    return fetch(apiPath('me'), { credentials: 'include' })
       .then(function(r) {
         if (!r.ok) {
           // 401 → genuinely signed out; back to the login screen.
@@ -389,11 +437,12 @@
         subInfo = data.sub;
         document.getElementById('sub-name').textContent = data.sub.name || data.user.name || data.user.email;
         document.getElementById('sub-trade').textContent = data.sub.trade || '';
+        if (IS_PREVIEW) renderPreviewBanner(data.sub, data.hasPortal !== false);
       });
   }
 
   function loadAttachments() {
-    return fetch('/api/sub-portal/attachments', { credentials: 'include' })
+    return fetch(apiPath('attachments'), { credentials: 'include' })
       .then(function(r) {
         if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || 'Failed'); });
         return r.json();

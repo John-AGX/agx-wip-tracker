@@ -526,9 +526,22 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.94';
+const APP_VERSION = '1.95';
 
 const releases = [
+  {
+    version: '1.95',
+    date: '2026-10-04',
+    name: 'See what they see',
+    summary: 'A read-only window onto the surfaces outside your company, starting with the subcontractor portal.',
+    changes: [
+      { type: 'new', text: 'Admin → Their view. See what the people outside your company actually see — starting with a subcontractor’s portal. Pick a sub and their portal opens exactly as they get it: the same files, the same folders, the same wording.' },
+      { type: 'improved', text: 'It is a window, not a sign-in. You stay yourself, nothing on the page can be changed, and nobody is told you looked. The upload box a sub would use is not there at all rather than greyed out, because a button that looks live and is not is its own kind of lie.' },
+      { type: 'improved', text: 'It shows the REAL portal page, not a drawing of one. It reads the same list a sub reads, so it cannot quietly disagree with what they are actually looking at — which is the only reason a preview is worth having.' },
+      { type: 'improved', text: 'It tells you when a sub has never been invited, which is usually the answer to “why can’t they see the file I shared?”' },
+      { type: 'improved', text: 'And it is honest about who has no login at all. A client never signs in to Project 86 — they get links: a proposal to sign, a report to read. A crew member opens a link with a code in it. Those are listed as what they are, with previews coming next, rather than pretending there is a portal behind them.' },
+    ],
+  },
   {
     version: '1.94',
     date: '2026-10-04',

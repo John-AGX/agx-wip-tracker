@@ -59,8 +59,14 @@ const router = require('../server/routes/sub-portal-routes');
 
 // ── The allowlist ────────────────────────────────────────────────────
 // Every key a subcontractor receives, and nothing else. Mirrors
-// SUB_ATTACHMENT_FIELDS in server/routes/sub-portal-routes.js on purpose:
+// SUB_ATTACHMENT_FIELDS in server/services/sub-portal-view.js on purpose:
 // the list is declared in two places so neither can drift silently.
+//
+// It moved there from sub-portal-routes.js when the admin preview — "see what
+// a sub sees" — needed the same read. This file is unaffected by that move
+// because it drives the real ROUTE with a row shaped like `SELECT a.*`, rather
+// than scanning source for the symbol; the route now calls the shared view and
+// the assertion is on what comes out of the wire either way.
 const SUB_FACING_KEYS = [
   'entity_id', 'entity_type', 'filename', 'folder',
   'grant_entity_id', 'grant_entity_label', 'grant_entity_type', 'grant_folder',

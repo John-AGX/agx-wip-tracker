@@ -1257,6 +1257,7 @@ function p86Ask(message, opts) {
     else if (name === 'system') renderAdminSystem();
     else if (name === 'ocr-inbox') renderAdminOcrInbox();
     else if (name === 'compliance') renderAdminCompliance();
+    else if (name === 'preview' && window.renderAdminPreview) renderAdminPreview();
     // Persist nav state so a refresh lands back on this admin sub-tab.
     if (typeof window.p86NavSave === 'function') window.p86NavSave();
   }

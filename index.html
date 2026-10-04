@@ -797,6 +797,7 @@
                                 <!-- Metrics tab retired 2026-08-09 → company metrics live in Insights -->
                                 <div class="app-nav-subhead" style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.09em;color:rgba(255,255,255,0.3);padding:10px 12px 3px 14px;">Operations</div>
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="ocr-inbox" data-p86-icon="chart-bar" title="OCR"><span class="app-nav-label">OCR</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="preview" data-p86-icon="eye" title="See what they see"><span class="app-nav-label">Their view</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="compliance" data-virtual-tab="admin-compliance" data-p86-icon="id-card" title="Compliance — COI / license / lien-waiver / WC-cert tracking"><span class="app-nav-label">Compliance</span></button>
                                 <!-- ⚙ System retired → top-level ⚙ Command Center -->
                             </div>
@@ -2064,6 +2065,7 @@
                         <!-- Metrics retired → Insights -->
                         <!-- Cost Inbox OCR accuracy stats -->
                         <button class="ws-right-tab" data-admin-subtab="ocr-inbox" data-p86-icon="chart-bar" onclick="switchAdminSubTab('ocr-inbox')">OCR</button>
+                        <button class="ws-right-tab" data-admin-subtab="preview" data-p86-icon="eye" onclick="switchAdminSubTab('preview')">Their view</button>
                         <!-- Compliance — COI / license / lien-waiver / WC-cert full list -->
                         <button class="ws-right-tab" data-admin-subtab="compliance" data-p86-icon="id-card" onclick="switchAdminSubTab('compliance')">Compliance</button>
 
@@ -2159,6 +2161,10 @@
                     </div>
 
                     <!-- Cost Inbox · OCR accuracy sub-tab -->
+                    <!-- See what they see: a read-only window onto each
+                         external surface. Rendered by window.renderAdminPreview
+                         in js/admin-preview.js. -->
+                    <div id="admin-subtab-preview" class="admin-subtab-content" style="display:none;"></div>
                     <div id="admin-subtab-ocr-inbox" class="admin-subtab-content" style="display:none;">
                         <p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">
                             How accurately the AI reads field receipts in the <strong>Cost Inbox</strong>. Each sample is one captured receipt where the AI made a guess; the rate is how often that guess matched what was actually saved. <strong>Amount</strong> is the error-prone field worth watching.
@@ -3591,7 +3597,8 @@
     <script src="js/dash-shell.js?v=2"></script>
     <script src="js/settings-registry.js?v=3"></script>
     <script src="js/admin-dashboard.js?v=4"></script>
-    <script src="js/admin.js?v=150"></script>
+    <script src="js/admin-preview.js?v=1"></script>
+    <script src="js/admin.js?v=151"></script>
     <!-- Read-only Buildertrend -> P86 sync preview (Admin -> Organization). -->
     <script src="js/bt-sync-preview.js?v=26"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
@@ -3855,7 +3862,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=39"></script>
+    <script src="js/router.js?v=40"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /

@@ -192,7 +192,23 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**595** occurrences of `organization_id IS NULL` across `server/`.
+**597** occurrences of `organization_id IS NULL` across `server/`.
+
+595 → 597: the “see what they see” preview. Two arms, both in the one function
+that moved out of `routes/sub-portal-routes.js` into `services/sub-portal-view.js`
+so the live portal and the admin preview could share it — `subIdentity`, the
+sub’s own identity card, read once per caller.
+
+The arm is not new behaviour. The portal’s own identity read carried no org
+predicate AT ALL before this, because it did not need one: the sub id came from
+the JWT and could not be chosen. The preview takes that id off the URL, so the
+read now has to answer the tenancy question the portal got for free — and the
+arm is the tolerance every other `subs` read in this repo already carries.
+
+So this entry is a predicate ADDED where there was none, which is the opposite
+of the usual direction. The count went up because the read got stricter.
+
+When this item closes, both retire with the reads they copied.
 
 590 → 595: the arrival notices. Five arms, all in
 `services/arrival-notices.js`, all READS, and all five in one function —
