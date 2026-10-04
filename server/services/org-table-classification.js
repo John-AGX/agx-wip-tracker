@@ -73,6 +73,11 @@ const DIRECT = [
   // anchor, not a cache.
   'production_checklist_rows', 'production_checklist_shares',
   'production_checklists',
+  // The prefix probe's own findings (routes/admin-agents-routes.js
+  // /managed/prefix-probe). SYSTEM_ADMIN writes it, its own NOT-NULL-in-
+  // practice organization_id is the tenant, and the reader predicates on
+  // it — nothing about a run is inferred from a parent.
+  'prefix_probe_runs',
   'projects',
   'receipt_ocr_feedback', 'receipts', 'reminders', 'report_share_comments',
   'report_shares', 'reports',

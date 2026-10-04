@@ -5422,6 +5422,25 @@ router.delete('/managed/:agentKey', requireAuth, requireCapability('ROLES_MANAGE
 // ══════════════════════════════════════════════════════════════════════════
 let _probeRunning = false;
 
+// GET /managed/prefix-probe/runs — the probe's own history, so a run whose
+// caller timed out (or whose tab died) is still readable. Newest first.
+router.get('/managed/prefix-probe/runs', requireAuth, requireSystemAdmin, require('../auth').requireOrg, async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 25);
+    const r = await pool.query(
+      `SELECT id, agent_key, run_by, model, duration_ms, report, touched, cleanup, error, created_at
+         FROM prefix_probe_runs
+        WHERE organization_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2`,
+      [req.organization.id, limit]);
+    res.json({ runs: r.rows, running_now: _probeRunning });
+  } catch (e) {
+    console.error('GET /managed/prefix-probe/runs error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
 router.post('/managed/prefix-probe', requireAuth, requireSystemAdmin, require('../auth').requireOrg, async (req, res) => {
   const anthropic = getAnthropic();
   if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
@@ -5443,6 +5462,8 @@ router.post('/managed/prefix-probe', requireAuth, requireSystemAdmin, require('.
   }
 
   _probeRunning = true;
+  const runId = 'pprobe_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  const startedAt = Date.now();
   const touched = { agent_id: null, agent_versions: [], session_ids: [] };
   const measurements = {};
   try {
@@ -5574,7 +5595,25 @@ router.post('/managed/prefix-probe', requireAuth, requireSystemAdmin, require('.
       custom_tool_schema_tokens: est(JSON.stringify(parts.customTools)),
     }, observedPrefix);
 
+    // PERSIST FIRST, then answer. A run takes one to two minutes; the first
+    // live one was lost because the tab that started it wedged before the
+    // response landed, and nothing on the server had kept it.
+    try {
+      await pool.query(
+        `INSERT INTO prefix_probe_runs
+           (id, agent_key, organization_id, run_by, model, duration_ms, report, touched, cleanup)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [runId, agentKey, req.organization.id, req.user ? req.user.id : null, parts.model,
+         Date.now() - startedAt, JSON.stringify(report), JSON.stringify(touched), JSON.stringify(cleanup)]);
+    } catch (e) {
+      // Reported in the response rather than swallowed: the measurement
+      // still happened, and the caller needs to know it was not kept.
+      console.error('[prefix-probe] could not persist run', runId, e.message);
+      report.not_persisted = e.message || String(e);
+    }
+
     res.json({
+      run_id: runId,
       agent_key: agentKey,
       model: parts.model,
       probe_message: PROBE_MESSAGE,

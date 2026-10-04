@@ -49,6 +49,7 @@ const TABLES = [
   'organizations', 'users', 'roles', 'ai_messages', 'ai_sessions',
   'managed_agent_registry', 'managed_environment_registry', 'agent_reference_links',
   'org_memory', 'app_settings', 'org_skill_packs', 'managed_agent_skills', 'org_mcp_servers',
+  'prefix_probe_runs',
   'estimates', 'jobs',
 ];
 
@@ -206,6 +207,7 @@ function seed() {
   engine.db.exec(`
     DELETE FROM organizations; DELETE FROM users; DELETE FROM roles;
     DELETE FROM managed_agent_registry; DELETE FROM managed_environment_registry;
+    DELETE FROM prefix_probe_runs;
     INSERT INTO organizations (id, name, slug) VALUES (1, 'AGX', 'agx');
     INSERT INTO users (id, email, name, role, organization_id, active) VALUES
       (11, 'owner@p86.test', 'Owner', 'system_admin', 1, 1),
@@ -679,5 +681,73 @@ describe('the probe tidies up after its own failures', () => {
     const sweep = r.body.cleanup.stale_probe_agents;
     expect(sweep.archived).toEqual([]);
     expect(sweep.failed).toEqual([{ id: 'agent_stale_x', error: expect.stringMatching(/could not archive/) }]);
+  });
+});
+
+describe('a run survives its caller', () => {
+  // A run is one to two minutes of wall clock. The FIRST live run was lost
+  // because the browser tab that started it wedged before the response
+  // arrived and nothing on the server had kept the report — a measurement
+  // already paid for, thrown away. So the run is persisted before it is
+  // answered, and there is a reader for it.
+  async function getRuns(user) {
+    const token = signToken(user || OWNER);
+    const res = await fetch(baseUrl + '/api/admin/agents/managed/prefix-probe/runs?limit=5', {
+      headers: { authorization: 'Bearer ' + token, connection: 'close' },
+    });
+    const text = await res.text();
+    let body = null;
+    try { body = JSON.parse(text); } catch (e) { /* not json */ }
+    return { status: res.status, body };
+  }
+
+  test('the report is readable after the fact, by run id, with its measurements intact', async () => {
+    const r = await post({});
+    expect(r.status).toBe(200);
+    expect(r.body.run_id).toMatch(/^pprobe_/);
+    expect(r.body.report.not_persisted).toBeUndefined();
+
+    const hist = await getRuns();
+    expect(hist.status).toBe(200);
+    expect(hist.body.runs).toHaveLength(1);
+    const row = hist.body.runs[0];
+    expect(row.id).toBe(r.body.run_id);
+    expect(row.agent_key).toBe('job');
+    // The model the run actually used, not a hardcoded guess: the code
+    // default is claude-opus-4-8 while production runs claude-sonnet-5 from
+    // AI_MODEL, which is exactly the drift services/ai-pricing.js documents.
+    expect(row.model).toBe(r.body.model);
+    // The measurements, not just the fact that a run happened.
+    const saved = typeof row.report === 'string' ? JSON.parse(row.report) : row.report;
+    expect(saved.complete).toBe(true);
+    const byName = {};
+    for (const c of saved.components) byName[c.component] = c.tokens;
+    expect(byName['builtin toolset — ALL 8 tools']).toBe(TOOLSET_FULL_TOK);
+    expect(byName['3 Skills descriptors']).toBe(SKILLS_TOK);
+    // And what it touched, so a leftover agent can be chased without the
+    // original response.
+    const touched = typeof row.touched === 'string' ? JSON.parse(row.touched) : row.touched;
+    expect(touched.agent_id).toBe('agent_probe_01');
+    expect(touched.agent_versions).toHaveLength(probe.PROBE_SETS.length);
+  });
+
+  test('the history is newest first, and an org admin cannot read it', async () => {
+    await post({ sets: ['floor'] });
+    await post({ sets: ['floor', 'toolset_full'] });
+    const hist = await getRuns();
+    expect(hist.body.runs).toHaveLength(2);
+    expect(new Date(hist.body.runs[0].created_at) >= new Date(hist.body.runs[1].created_at)).toBe(true);
+    const denied = await getRuns(ADMIN);
+    expect(denied.status).toBe(403);
+  });
+
+  test('a persist that fails is REPORTED in the response — the run is not quietly unkept', async () => {
+    engine.db.exec('DROP TABLE prefix_probe_runs');
+    const r = await post({ sets: ['floor'] });
+    expect(r.status).toBe(200);
+    expect(typeof r.body.report.not_persisted).toBe('string');
+    expect(r.body.report.not_persisted.length).toBeGreaterThan(0);
+    // The measurement itself still came back.
+    expect(r.body.report.sets.find((s) => s.set === 'floor').measured).toBe(true);
   });
 });

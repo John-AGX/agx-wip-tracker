@@ -3648,6 +3648,35 @@ async function initSchema() {
     -- the admin agents page surfaces. from_index is the message offset
     -- to start replaying from (0 = full conversation, N = last user
     -- message at index N becomes the new turn).
+    -- prefix_probe_runs — the bisection probe's findings, persisted.
+    --
+    -- A probe run registers an agent, walks eight component sets and runs a
+    -- turn on each: one to two minutes of wall clock. The first live run
+    -- returned its report ONLY in the HTTP response, and the browser tab
+    -- that started it wedged before the response arrived — so a measurement
+    -- that had already been paid for was simply lost. A result that exists
+    -- only in a response body is a result you can only read once, and only
+    -- if nothing times out.
+    --
+    -- report/touched/cleanup are stored whole: the report carries its own
+    -- completeness flag and its own why_incomplete, so a partial run is
+    -- worth keeping and is readable as partial.
+    CREATE TABLE IF NOT EXISTS prefix_probe_runs (
+      id TEXT PRIMARY KEY,
+      agent_key TEXT NOT NULL,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      run_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      model TEXT,
+      duration_ms INTEGER,
+      report JSONB,
+      touched JSONB,
+      cleanup JSONB,
+      error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_prefix_probe_runs_at
+      ON prefix_probe_runs(organization_id, created_at DESC);
+
     CREATE TABLE IF NOT EXISTS ai_replays (
       id TEXT PRIMARY KEY,
       conversation_key TEXT NOT NULL,

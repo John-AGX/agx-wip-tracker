@@ -1312,7 +1312,13 @@ describe('R4 — classify() is checked, never consulted', () => {
   // matters here (the ON CONFLICT upsert that tops a sheet up) is keyed on
   // (organization_id, checklist_id, job_id) precisely so a cross-tenant match
   // is impossible by construction rather than by a WHERE somebody remembers.
-  test('the fixture carries every table server/db.js creates (126) — nothing curated out', () => {
-    expect(TWO.ALL_TABLES.length).toBe(126);
+  // 126 -> 127: prefix_probe_runs, the bisection probe's persisted findings
+  // (routes/admin-agents-routes.js /managed/prefix-probe). DIRECT, on the
+  // same precedent as the three above: its own organization_id with an
+  // ON DELETE CASCADE FK, written by the one SYSTEM_ADMIN door that makes a
+  // run and predicated by the one that reads the history back. Recorded here
+  // rather than silently bumped, per the note above.
+  test('the fixture carries every table server/db.js creates (127) — nothing curated out', () => {
+    expect(TWO.ALL_TABLES.length).toBe(127);
   });
 });

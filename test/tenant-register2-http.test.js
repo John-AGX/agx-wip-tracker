@@ -545,7 +545,16 @@ describe('REGISTER 2 — the route population', () => {
     //      requireOrg, and it is driven — including the 403 for an org admin
     //      — in test/prefix-probe.test.js against a programmable fake of the
     //      managed-agents surface.
-    expect(R.routes).toBe(651);
+    //      651 -> 652, +1 DRIVEN: GET
+    //      /api/admin/agents/managed/prefix-probe/runs, the probe's own
+    //      history. A param-less GET, so it joins the driven set BY
+    //      CONSTRUCTION and is exercised by both callers below. It exists
+    //      because a probe run is one to two minutes of wall clock and the
+    //      first live one was LOST when the tab that started it wedged
+    //      before the response arrived; the findings are now persisted and
+    //      read back through here. SYSTEM_ADMIN, and its rows are scoped
+    //      by organization_id (classified `direct`).
+    expect(R.routes).toBe(652);
     expect(R.routers).toBe(81);
   });
 
@@ -579,7 +588,10 @@ describe('REGISTER 2 — the route population', () => {
     // 505 -> 506: the prefix probe (see the note on the count above). A
     // write, and one that spends real money per call, so it is waived here
     // and driven in its own file.
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 145, waived: 506 });
+    // 145 -> 146: the prefix probe's history reader (see the note on the
+    // count above) — a param-less GET, so the driven side moves and the
+    // waived side does not.
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 146, waived: 506 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {
