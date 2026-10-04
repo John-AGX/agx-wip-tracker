@@ -526,9 +526,23 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.95';
+const APP_VERSION = '1.96';
 
 const releases = [
+  {
+    version: '1.96',
+    date: '2026-10-04',
+    name: 'The AI usage numbers tell the truth',
+    summary: 'Before tuning how 86 works, the gauges had to be trusted — and four of them were wrong, in different directions. A turn now reports what the whole turn cost instead of one slice of it, the tools 86 actually runs are counted, and the dollar figures use the real price of the model that is running. Where the numbers still cannot see something, they now say so by name instead of quietly leaving it out.',
+    changes: [
+      { type: 'fixed', text: 'A conversation’s cost was reported about a hundred times too low. The number left out every token served from cache — which on a long thread is almost all of them — so a thread that had really moved around 900,000 tokens showed up as under three cents. Cost now counts what was actually billed, cache included, in the list and in the per-thread total.' },
+      { type: 'fixed', text: 'Every dollar figure was priced as if 86 ran on Opus. The price table had no entry for the model that is actually running, so it fell back to the most expensive tier and overstated spend by about two and a half times. The real rate is in, Opus 4.5’s rate was corrected too (it was carrying a retired model’s price), and an unknown model is now labelled as an estimate rather than quietly guessing.' },
+      { type: 'fixed', text: 'A turn recorded the cost of one step, not the turn. Any turn where 86 used a tool takes several steps, and only the last was being saved — so busy turns, the expensive ones, under-reported themselves. The full turn is now recorded alongside the old per-step number, with a count of how many steps it took.' },
+      { type: 'fixed', text: 'Every conversation claimed zero tool uses. The counter only counted changes waiting for your approval, so all the reading 86 does — most of its work — left no trace. Reads are now counted, with the size of what each one handed back, which is what shows a long conversation getting heavy.' },
+      { type: 'improved', text: 'The usage page had a figure called “Everything”. It covered five of roughly fifteen places this app calls the AI, and the background-jobs total was added up from only the twenty largest jobs on screen. It is now called what it is — recorded — covers every background job, and lists by name what it still cannot see (per-email triage, receipt and document scanning, caption and materials passes, session labels) plus the per-hour session charge that is not tokens at all.' },
+      { type: 'fixed', text: 'The runaway-spend stop on background jobs could not trigger. It compared its limit against two of the four token figures it was holding, and those two are a fraction of a percent of what a job really uses. It now counts all four, with the ceiling raised to match so a legitimate long job still finishes.' },
+    ],
+  },
   {
     version: '1.95',
     date: '2026-10-04',

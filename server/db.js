@@ -1881,6 +1881,41 @@ async function initSchema() {
     ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS cache_creation_input_tokens INTEGER;
     ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS cache_read_input_tokens INTEGER;
 
+    -- turn_* (2026-10-04) — THE TURN, where the four columns above are ONE
+    -- MODEL REQUEST.
+    --
+    -- The managed session emits span.model_request_end once per model
+    -- request, and a turn makes one per tool-use round plus one per stream
+    -- reopen (stall nudge, builtin continuation). runV2SessionStream declares
+    -- its usage variable INSIDE its run loop and each event replaces it, so
+    -- the four columns above hold the LAST request of the last pass.
+    --
+    -- That is not a bug to repoint. agent-prefix-ledger reads those four as
+    -- per-request on purpose: observed_first_turn_tokens is one request by
+    -- definition, and peak_turn_input is a MAX over requests. Widening them
+    -- in place would silently restate both.
+    --
+    -- So the turn total gets its OWN columns, and model_requests says how
+    -- many requests were summed into it — 1 means the two bases agree, >1
+    -- means the per-request columns were only ever a floor. NULL on every
+    -- row written before this migration: absent, not zero. Anything that
+    -- reports "what this turn cost" reads turn_*; anything measuring the
+    -- cached prefix keeps reading the per-request four.
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS turn_input_tokens INTEGER;
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS turn_output_tokens INTEGER;
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS turn_cache_creation_tokens INTEGER;
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS turn_cache_read_tokens INTEGER;
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS model_requests INTEGER;
+
+    -- tool_calls_executed (2026-10-04) — tool calls that actually RAN this
+    -- turn. tool_use_count above counts what was PROPOSED and parked for
+    -- approval; the auto-tier branch returns its result inline and never
+    -- reaches that array, so every read 86 performs — the bulk of its work
+    -- — left no trace and every conversation reported tool_uses: 0. Kept
+    -- separate rather than folded into tool_use_count, which self_diagnose
+    -- reads as "what did I propose".
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS tool_calls_executed INTEGER;
+
     -- Names of skill packs that loaded into the agent's system prompt
     -- this turn. Stored as JSONB array of strings (e.g. ["Project 86 Group
     -- Discipline", "Project 86 Pricing Benchmark Loop"]). Lets admins see

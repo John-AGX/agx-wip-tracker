@@ -27,6 +27,10 @@ const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
 // Wave 1.B context registry — fire-and-forget event logger for
 // memory recalls, entity reads, and any other layer we observe.
 const { logContextLoad } = require('../services/context-registry');
+// The per-turn vs per-request token arithmetic, shared with driveSubtaskTurn
+// below so the two drivers cannot drift apart again (they had: one summed,
+// one overwrote). See services/turn-usage.js.
+const turnUsageSvc = require('../services/turn-usage');
 const { auditActor, auditActorCritical } = require('../audit');
 // The job type registry. A LEAD's project_type is the same vocabulary as a
 // JOB's type — it is the hint that pre-selects the number prefix at
@@ -5039,6 +5043,26 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // again. Per-pass state (text accumulation, pending tools, usage,
   // event counts) resets each iteration; nudge counter persists.
   let nextEventsToSend = eventsToSend;
+  // THE TURN's usage. `usage` below is declared inside the loop and
+  // REPLACED by each span.model_request_end, so it ends up holding one
+  // model request — the last of the last pass. Both meanings are worth
+  // recording and they are not the same number, so this accumulates
+  // alongside rather than over it (see ai_messages.turn_* in db.js).
+  // Outside the loop on purpose: a stall nudge or builtin continuation
+  // opens another stream for the SAME turn, and the user is billed for
+  // every request it makes.
+  const turnAcc = turnUsageSvc.blankTurnUsage();
+  // The turn's EXECUTED tool calls — what ran, not what was proposed.
+  // pendingToolUses (and therefore tool_use_count) holds approval-tier
+  // proposals only: the auto-tier branch returns its result inline and
+  // `break`s before that push, and the built-in toolset's calls never
+  // pass through it at all. So every read 86 performs left no trace and
+  // every conversation in forensics reported tool_uses: 0. Outside the
+  // loop for the same reason as turnAcc — a stream reopen is the same
+  // turn. size_chars is the result the model receives back, which is the
+  // number that compounds: a tool result stays in session history and is
+  // re-read on every later turn.
+  const turnToolCalls = [];
   while (true) {
     // Seed with any text carried across a stream reopen (builtin
     // continuation, auto-flush, stall recovery), so the idle-side persist
@@ -5230,6 +5254,22 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 // toolResultContent so this dispatcher and driveSubtaskTurn
                 // cannot drift apart again — they already had, for months.
                 const resultContent = toolResultContent(decision, summary, isError);
+                // text chars only, and image blocks counted separately — an
+                // image costs tokens that no character count represents, so
+                // neither number is dressed up as the other.
+                let sizeChars = 0;
+                let imageBlocks = 0;
+                try {
+                  if (Array.isArray(resultContent)) {
+                    for (const b of resultContent) {
+                      if (b && b.type === 'text') sizeChars += String(b.text || '').length;
+                      else if (b && b.type === 'image') imageBlocks += 1;
+                    }
+                  } else {
+                    sizeChars = String(resultContent == null ? '' : resultContent).length;
+                  }
+                } catch (_) { /* a measurement must never fail the tool */ }
+                turnToolCalls.push({ name: tu.name, tier: 'auto', is_error: isError, size_chars: sizeChars, image_blocks: imageBlocks });
                 pendingAutoResults.push({
                   type: 'user.custom_tool_result',
                   custom_tool_use_id: tu.id,
@@ -5245,12 +5285,11 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
           }
           case 'span.model_request_end': {
             if (event.model_usage) {
-              usage = {
-                input_tokens: event.model_usage.input_tokens,
-                output_tokens: event.model_usage.output_tokens,
-                cache_creation_input_tokens: event.model_usage.cache_creation_input_tokens,
-                cache_read_input_tokens: event.model_usage.cache_read_input_tokens
-              };
+              // TWO meanings, both kept: the request (what the four
+              // long-standing columns and the prefix ledger read) and the
+              // TURN (what the user was billed). One writer for both.
+              usage = turnUsageSvc.perRequestUsage(event.model_usage);
+              turnUsageSvc.addModelRequest(turnAcc, event.model_usage);
             }
             break;
           }
@@ -5604,7 +5643,10 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                         name: t.name,
                         input: t.input
                       })),
-                      tool_use_count: pendingToolUses.length
+                      tool_use_count: pendingToolUses.length,
+                      turn_usage: turnAcc,
+                      tool_calls_executed: turnToolCalls.length,
+                      tool_calls: turnToolCalls
                     }
                   );
                 } catch (e) {
@@ -5670,16 +5712,31 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               if ((assistantText || harvested.length) && persistAssistantText) {
                 try {
                   await persistAssistantText(assistantText, usage, {
-                    output_files: harvested.length ? harvested : null
+                    output_files: harvested.length ? harvested : null,
+                    turn_usage: turnAcc,
+                    tool_calls_executed: turnToolCalls.length,
+                    tool_calls: turnToolCalls
                   });
                 } catch (e) { console.error('persistAssistantText failed:', e); }
               }
-              send({ done: true, usage: usage });
+              // THE TURN to the client, not one request of it. The panel
+              // stores this in a variable it already calls turnUsage and
+              // prints it under the answer, so it was showing the last model
+              // request of a multi-request turn as the turn's cost. The per-
+              // request snapshot stays on the row for the prefix ledger.
+              send({ done: true, usage: turnAcc });
             }
             endWithDone();
             return;
           }
           case 'agent.tool_use': {
+            // Recorded by NAME because that settles an open question with
+            // real data: the built-in toolset (bash/read/write/edit/glob/
+            // grep/web_search/web_fetch) is the largest single block of 86's
+            // cached prefix, and nothing until now showed whether 86 ever
+            // calls any of it. No size here — Anthropic runs these in its
+            // own container and we never see the result body.
+            turnToolCalls.push({ name: event.name || 'tool', tier: 'builtin', is_error: false, size_chars: 0, image_blocks: 0 });
             // Built-in toolset (web_search / web_fetch / bash / read /
             // write / edit / glob / grep). Anthropic runs them
             // server-side in the session's container — we don't
@@ -14569,6 +14626,38 @@ async function ticketPhotoRefusal(att, ctx, mode) {
 // here rather than letting the turn re-derive it from the user — the
 // re-derivation can fail, and after an adoption it can produce a DIFFERENT
 // answer than the one the user actually asked under.
+// The turn's executed-tool ledger, written to the context registry (one
+// row per call, layer 'tool_result'). The registry already carries the
+// turn_context layer with size_chars, so tool results join the same table
+// rather than getting a bespoke one; the per-turn COUNT also rides the
+// ai_messages row so "which turns are tool-heavy" needs no join.
+//
+// Fire-and-forget, on the registry's own stated contract: observational
+// data must never fail the turn that produced it.
+function recordTurnToolCalls(orgId, userId, calls) {
+  if (!orgId || !Array.isArray(calls) || !calls.length) return;
+  logContextLoad(pool, {
+    organization_id: orgId,
+    user_id: userId || null,
+    layer: 'tool_result',
+    // Capped so a pathological turn cannot write unbounded rows. The cap
+    // is reported rather than silent: the count on the ai_messages row is
+    // uncapped, so count > rows is readable as "this turn hit the cap".
+    items: calls.slice(0, 60).map(function (c) {
+      return {
+        item_id: null,
+        item_name: c.name,
+        item_meta: {
+          tier: c.tier,
+          size_chars: c.size_chars || 0,
+          image_blocks: c.image_blocks || 0,
+          is_error: !!c.is_error
+        }
+      };
+    })
+  });
+}
+
 function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser, authoritativeOrgId) {
   // Per-request dedupe cache. Scoped to ONE /86/chat (or /chat/continue)
   // call — closes over this Map. If the model calls e.g.
@@ -14834,7 +14923,13 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser,
 // and per-fire token budget below are shared with the watch path.
 
 const MAX_SUBTASK_TURNS = 30;            // Safety cap to prevent runaway tool loops (kept name for back-compat with watch code)
-const SUBTASK_BUDGET_TOKENS = 300000;    // Per-fire token budget — fail-stop above this
+// Per-fire token budget — fail-stop above this. Counts ALL FOUR token
+// fields (see the comparison site): the old 300,000 was tested against
+// uncached input + output only, which on this workload is a rounding
+// error, so nothing could ever reach it. 1,000,000 is above every
+// observed real job (the largest measured 259,167 counted honestly) and
+// far below a runaway tool loop.
+const SUBTASK_BUDGET_TOKENS = 1000000;
 
 // Non-streaming version of runV2SessionStream — just drives a Sessions
 // turn to completion, collects assistant text + token usage, and
@@ -15674,12 +15769,7 @@ async function execEscalateTo86(tu, ctx) {
 
 async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomToolUse }) {
   let collectedText = '';
-  const aggUsage = {
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_creation_input_tokens: 0,
-    cache_read_input_tokens: 0
-  };
+  const aggUsage = turnUsageSvc.blankTurnUsage();
   let turnCount = 0;
   let nextEvents = eventsToSend;
   // Track the last idle's stop_reason across iterations; the
@@ -15762,10 +15852,10 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
           }
           case 'span.model_request_end': {
             if (event.model_usage) {
-              aggUsage.input_tokens += event.model_usage.input_tokens || 0;
-              aggUsage.output_tokens += event.model_usage.output_tokens || 0;
-              aggUsage.cache_creation_input_tokens += event.model_usage.cache_creation_input_tokens || 0;
-              aggUsage.cache_read_input_tokens += event.model_usage.cache_read_input_tokens || 0;
+              // Was four hand-rolled += lines that happened to be right;
+              // now the same writer the interactive loop uses, which also
+              // means this lane finally counts its model requests.
+              turnUsageSvc.addModelRequest(aggUsage, event.model_usage);
             }
             break;
           }
@@ -15795,8 +15885,23 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
 
     // Token-budget fail-stop. Prevents a runaway tool loop from
     // burning unbounded spend if the model misbehaves.
-    if (aggUsage.input_tokens + aggUsage.output_tokens > SUBTASK_BUDGET_TOKENS) {
-      return { text: collectedText, usage: aggUsage, error: 'Subtask exceeded token budget (' + SUBTASK_BUDGET_TOKENS + ').' };
+    //
+    // It compared input_tokens + output_tokens, which on a cached workload
+    // is almost none of the spend: input_tokens EXCLUDES cache reads, and
+    // the one real background job in the measured window billed 237,043
+    // input of which 8 — eight — were uncached. So the guard was holding
+    // ~0.01% of the number it was testing and could not trip. It now sums
+    // all four fields, the same arithmetic finalizeAgentJob and the
+    // forensics ledger use for total_in.
+    //
+    // The ceiling moved with the arithmetic rather than silently becoming
+    // strict: counted honestly, that same legitimate job was 259,167 and
+    // a 300,000 ceiling would have killed it at 86%. See
+    // SUBTASK_BUDGET_TOKENS.
+    const spentThisFire = aggUsage.input_tokens + aggUsage.output_tokens
+      + aggUsage.cache_creation_input_tokens + aggUsage.cache_read_input_tokens;
+    if (spentThisFire > SUBTASK_BUDGET_TOKENS) {
+      return { text: collectedText, usage: aggUsage, error: 'Subtask exceeded token budget (' + spentThisFire + ' of ' + SUBTASK_BUDGET_TOKENS + ').' };
     }
 
     if (pendingResults.length === 0) {
@@ -17976,6 +18081,15 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
           ? meta.tool_use_count
           : (toolUses ? toolUses.length : 0);
         const outputFiles = (meta && Array.isArray(meta.output_files)) ? meta.output_files : null;
+        // THE TURN, beside the per-request four (ai_messages.turn_* in
+        // db.js). No meta means an older caller or an error path: these
+        // stay NULL rather than recording a zero that would read as
+        // "this turn cost nothing".
+        const turnUsage = (meta && meta.turn_usage) || null;
+        const toolCalls = (meta && Array.isArray(meta.tool_calls)) ? meta.tool_calls : null;
+        const toolCallsExecuted = (meta && Number.isInteger(meta.tool_calls_executed))
+          ? meta.tool_calls_executed
+          : (toolCalls ? toolCalls.length : null);
         if (!hasText && !toolUseCount && !(outputFiles && outputFiles.length)) return;
         const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         await pool.query(
@@ -17983,8 +18097,12 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
                                     input_tokens, output_tokens,
                                     cache_creation_input_tokens, cache_read_input_tokens,
                                     tool_use_count, tool_uses, output_files, session_id,
-                                    organization_id)
-           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+                                    organization_id,
+                                    turn_input_tokens, turn_output_tokens,
+                                    turn_cache_creation_tokens, turn_cache_read_tokens,
+                                    model_requests, tool_calls_executed)
+           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                   $16, $17, $18, $19, $20, $21)`,
           [aMsgId, turnEntityType, turnEntityId, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
@@ -17994,8 +18112,17 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
            toolUses ? JSON.stringify(toolUses) : null,
            outputFiles ? JSON.stringify(outputFiles) : null,
            session.id,  // slice 3a-1 dual-write
-           req.user.organization_id == null ? null : req.user.organization_id]
+           req.user.organization_id == null ? null : req.user.organization_id,
+           turnUsage ? turnUsage.input_tokens : null,
+           turnUsage ? turnUsage.output_tokens : null,
+           turnUsage ? turnUsage.cache_creation_input_tokens : null,
+           turnUsage ? turnUsage.cache_read_input_tokens : null,
+           turnUsage ? turnUsage.model_requests : null,
+           toolCallsExecuted]
         );
+        // One registry row per executed call, same org and user as the
+        // turn it belongs to.
+        recordTurnToolCalls(req.user.organization_id, req.user.id, toolCalls);
 
         // Background auto-label: on the very first exchange (the
         // user message we just inserted was turn 1, and this is
@@ -18257,6 +18384,15 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
           ? meta.tool_use_count
           : (toolUses ? toolUses.length : 0);
         const outputFiles = (meta && Array.isArray(meta.output_files)) ? meta.output_files : null;
+        // THE TURN, beside the per-request four (ai_messages.turn_* in
+        // db.js). No meta means an older caller or an error path: these
+        // stay NULL rather than recording a zero that would read as
+        // "this turn cost nothing".
+        const turnUsage = (meta && meta.turn_usage) || null;
+        const toolCalls = (meta && Array.isArray(meta.tool_calls)) ? meta.tool_calls : null;
+        const toolCallsExecuted = (meta && Number.isInteger(meta.tool_calls_executed))
+          ? meta.tool_calls_executed
+          : (toolCalls ? toolCalls.length : null);
         if (!hasText && !toolUseCount && !(outputFiles && outputFiles.length)) return;
         const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         await pool.query(
@@ -18264,8 +18400,12 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
                                     input_tokens, output_tokens,
                                     cache_creation_input_tokens, cache_read_input_tokens,
                                     tool_use_count, tool_uses, output_files, session_id,
-                                    organization_id)
-           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+                                    organization_id,
+                                    turn_input_tokens, turn_output_tokens,
+                                    turn_cache_creation_tokens, turn_cache_read_tokens,
+                                    model_requests, tool_calls_executed)
+           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                   $16, $17, $18, $19, $20, $21)`,
           [aMsgId, session.entity_type, sessionEntityId, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
@@ -18275,8 +18415,17 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
            toolUses ? JSON.stringify(toolUses) : null,
            outputFiles ? JSON.stringify(outputFiles) : null,
            session.id,  // slice 3a-1 dual-write
-           req.user.organization_id == null ? null : req.user.organization_id]
+           req.user.organization_id == null ? null : req.user.organization_id,
+           turnUsage ? turnUsage.input_tokens : null,
+           turnUsage ? turnUsage.output_tokens : null,
+           turnUsage ? turnUsage.cache_creation_input_tokens : null,
+           turnUsage ? turnUsage.cache_read_input_tokens : null,
+           turnUsage ? turnUsage.model_requests : null,
+           toolCallsExecuted]
         );
+        // One registry row per executed call, same org and user as the
+        // turn it belongs to.
+        recordTurnToolCalls(req.user.organization_id, req.user.id, toolCalls);
       }
     });
     releaseUserTurnLock(req.user && req.user.id);
@@ -18303,6 +18452,13 @@ module.exports.resolveHostKeyForUser = resolveHostKeyForUser;
 module.exports.archiveActiveAiSession = archiveActiveAiSession;
 module.exports.getAnthropic         = getAnthropic;
 module.exports.internals = {
+  // The interactive turn driver. Exported for the same stated reason as
+  // everything else in this block: the per-turn token ledger and the
+  // executed-tool ledger are properties of RUNNING this loop, and a test
+  // that reads the source for a `+=` proves only that the source says
+  // `+=`. test/turn-usage-ledger.test.js drives it over a scripted event
+  // stream and asserts what reaches the persist callback.
+  runV2SessionStream,
   // Phase 1 of the unified-86 cutover — single per-turn dispatcher.
   // New code should prefer this; the per-entity builders below stay
   // exported for admin prompt-preview tooling and the eval harness.

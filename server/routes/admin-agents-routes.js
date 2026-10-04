@@ -42,7 +42,8 @@ const router = express.Router();
 // fallback behaviour — the names below are re-bound, not redefined, so
 // every consumer in this file is unchanged. Two copies of a price table
 // is how an alarm ends up disagreeing with the page it is alarming on.
-const { MODEL_COSTS, DEFAULT_MODEL_COST } = require('../services/ai-pricing');
+const { MODEL_COSTS, DEFAULT_MODEL_COST, CACHE_WRITE_MULTIPLIER_5M,
+        cacheReadMultiplierFor, cacheCostRaw } = require('../services/ai-pricing');
 const { deleteSkillDeep } = require('../services/anthropic-skills');
 const { auditLog, auditCritical } = require('../audit');
 // The managed-agents 1024-char tool-description cap, and the loud warning
@@ -80,33 +81,47 @@ function entityTypeToAgent(entityType) {
   return entityType;
 }
 
-function costFor(model, inputTokens, outputTokens) {
-  // Unknown / newer models fall back to the current Opus tier rather
-  // than returning null — a live cost metric should never silently
-  // read $0 just because the pricing table lags a model release.
-  const p = MODEL_COSTS[model] || DEFAULT_MODEL_COST;
-  const inCost  = (Number(inputTokens  || 0) / 1_000_000) * p.in;
-  const outCost = (Number(outputTokens || 0) / 1_000_000) * p.out;
-  return inCost + outCost;
+// Unknown / newer models fall back to the current Opus tier rather than
+// returning null — a live cost metric should never silently read $0 just
+// because the pricing table lags a model release.
+//
+// CACHE-AWARE since 2026-10-04, and it has to be: ai_messages.input_tokens
+// EXCLUDES cache reads, so pricing a conversation from input+output alone
+// omitted everything the cache served. On 86 that is ~87% of the input it
+// is billed for, and this function fed the Conversations list — which
+// reported $0.026 for a thread whose real 14-day flow was ~908k tokens.
+// One delegation to services/ai-pricing so there is no second arithmetic
+// to keep in step.
+function costFor(model, inputTokens, outputTokens, cacheWrite, cacheRead) {
+  return cacheCostRaw(model, inputTokens, outputTokens, cacheWrite, cacheRead);
 }
 
 // SQL fragment that computes $ cost from a message row's model + token
 // columns, using the SAME pricing as costFor() so a live per-thread
 // cost computed in Postgres never diverges from the JS display math.
+// That includes the CACHE columns (since 2026-10-04) — see costFor: a
+// cost built from input+output alone silently drops the cached mass,
+// which is most of what a long 86 thread is billed for.
 // Generated from MODEL_COSTS (single source of truth) — not hand-typed.
 // `alias` is the table alias of the row carrying model/input_tokens/
 // output_tokens (e.g. 'm' for `ai_messages m`). The model values are
 // fixed table keys, never user input — safe to interpolate.
 function sqlCostExpr(alias) {
   const a = alias ? alias + '.' : '';
-  const caseFor = (field) => {
+  // Absolute $/MTok per dimension, generated from MODEL_COSTS (and the
+  // cache multipliers) so neither table is hand-typed twice.
+  const caseAbs = (rateOf) => {
     const whens = Object.entries(MODEL_COSTS)
-      .map(([m, p]) => `WHEN '${m}' THEN ${p[field]}`)
+      .map(([m, p]) => `WHEN '${m}' THEN ${rateOf(m, p)}`)
       .join(' ');
-    return `CASE ${a}model ${whens} ELSE ${DEFAULT_MODEL_COST[field]} END`;
+    return `CASE ${a}model ${whens} ELSE ${rateOf(null, DEFAULT_MODEL_COST)} END`;
   };
-  return `(COALESCE(${a}input_tokens, 0)  / 1000000.0) * (${caseFor('in')}) + ` +
-         `(COALESCE(${a}output_tokens, 0) / 1000000.0) * (${caseFor('out')})`;
+  return (
+    `(COALESCE(${a}input_tokens, 0)  / 1000000.0) * (${caseAbs((m, p) => p.in)}) + ` +
+    `(COALESCE(${a}output_tokens, 0) / 1000000.0) * (${caseAbs((m, p) => p.out)}) + ` +
+    `(COALESCE(${a}cache_creation_input_tokens, 0) / 1000000.0) * (${caseAbs((m, p) => p.in * CACHE_WRITE_MULTIPLIER_5M)}) + ` +
+    `(COALESCE(${a}cache_read_input_tokens, 0)     / 1000000.0) * (${caseAbs((m, p) => p.in * cacheReadMultiplierFor(m))})`
+  );
 }
 
 // GET /api/admin/agents/metrics?range=7d|30d
@@ -650,9 +665,25 @@ router.get('/conversations', requireAuth, require('../auth').requireOrg, require
         COUNT(*) FILTER (WHERE role = 'user')      AS user_msgs,
         MAX(created_at)                            AS last_at,
         MIN(created_at)                            AS first_at,
-        COALESCE(SUM(input_tokens),  0)::bigint    AS input_tokens,
-        COALESCE(SUM(output_tokens), 0)::bigint    AS output_tokens,
+        -- PER ROW, the better of the two bases: the turn_* columns when the
+        -- row has them (every row written from 2026-10-04), else the
+        -- per-REQUEST four, which for a multi-request turn is a FLOOR. The
+        -- row counts below say how much of this window is on which basis,
+        -- so a mixed window is readable instead of being one number with an
+        -- undisclosed basis.
+        COALESCE(SUM(COALESCE(turn_input_tokens, input_tokens)), 0)::bigint   AS input_tokens,
+        COALESCE(SUM(COALESCE(turn_output_tokens, output_tokens)), 0)::bigint AS output_tokens,
+        COALESCE(SUM(COALESCE(turn_cache_creation_tokens, cache_creation_input_tokens)), 0)::bigint AS cache_creation,
+        COALESCE(SUM(COALESCE(turn_cache_read_tokens, cache_read_input_tokens)), 0)::bigint         AS cache_read,
+        COUNT(*) FILTER (WHERE role = 'assistant' AND turn_input_tokens IS NOT NULL)::int AS turns_turn_basis,
+        COUNT(*) FILTER (WHERE role = 'assistant' AND turn_input_tokens IS NULL)::int     AS turns_request_basis,
+        COALESCE(SUM(model_requests), 0)::bigint   AS model_requests,
+        -- PROPOSED (tool_use_count) and EXECUTED (tool_calls_executed) are
+        -- different questions; the list carries both rather than letting
+        -- one stand in for the other. tool_calls_executed is NULL on every
+        -- row written before 2026-10-04, so it sums as 0 for old threads.
         COALESCE(SUM(tool_use_count), 0)::bigint   AS tool_uses,
+        COALESCE(SUM(tool_calls_executed), 0)::bigint AS tool_calls_executed,
         STRING_AGG(DISTINCT model, ',')            AS models
       FROM ai_messages
       WHERE ${conds.join(' AND ')}
@@ -721,17 +752,20 @@ router.get('/conversations', requireAuth, require('../auth').requireOrg, require
       const titleKey = r.entity_type + '|' + r.entity_id;
       const title = entityTitleByKey.get(titleKey)
         || (r.entity_id === '__global__' ? 'Customer directory' : r.entity_id);
+      const models = (r.models || '').split(',').filter(Boolean);
+      // An averaged or fallback rate is a guess; the row says so rather
+      // than printing it in the same typeface as a known one.
+      const costEstimated = models.length !== 1 || !MODEL_COSTS[models[0]];
       const cost = (() => {
-        const models = (r.models || '').split(',').filter(Boolean);
-        if (models.length === 1) return costFor(models[0], r.input_tokens, r.output_tokens);
-        // Mixed models — give the average list price across them so
-        // the number is still indicative.
-        const known = models.map(m => MODEL_COSTS[m]).filter(Boolean);
+        if (models.length === 1) {
+          return costFor(models[0], r.input_tokens, r.output_tokens, r.cache_creation, r.cache_read);
+        }
+        // Mixed models — average the list price across them so the number
+        // is still indicative, on all four token dimensions.
+        const known = models.filter(m => MODEL_COSTS[m]);
         if (!known.length) return null;
-        const avgIn  = known.reduce((s, p) => s + p.in,  0) / known.length;
-        const avgOut = known.reduce((s, p) => s + p.out, 0) / known.length;
-        return (Number(r.input_tokens) / 1_000_000) * avgIn
-             + (Number(r.output_tokens) / 1_000_000) * avgOut;
+        const per = known.map(m => costFor(m, r.input_tokens, r.output_tokens, r.cache_creation, r.cache_read));
+        return per.reduce((a, b) => a + b, 0) / per.length;
       })();
       return {
         key: [r.entity_type, r.entity_id, r.user_id].join('|'),
@@ -747,7 +781,20 @@ router.get('/conversations', requireAuth, require('../auth').requireOrg, require
         last_at: r.last_at,
         input_tokens: Number(r.input_tokens),
         output_tokens: Number(r.output_tokens),
+        // The cached mass, which input_tokens excludes — without these two
+        // the token figures on this row look two orders of magnitude
+        // smaller than what the thread was actually billed for.
+        cache_creation: Number(r.cache_creation),
+        cache_read: Number(r.cache_read),
         tool_uses: Number(r.tool_uses),
+        tool_calls_executed: Number(r.tool_calls_executed),
+        model_requests: Number(r.model_requests),
+        // 'turn' — every row carried the turn columns. 'request' — none did,
+        // so the tokens are a floor. 'mixed' — some did; the number is a
+        // floor for the rest. Never silently blended.
+        token_basis: Number(r.turns_request_basis) === 0 ? 'turn'
+          : (Number(r.turns_turn_basis) === 0 ? 'request' : 'mixed'),
+        cost_estimated: costEstimated,
         models: (r.models || '').split(',').filter(Boolean),
         cost_usd: cost
       };

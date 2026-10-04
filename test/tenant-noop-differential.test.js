@@ -260,7 +260,29 @@ function stable(s) {
     // read_users (2026-09-21) prints each user's id so an agent can assign to
     // them. An ADDITION to the line, anchored on its own literal, so every
     // other byte of the directory is still held to the pre-repair answer.
-    .replace(/ · user #\d+(?= · role=)/g, '');
+    .replace(/ · user #\d+(?= · role=)/g, '')
+    // ── the usage gauges, 2026-10-04 ─────────────────────────────────────
+    // GET /conversations gained five fields and ONE of its numbers moved on
+    // purpose. Both are normalised by their own literals rather than by
+    // regenerating the golden, which would have dropped every other door’s
+    // hold at the same time.
+    //
+    // cost_usd: services/ai-pricing.js had no row for the model that
+    // actually runs, so every dollar figure fell through to the Opus tier.
+    // The golden’s 0.015125 IS that fallback — 1,280 input and 349 output at
+    // 5/25 per million. The live rate is sonnet-5’s own 2/10 and the figure
+    // now includes the cached mass it used to omit, so this one number is
+    // deliberately not comparable to a pre-repair capture. Its new value is
+    // pinned for real in test/agent-cost-gauges.test.js, which is where a
+    // cost assertion belongs — this file holds INERTNESS, not pricing.
+    .replace(/"cost_usd":[-0-9.eE+]+/g, '"cost_usd":<COST>')
+    // The five added keys, dropped by name in the read_users idiom above.
+    // Each is anchored with its leading comma so a key that ever becomes the
+    // FIRST member of the object stops matching and shows up as drift.
+    .replace(/,"cache_creation":\d+,"cache_read":\d+/g, '')
+    .replace(/,"tool_calls_executed":\d+,"model_requests":\d+/g, '')
+    .replace(/,"token_basis":"(?:turn|mixed|request)"/g, '')
+    .replace(/,"cost_estimated":(?:true|false)/g, '');
 }
 
 // Anything left that still looks like it was computed from the wall clock. This

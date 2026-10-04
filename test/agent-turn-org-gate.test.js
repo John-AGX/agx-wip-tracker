@@ -205,7 +205,11 @@ describe('the payload dispatcher refuses rather than writing unscoped', () => {
 describe('no agent-path INSERT lands NULL any more', () => {
   const stmts = (src, table) => {
     const out = [];
-    const re = new RegExp('INSERT INTO ' + table + '[\\s\\S]{0,600}?VALUES', 'g');
+    // 800, not 600: the two /86/chat ai_messages INSERTs grew to 644 chars
+    // between INSERT and VALUES when the per-TURN token columns landed
+    // (2026-10-04), and a window shorter than the statement silently stops
+    // FINDING statements — the count assertion below is what caught it.
+    const re = new RegExp('INSERT INTO ' + table + '[\\s\\S]{0,800}?VALUES', 'g');
     let m; while ((m = re.exec(src))) out.push(m[0]);
     return out;
   };
