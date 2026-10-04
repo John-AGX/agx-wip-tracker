@@ -5451,7 +5451,7 @@ router.post('/managed/prefix-probe', requireAuth, requireSystemAdmin, require('.
     const aiInternals = require('./ai-routes-internals');
     const parts = {
       model: modelForAgentKey(agentKey),
-      name: 'P86 PREFIX PROBE — safe to delete (' + new Date().toISOString().slice(0, 16) + ')',
+      name: PROBE_AGENT_NAME_PREFIX + ' (' + new Date().toISOString().slice(0, 16) + ')',
       system: (aiInternals && aiInternals.composedAgentSystem)
         ? await aiInternals.composedAgentSystem(agentKey, baseline, req.organization)
         : baseline,
@@ -5497,20 +5497,42 @@ router.post('/managed/prefix-probe', requireAuth, requireSystemAdmin, require('.
       try { await anthropic.beta.sessions.delete(sid); cleanup.sessions_deleted += 1; }
       catch (e) { cleanup.sessions_failed.push({ id: sid, error: e.message || 'unknown' }); }
     }
+    // Litter from earlier runs: any ACTIVE agent carrying the probe prefix
+    // that is not the one this run just made. Bounded by the first page of
+    // the listing, and every outcome is reported.
+    cleanup.stale_probe_agents = { archived: [], failed: [], list_error: null };
+    try {
+      const page = await anthropic.beta.agents.list({ limit: 100 });
+      const rows = (page && Array.isArray(page.data)) ? page.data : [];
+      for (const a of rows) {
+        if (!a || !a.id || a.id === touched.agent_id) continue;
+        if (String(a.name || '').indexOf(PROBE_AGENT_NAME_PREFIX) !== 0) continue;
+        try {
+          await anthropic.beta.agents.archive(a.id);
+          cleanup.stale_probe_agents.archived.push(a.id);
+        } catch (e) {
+          cleanup.stale_probe_agents.failed.push({ id: a.id, error: e.message || 'unknown' });
+        }
+      }
+    } catch (e) {
+      cleanup.stale_probe_agents.list_error = e.message || String(e);
+    }
+
     if (touched.agent_id) {
+      // ARCHIVE, not delete. There is no DELETE /v1/agents/{id}: the first
+      // live run proved it with a 404, and beta.agents exposes create /
+      // retrieve / update / list / archive and nothing else. Archiving is
+      // the disposal the API offers, so it is what the probe does.
       try {
-        await anthropic.delete('/v1/agents/' + touched.agent_id, {
-          headers: { 'anthropic-beta': 'managed-agents-2026-04-01' },
-        });
-        cleanup.agent_delete = { deleted: true };
+        await anthropic.beta.agents.archive(touched.agent_id);
+        cleanup.agent_archive = { archived: true, agent_id: touched.agent_id };
       } catch (e) {
-        cleanup.agent_delete = {
-          deleted: false,
+        cleanup.agent_archive = {
+          archived: false,
           agent_id: touched.agent_id,
           error: e.message || 'unknown',
-          note: 'The SDK exposes no beta.agents.delete; this was a raw DELETE and it did not '
-            + 'succeed. The agent is named "P86 PREFIX PROBE — safe to delete" and is still on '
-            + 'the account. Remove it from the Console.',
+          note: 'The throwaway agent is named "P86 PREFIX PROBE" and is still ACTIVE on the '
+            + 'account. Archive it from the Console — there is no delete.',
         };
       }
     }
@@ -5570,6 +5592,14 @@ router.post('/managed/prefix-probe', requireAuth, requireSystemAdmin, require('.
   }
 });
 
+// Every throwaway agent this probe registers carries this prefix, so a later
+// run can recognise and archive the litter of an earlier one. It has to:
+// there is no DELETE for agents, and a run that dies between create and
+// archive (as the first live run did, on a 400 it could not have known
+// about) leaves an ACTIVE agent behind. A probe that needed a human to tidy
+// up after its own failures would stop being run.
+const PROBE_AGENT_NAME_PREFIX = 'P86 PREFIX PROBE';
+
 // The smallest turn that still forces a model request. Deliberately boring:
 // the point is to pay the PREFIX, not to produce output, and every set pays
 // this same message so it cancels out of every delta.
@@ -5590,7 +5620,13 @@ async function probeOneSet(anthropic, o) {
   // event emitted immediately cannot be missed.
   const stream = await anthropic.beta.sessions.events.stream(session.id);
   await anthropic.beta.sessions.events.send(session.id, {
-    events: [{ type: 'user.message', content: PROBE_MESSAGE }],
+    // CONTENT IS A BLOCK ARRAY, not a string. A bare string comes back as
+    // 400 "Failed to parse request body: unexpected token …" — which is
+    // how the first live run of this probe failed on all eight sets. Every
+    // other user.message in this codebase already uses the block form
+    // (ai-routes.js:4148, :5561); this one was written from memory instead
+    // of from the neighbours.
+    events: [{ type: 'user.message', content: [{ type: 'text', text: PROBE_MESSAGE }] }],
   });
 
   const acc = turnUsageSvc.blankTurnUsage();

@@ -68,12 +68,14 @@ const sdk = {
   sessions: [],        // every session create
   sent: [],            // every events.send
   deletedSessions: [],
-  rawDeletes: [],
+  archived: [],
   version: 0,
   // scripted per-set usage, keyed by the session title's set label
   usageByLabel: {},
   failUpdateFor: null,     // a set label whose agent update should 400
-  failAgentDelete: false,
+  failAgentArchive: false,
+  failAgentList: false,
+  existingAgents: [],
   emitNoUsageFor: null,    // a set label whose turn emits no usage event
 };
 globalThis.__P86_PROBE_SDK__ = sdk;
@@ -116,6 +118,17 @@ jest.mock('@anthropic-ai/sdk', () => {
             s.agents.push({ op: 'create', payload, version: s.version });
             return { id: 'agent_probe_01', version: s.version };
           },
+          // The disposal the API actually offers: archive. There is no
+          // DELETE /v1/agents/{id} — a live run proved it with a 404.
+          archive: async (id) => {
+            s.archived.push(id);
+            if (s.failAgentArchive) throw new Error('500 could not archive');
+            return { id, archived: true };
+          },
+          list: async () => {
+            if (s.failAgentList) throw new Error("500 could not list agents");
+            return { data: s.existingAgents };
+          },
           update: async (id, payload) => {
             const label = payload && payload.skills && payload.skills.length && !(payload.tools || []).length
               ? 'SKILLS_NO_READ' : null;
@@ -136,7 +149,28 @@ jest.mock('@anthropic-ai/sdk', () => {
           },
           delete: async (id) => { s.deletedSessions.push(id); return {}; },
           events: {
-            send: async (id, body) => { s.sent.push({ id, body }); return {}; },
+            // THE REAL API'S SHAPE CHECK, reproduced. The first version of
+            // this fake accepted anything, so a probe that sent
+            // `content: 'a string'` passed every test here and then failed on
+            // all eight sets live with 400 "Failed to parse request body:
+            // unexpected token …". A fake more permissive than the thing it
+            // stands in for is a fake that certifies broken code.
+            send: async (id, body) => {
+              for (const ev of (body && body.events) || []) {
+                if (ev.type !== 'user.message') continue;
+                if (!Array.isArray(ev.content)) {
+                  throw new Error('400 invalid_request_error: Failed to parse request body: unexpected token '
+                    + JSON.stringify(ev.content));
+                }
+                for (const b of ev.content) {
+                  if (!b || b.type !== 'text' || typeof b.text !== 'string') {
+                    throw new Error('400 invalid_request_error: content blocks must be {type:"text", text}');
+                  }
+                }
+              }
+              s.sent.push({ id, body });
+              return {};
+            },
             stream: async (id) => {
               const sess = s.sessions.find((x) => x.id === id);
               const label = sess ? sess.label : '';
@@ -224,8 +258,9 @@ afterAll((done) => { server.close(() => done()); });
 beforeEach(() => {
   seed();
   sdk.agents = []; sdk.sessions = []; sdk.sent = []; sdk.deletedSessions = [];
-  sdk.rawDeletes = []; sdk.version = 0; sdk.failUpdateFor = null;
-  sdk.failAgentDelete = false; sdk.emitNoUsageFor = null;
+  sdk.archived = []; sdk.version = 0; sdk.failUpdateFor = null;
+  sdk.failAgentArchive = false; sdk.emitNoUsageFor = null;
+  sdk.failAgentList = false; sdk.existingAgents = [];
   scriptAllSets();
 });
 
@@ -503,7 +538,7 @@ describe('POST /managed/prefix-probe', () => {
   test('every turn is one trivial message, and it is the SAME message for every set so it cancels out of the deltas', async () => {
     const r = await post({});
     expect(sdk.sent).toHaveLength(probe.PROBE_SETS.length);
-    const bodies = sdk.sent.map((x) => x.body.events[0].content);
+    const bodies = sdk.sent.map((x) => x.body.events[0].content[0].text);
     expect([...new Set(bodies)]).toHaveLength(1);
     expect(bodies[0]).toBe(r.body.probe_message);
   });
@@ -527,23 +562,24 @@ describe('POST /managed/prefix-probe', () => {
     expect(row.error).toMatch(/no span.model_request_end/);
   });
 
-  test('P5 every session is deleted, and a FAILED agent delete comes back with the id and a note', async () => {
-    sdk.failAgentDelete = true;
+  test('P5 every session is deleted, and a FAILED archive comes back with the id and a note', async () => {
+    sdk.failAgentArchive = true;
     const r = await post({});
     expect(sdk.deletedSessions).toHaveLength(probe.PROBE_SETS.length);
     expect(r.body.cleanup.sessions_deleted).toBe(probe.PROBE_SETS.length);
-    expect(r.body.cleanup.agent_delete.deleted).toBe(false);
-    expect(r.body.cleanup.agent_delete.agent_id).toBe('agent_probe_01');
-    expect(r.body.cleanup.agent_delete.note).toMatch(/still on\s+the account|still on the account/);
+    expect(r.body.cleanup.agent_archive.archived).toBe(false);
+    expect(r.body.cleanup.agent_archive.agent_id).toBe('agent_probe_01');
+    expect(r.body.cleanup.agent_archive.note).toMatch(/still ACTIVE/);
+    expect(r.body.cleanup.agent_archive.note).toMatch(/no delete/);
     // And the id is reported at the top level too, so cleanup never depends
     // on reading the nested cleanup block.
     expect(r.body.touched.agent_id).toBe('agent_probe_01');
   });
 
-  test('a successful cleanup says so, and the raw delete is the one the SDK does not offer', async () => {
+  test('a successful cleanup ARCHIVES the agent — the only disposal beta.agents offers', async () => {
     const r = await post({});
-    expect(r.body.cleanup.agent_delete).toEqual({ deleted: true });
-    expect(sdk.rawDeletes).toEqual(['/v1/agents/agent_probe_01']);
+    expect(r.body.cleanup.agent_archive).toEqual({ archived: true, agent_id: 'agent_probe_01' });
+    expect(sdk.archived).toEqual(['agent_probe_01']);
   });
 
   test('the floor is required, because every delta is measured against it', async () => {
@@ -600,5 +636,48 @@ describe('the observed-prefix lookup, when it cannot run', () => {
     // …and the run still produced its measurements: one lookup failing does
     // not cost the bisection.
     expect(r.body.report.components.every((c) => c.measured)).toBe(true);
+  });
+});
+
+describe('the probe tidies up after its own failures', () => {
+  // There is no DELETE for agents, and the FIRST live run of this probe died
+  // between create and archive on a 400 nobody had hit before — leaving an
+  // active agent with eight versions on the account. A probe that needs a
+  // human to clear its litter stops being run, so each run archives the
+  // leftovers of earlier ones.
+  test('an ACTIVE agent from an earlier run is archived, and the current one is not touched twice', async () => {
+    sdk.existingAgents = [
+      { id: 'agent_stale_1', name: 'P86 PREFIX PROBE (2026-10-04T04:10)' },
+      { id: 'agent_stale_2', name: 'P86 PREFIX PROBE (2026-10-03T22:00)' },
+      { id: 'agent_real_86', name: 'Project 86 JOB · AG Exteriors' },
+      { id: 'agent_probe_01', name: 'P86 PREFIX PROBE (now)' },
+    ];
+    const r = await post({});
+    expect(r.status).toBe(200);
+    const sweep = r.body.cleanup.stale_probe_agents;
+    expect(sweep.archived.sort()).toEqual(['agent_stale_1', 'agent_stale_2']);
+    expect(sweep.failed).toEqual([]);
+    expect(sweep.list_error).toBeNull();
+    // The real 86 agent is NEVER touched — the sweep is keyed on the probe's
+    // own name prefix, and nothing else.
+    expect(sdk.archived).not.toContain('agent_real_86');
+    // The current agent is archived exactly once, by its own cleanup.
+    expect(sdk.archived.filter((id) => id === 'agent_probe_01')).toHaveLength(1);
+  });
+
+  test('a listing that fails is reported, and the run still archives its own agent', async () => {
+    sdk.failAgentList = true;
+    const r = await post({});
+    expect(r.body.cleanup.stale_probe_agents.list_error).toMatch(/could not list/);
+    expect(r.body.cleanup.agent_archive.archived).toBe(true);
+  });
+
+  test('a stale agent that will not archive is named rather than dropped', async () => {
+    sdk.existingAgents = [{ id: 'agent_stale_x', name: 'P86 PREFIX PROBE (old)' }];
+    sdk.failAgentArchive = true;
+    const r = await post({});
+    const sweep = r.body.cleanup.stale_probe_agents;
+    expect(sweep.archived).toEqual([]);
+    expect(sweep.failed).toEqual([{ id: 'agent_stale_x', error: expect.stringMatching(/could not archive/) }]);
   });
 });
