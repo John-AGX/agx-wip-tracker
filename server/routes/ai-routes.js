@@ -527,7 +527,11 @@ const ESTIMATE_TOOLS = [
   },
   {
     name: 'read_assemblies',
-    description: 'Query Project 86\'s ASSEMBLIES — costed recipes that price ONE OUTPUT UNIT of installed work (e.g. "Exterior Repaint — Stucco, per SF" = primer + paint + painter hours + nested pressure-wash sub-assembly). **CALL THIS BEFORE PRICING ANY SCOPE OF WORK** — if a matching assembly exists, its resolved unit cost beats line-by-line guessing, and materials in it are live-priced from our purchase history. Without `id`: returns the index (id, code, name, trade, output unit, resolved cost/unit, item count). With `id`: full recipe (items incl. nested sub-assemblies), its `params` (the parametric inputs it accepts), PLUS `flat` — leaf rows with effective qty per 1 output unit, for EXPLAINING the price. **To put a recipe ON an estimate, the assembly goes on as ONE line, not as its components** — hand it to `scribe_write` as an `assembly_adds` entry (assembly_id + params.Q = the takeoff qty). NEVER hand-expand a recipe into line_adds yourself: the server explodes and prices it, keeps the assembly intact and traceable, and lands it in the right section. Exploding a line into its components is a HUMAN action taken later in the estimate editor. An unpriced item in the recipe is a HARD STOP — the append is refused, so say so and offer to price it. You are the owner of this database: when a recipe is missing or its rates look stale, say so and offer to draft the fix via scribe_write (entity_type "assembly"). Codes follow the controlled TRADE-SYSTEM-VARIANT registry — call read_assembly_taxonomy for the valid Trades + Systems; when you draft an assembly, set trade + system (+ optional variant) and OMIT code (the server derives a compliant, unique one).',
+    description:
+      'Query Project 86\'s ASSEMBLIES — costed recipes pricing ONE OUTPUT UNIT of installed work (materials live-priced from purchase history, labor at production rates, nested sub-assemblies). **CALL THIS BEFORE PRICING ANY SCOPE OF WORK** — a matching assembly beats line-by-line guessing. ' +
+      'Without `id`: the index with cost/unit. With `id`: the full recipe, its `params`, and `flat` leaf rows per output unit. **A recipe goes on an estimate as ONE line, not as its components** — hand `scribe_write` an `assembly_adds` entry (assembly_id + params.Q = the takeoff qty). ' +
+      'NEVER hand-expand it into line_adds: the server explodes, prices and places it. An unpriced item is a HARD STOP: the append is refused — say so and offer to price it. You own this database — flag stale or missing rates and offer to draft a fix via scribe_write (entity_type "assembly"). ' +
+      'Codes follow the TRADE-SYSTEM-VARIANT registry: call read_assembly_taxonomy for valid Trades + Systems, then set trade + system and OMIT code (the server derives it).',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -867,7 +871,11 @@ const JOB_TOOLS = [
   {
     name: 'start_background_task',
     description:
-      'Hand a BIGGER task off to run in the background so the user can leave — like a background coworker. It runs with the FULL SANDBOX: web_search + web_fetch, and Python (pandas, numpy, openpyxl, reportlab) via bash — so it can do real web research, heavy number-crunching, and GENERATE EXCEL/PDF REPORTS that are delivered to the user as a download. Use this when the ask is broad, slow, or needs a file (e.g. "audit every active job for margin drift", "research permit costs for Wesley Chapel", "build me an Excel WIP report for all active jobs", "reconcile these receipts"). OFFER it proactively when a request will take real work, and ALWAYS use it when the user asks for a report/export/spreadsheet, for web research, or says "do this in the background", "work on it and let me know", "ping me when done". The task runs on its own; when it finishes OR needs a decision it notifies the user. Reads run freely; if it needs to CHANGE org data it pauses and asks the user to approve. After calling this, reply briefly ("On it — I\'ll ping you when it\'s done."). Do NOT use it for quick lookups you can answer right now.',
+      'Hand a BIGGER task off to run in the background so the user can leave — like a background coworker. ' +
+      'It runs with the FULL SANDBOX: web_search + web_fetch, and Python (pandas, numpy, openpyxl, reportlab) via bash — so it can do real web research, heavy number-crunching, and GENERATE EXCEL/PDF REPORTS that are delivered to the user as a download. Use this when the ask is broad, slow, or needs a file (e.g. ' +
+      '"audit every active job for margin drift", "build me an Excel WIP report for all active jobs"). OFFER it proactively when a request will take real work, and ALWAYS use it when the user asks for a report/export/spreadsheet, for web research, or says "do this in the background". ' +
+      'The task runs on its own; when it finishes OR needs a decision it notifies the user. Reads run freely; if it needs to CHANGE org data it pauses and asks the user to approve. After calling this, reply briefly ("On it — I\'ll ping you when it\'s done."). ' +
+      'Do NOT use it for quick lookups you can answer right now.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -6499,9 +6507,13 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
     lines.push('# Purchase orders (' + purchaseOrders.length + ') — committed ' + fmtMoney(poCommitted));
     purchaseOrders.slice(0, 12).forEach((p, i) => {
       const label = p.poNumber || ('PO ' + (i + 1));
-      const who = p.subName ? ' — ' + wrapUserData('job.purchase_order', p.subName) : '';
-      const what = p.title ? ' ' + wrapUserData('job.purchase_order', p.title) : '';
-      lines.push('- ' + label + who + what + ' — ' + fmtMoney(p.amount || 0) + (p.status ? ' [' + p.status + ']' : ''));
+      // ONE envelope. This row wrapped the vendor name and the PO title under
+      // the IDENTICAL label, so the second envelope carried no information at
+      // all — 106 chars of it, on up to 12 rows, on EVERY job turn.
+      const poWho = [p.subName, p.title].filter(Boolean).join(' ');
+      lines.push('- ' + label +
+        (poWho ? ' — ' + wrapUserData('job.purchase_order', poWho) : '') +
+        ' — ' + fmtMoney(p.amount || 0) + (p.status ? ' [' + p.status + ']' : ''));
     });
     if (purchaseOrders.length > 12) lines.push('- …and ' + (purchaseOrders.length - 12) + ' more');
     lines.push('');
@@ -8594,8 +8606,7 @@ const READ_TOOLS = [
       'Use this when you don\'t know the exact id and need to find one before emitting a payload. ' +
       'Supported entity_types: job, wip, client, lead, user, estimate, material, sub, business_card, task. ' +
       'For tasks/to-dos: entity_type:"task" with a `filter` searches task titles; pass `status` (open|in_progress|blocked|done) to scope, e.g. status:"open" for "what to-dos are still open". For the USER\'S OWN tasks ("do I have any to-dos", "my tasks") pass assignee:"me" — WITHOUT it the search returns the whole org\'s tasks, not just theirs. Each row shows status, priority, due date, assignee, and any linked entity. ' +
-      'IMPORTANT: For "top producing jobs", "highest backlog", "worst margin" or any ranking question that needs $/% per job, pass entity_type:"wip" (or entity_type:"job" with no filter) — it returns the full WIP rollup with income/cost/margin/backlog/pctComplete per job, sorted by `sort_by`. entity_type:"job" WITH a filter returns the lighter name-lookup result (no metrics). ' +
-      'BATCHING: When you need to look up N items on the same entity_type (e.g. find several materials by keyword for an estimate), pass `filters: ["keyword1", "keyword2", ...]` to run them ALL in one tool call. Results come back grouped per filter. This is ALWAYS preferable to firing N separate search_entities calls.',
+      'IMPORTANT: For "top producing jobs", "highest backlog", "worst margin" or any ranking question that needs $/% per job, pass entity_type:"wip" (or entity_type:"job" with no filter) — it returns the full WIP rollup with income/cost/margin/backlog/pctComplete per job, sorted by `sort_by`..',
     tier: 'auto',
     input_schema: {
       type: 'object',
@@ -8603,6 +8614,10 @@ const READ_TOOLS = [
       properties: {
         entity_type: {
           type: 'string',
+          // Carries what the description had to give up to fit the 1024-char
+          // cap. Property descriptions are not capped, so a per-argument fact
+          // belongs here rather than in prose that gets tail-cut.
+          description: 'What to search. "wip" (or "job" with NO filter) returns the full WIP rollup — income/cost/margin/backlog/pctComplete per job — which is what a ranking question needs. "job" WITH a filter returns the lighter name-lookup result instead, with no metrics.',
           enum: ['job', 'wip', 'client', 'lead', 'user', 'estimate', 'material', 'sub', 'business_card', 'task'],
         },
         filter: { type: 'string', description: 'Single free-text filter (case-insensitive substring). Use `filters` for multi-keyword lookups.' },
@@ -8710,14 +8725,12 @@ const READ_TOOLS = [
   {
     name: 'read_email_inbox',
     description:
-      'Read the signed-in user\'s in-app EMAIL DROPBOX — the PRIMARY way to read their email here. Where mail they redirect/forward from their real inbox lands; needs NO Outlook/Graph connection. Read-only, strictly their own. ' +
-      'ALWAYS use this for any email thread id that starts with "th_" (e.g. th_ab12cd… — the dropbox thread-id format) and for general "read/summarize my email/thread" requests. Prefer it over the read_outlook_* tools unless the user is specifically asking about their LIVE Outlook mailbox. ' +
-      'Without thread_id: lists recent conversations (subject, sender, count, last received, preview) with [thread ids], each tagged with the linked client/sub and a triage read (⏎ needs reply + a one-line summary), and a 📎 flag on threads that carry attachments. With thread_id: the FULL conversation plus the triage summary and SUGGESTED FOLLOW-UPS (reminder/calendar/task) extracted from it. ' +
-      'ATTACHMENTS ARE READABLE: opening a thread also reads out each attachment\'s text — PDFs and Word/Excel/text files are read directly, and photos or scanned/image-only PDFs are OCR\'d on demand — so you can answer about what is IN an attached invoice, PO, scope, receipt, or photo, not just its filename. ' +
-      'Use for "what emails came in", "anything I need to reply to", "summarize the thread with [person]", "read/summarize thread [th_...]", "draft a reply to [subject]". When the triage suggests a follow-up (a date to calendar, a reply to remember), OFFER to create it using your reminder/calendar/task tools — which confirm with the user first; never create anything silently from an email. ' +
-      'q filters by sender/subject/body text. If the dropbox is empty or not set up, say so and point them to My Account → Email Dropbox for the forwarding address + setup steps. ' +
-      'Results also show how mail is FILED — its folder, its auto-category (one of: clients, subs-vendors, bids-rfqs, invoices-bills, scheduling, permits-inspections, insurance-legal, internal, newsletters), any labels, and whether a thread is snoozed. Use those to answer "what\'s sitting in invoices", "anything from subs this week", "what did I park". A snoozed thread was deliberately deferred — do not report it as neglected. ' +
-      'NOTE: messages the user forwarded manually show the FORWARDER as sender; the real sender (when recoverable) is shown as "originally from".',
+      'Read the signed-in user\'s in-app EMAIL DROPBOX — the PRIMARY way to read their email here, where forwarded/redirected mail lands. No Outlook connection needed; read-only, their own mail only. ' +
+      'Any "th_" thread id belongs to THIS tool; prefer it over read_outlook_* unless they ask specifically about their LIVE Outlook mailbox. ' +
+      'WITHOUT thread_id it LISTS conversations — each with its [thread id], sender, the linked client/sub, a triage read (needs-reply + one-line summary), a 📎 attachment flag and its auto-category — enough for "what came in", "anything I need to reply to", "what\'s in invoices". ' +
+      'WITH thread_id it returns that conversation plus its triage and any SUGGESTED FOLLOW-UPS (reminder/calendar/task) from the mail: OFFER those, never create one silently. ' +
+      'ATTACHMENTS ARE READABLE — a thread reads out each attachment\'s text: PDFs and Word/Excel/text directly, photos and scanned image-only PDFs OCR\'d on demand. ' +
+      'So you can answer what is IN an attached invoice, PO or photo, not just its filename.',
     tier: 'auto',
     input_schema: {
       type: 'object',
@@ -12050,10 +12063,13 @@ async function execStaffTool(name, input, ctx) {
       r.rows.forEach((t) => {
         // Subject/sender/preview are all attacker-controllable; wrap the
         // per-thread block so nothing inside can read as an instruction.
-        var block = '- ' + (t.last_from || 'unknown') + ' — ' + (t.subject || '(no subject)') +
-          ' · ' + t.n + ' msg' + (t.n === 1 ? '' : 's') + ' · ' + fmtWhen(t.last_at) + '\n';
-        if (t.preview) block += '    ' + String(t.preview).replace(/\s+/g, ' ').trim();
-        lines.push(wrapUserData('inbound_email', block));
+        // The COUNT and the server-formatted time are trusted and now sit
+        // OUTSIDE the envelope, which is the rule stated nine lines below. Only
+        // the sender, subject and preview — all attacker-controllable — go in.
+        var block = (t.last_from || 'unknown') + ' — ' + (t.subject || '(no subject)');
+        if (t.preview) block += '\n    ' + String(t.preview).replace(/\s+/g, ' ').trim();
+        lines.push('- ' + t.n + ' msg' + (t.n === 1 ? '' : 's') + ' · ' + fmtWhen(t.last_at) +
+          ' · ' + wrapUserData('inbound_email', block));
         // Entity label is directory-sourced (trusted) → plain. needs_reply
         // is a bool (trusted) → plain. But the triage SUMMARY is model
         // paraphrase of the untrusted email → wrap it, so it can't launder
@@ -12309,10 +12325,19 @@ async function execStaffTool(name, input, ctx) {
           const doneN = checklist.filter((c) => c && c.done).length;
           lines.push('Checklist (' + doneN + '/' + checklist.length + '):');
           // PROMPT-INJECTION DEFENSE: subtask text is user data — wrapped + capped.
-          checklist.slice(0, 50).forEach((c) => {
-            lines.push('  ' + (c && c.done ? '[x]' : '[ ]') + ' ' +
-              wrapUserData('tasks.checklist', String((c && c.text) || '').slice(0, 200)));
-          });
+          // ONE envelope for the whole checklist rather than one per item: 50
+          // items cost 50 envelopes (~2,450 chars) and 50 repetitions of the same
+          // "this is data" announcement. The AUTHORITATIVE done/total count is in
+          // the header above, outside the envelope, so the [x] markers inside are
+          // a convenience the model can check against a trusted number.
+          const clItems = checklist.slice(0, 50)
+            .map((c) => '  ' + (c && c.done ? '[x]' : '[ ]') + ' ' + String((c && c.text) || '').slice(0, 200))
+            .join('\n');
+          lines.push(wrapUserData('tasks.checklist', clItems));
+          // The 50-item cap used to be silent.
+          if (checklist.length > 50) {
+            lines.push('  …and ' + (checklist.length - 50) + ' more checklist item(s) not shown.');
+          }
         }
         if (t.photo_count) lines.push('Photos: ' + t.photo_count);
         if (t.completed_at) lines.push('Completed: ' + fmtDay(t.completed_at));
@@ -16947,11 +16972,15 @@ async function execProjectInlineTool(name, input, ctx) {
     };
     const lines = [`${er.rows.length} calendar event${er.rows.length === 1 ? '' : 's'}:`];
     for (const x of er.rows) {
-      lines.push('- ' + wrapUserData('calendar_events.title', String(x.title || '(untitled)').slice(0, 200)) +
+      // ONE envelope: title and location are two fields of the same event, and
+      // this row paid 115 chars of envelope for them. The id, the formatted
+      // time, all-day and status stay outside.
+      const evLoc = String(x.location || '').trim().slice(0, 120);
+      lines.push('- ' + wrapUserData('calendar_events.title_location',
+          String(x.title || '(untitled)').slice(0, 200) + (evLoc ? ' @ ' + evLoc : '')) +
         ' [id=' + x.id + '] · ' + fmtWhen(x.starts_at, x.all_day) +
         (x.all_day ? ' · all-day' : '') +
         (x.status && x.status !== 'confirmed' ? ' · ' + x.status : '') +
-        (x.location ? ' · ' + wrapUserData('calendar_events.location', String(x.location).slice(0, 120)) : '') +
         (x.entity_type && x.entity_id ? ' · on ' + x.entity_type + ' ' + x.entity_id : ''));
     }
     return lines.join('\n');
@@ -17044,13 +17073,16 @@ async function execProjectInlineTool(name, input, ctx) {
       const kb = p.size_bytes ? ' · ' + Math.max(1, Math.round(p.size_bytes / 1024)) + ' KB' : '';
       const geo = (p.lat != null && p.lng != null && !(Number(p.lat) === 0 && Number(p.lng) === 0))
         ? ' · geo ' + Number(p.lat).toFixed(5) + ',' + Number(p.lng).toFixed(5) : '';
+      // ONE envelope holding the filename AND the caption — both authored by
+      // whoever uploaded, both untrusted, and previously costing two envelopes
+      // (109 chars) on the same row. The id, time, uploader, size, tags and geo
+      // stay outside.
+      const photoCap = (p.caption && String(p.caption).trim()) ? String(p.caption).slice(0, 400) : '';
       lines.push(
-        '[' + p.id + '] ' + wrapUserData('attachments.filename', String(p.filename || 'photo').slice(0, 120)) +
+        '[' + p.id + '] ' + wrapUserData('attachments.file_caption',
+          String(p.filename || 'photo').slice(0, 120) + ' · caption: ' + (photoCap || '—')) +
         ' · ' + fmtWhen(p.shot_at) +
         (p.uploaded_by_name ? ' · ' + p.uploaded_by_name : '') + kb +
-        ' · caption: ' + (p.caption && String(p.caption).trim()
-          ? wrapUserData('attachments.caption', String(p.caption).slice(0, 400))
-          : '—') +
         ' · tags: [' + tagList.map(function(t) { return String(t).slice(0, 40); }).join(', ') + ']' +
         geo
       );
@@ -17082,9 +17114,14 @@ async function execProjectInlineTool(name, input, ctx) {
     if (!pr.rows.length) return q ? 'No projects matched "' + q + '".' : 'No projects.';
     const lines = [`${pr.rows.length} project${pr.rows.length === 1 ? '' : 's'}:`];
     for (const x of pr.rows) {
-      lines.push('- ' + wrapUserData('projects.name', String(x.name || '(unnamed)').slice(0, 160)) +
+      // ONE envelope for this row's untrusted text. Two labels for a name and
+      // an address of the SAME row cost a second 51-char envelope and tell the
+      // model nothing the first does not. id, status, client, job and lead were
+      // already outside it and stay outside.
+      const projAddr = String(x.address_text || '').trim().slice(0, 120);
+      lines.push('- ' + wrapUserData('projects.name_address',
+          String(x.name || '(unnamed)').slice(0, 160) + (projAddr ? ' — ' + projAddr : '')) +
         ' [id=' + x.id + '] · ' + (x.status || 'active') +
-        (x.address_text ? ' · ' + wrapUserData('projects.address', String(x.address_text).slice(0, 120)) : '') +
         (x.client_name ? ' · client: ' + x.client_name : '') +
         (x.job_id ? ' · job ' + x.job_id : '') +
         (x.lead_id ? ' · lead ' + x.lead_id : ''));
@@ -17131,9 +17168,14 @@ async function execProjectInlineTool(name, input, ctx) {
       const title = (x.data && typeof x.data.title === 'string') ? x.data.title.slice(0, 80) : '';
       // Surface the sub's NAME (not just sub_id) so 86 attributes each PO to the
       // right vendor — reading only sub_id before, it guessed and swapped them.
+      // ONE envelope for the vendor name and the PO title — two fields of the
+      // same row that were costing two envelopes. The sub_id fallback is an id,
+      // not free text, so it stays outside where it already was.
+      const poVendor = x.sub_name ? String(x.sub_name).slice(0, 80) : '';
+      const poText = [poVendor, title].filter(Boolean).join(' · ');
       lines.push('- PO ' + (x.po_number || x.id) + ' [id=' + x.id + '] · ' + (x.status || 'draft') +
-        (x.sub_name ? ' · ' + wrapUserData('subs.name', String(x.sub_name).slice(0, 80)) : (x.sub_id ? ' · sub ' + x.sub_id : '')) +
-        (title ? ' · ' + wrapUserData('po.title', title) : '') +
+        (!x.sub_name && x.sub_id ? ' · sub ' + x.sub_id : '') +
+        (poText ? ' · ' + wrapUserData('po.vendor_title', poText) : '') +
         (amt ? ' · ' + amt : '') +
         (x.job_id ? ' · job ' + x.job_id : '') +
         (x.approved_at ? ' · approved' : ''));

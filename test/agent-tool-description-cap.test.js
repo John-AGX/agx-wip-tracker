@@ -139,10 +139,25 @@ describe('no tool description goes over the cap that was not already over it', (
   // Measured on origin/main, not copied from a claim. Raising a number here,
   // or adding a name, is a deliberate act that shows up in review.
   const GRANDFATHERED = {
-    read_assemblies: 1659,
-    read_email_inbox: 2313,
-    search_entities: 1374,
-    start_background_task: 1115,
+    // FOUR NAMES LEFT THIS LIST on 2026-10-04, which is the only direction it
+    // may move. read_email_inbox (2313), read_assemblies (1659),
+    // search_entities (1374) and start_background_task (1115) were rewritten to
+    // fit, because the registrar truncates at 1024 and what it cut was invisible
+    // to the model: read_email_inbox lost the fact that photos and scanned PDFs
+    // are OCR'd (and its surviving text ended on a closed list of PDF/Word/Excel
+    // that reads as excluding images), start_background_task lost its only
+    // negative boundary ("do NOT use it for quick lookups"), search_entities lost
+    // the batching rule (which its `filters` property description already
+    // carried, so it was deleted as duplicate), and read_assemblies lost its
+    // HARD-STOP rule.
+    //
+    // wire_nodes stays, and is the honest exception: it is registered to NO
+    // agent (absent from ROUTER_TOOL_NAMES and ASSISTANT_TOOL_NAMES), has no
+    // executor branch, is not in ALLOWED_AUTO_TIER_TOOLS, and its payload-op
+    // equivalents are refused non-retryably by RETIRED_JOB_OPS — so its 190
+    // over-cap chars reach no prompt and cost nothing. Deleting the tool
+    // outright belongs to the node-retirement work, not here: `create_node`
+    // still names it (ai-routes.js:944) and would be left pointing at nothing.
     wire_nodes: 1214,
   };
 
