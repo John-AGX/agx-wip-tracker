@@ -329,6 +329,10 @@ function invoicedToDate(invoiceRows, job) {
 }
 
 module.exports = {
+  // Exported so a reader that groups COs by "is this in the job's money"
+  // asks THIS set instead of writing a second one. A second copy of the
+  // counting rule is how a roll-up starts disagreeing with the editor.
+  COUNTED_STATUSES,
   changeOrderMoney,
   shapeChangeOrderRow,
   shapeLegacyChangeOrder,

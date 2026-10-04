@@ -497,9 +497,22 @@ describe('read_change_orders is registered on every surface a tool needs', () =>
   });
 
   test('the read returns the two addresses a write needs', () => {
-    const branch = AI.slice(AI.indexOf("if (name === 'read_change_orders')"));
-    expect(branch.slice(0, 6000)).toContain('co_id=');
-    expect(branch.slice(0, 6000)).toContain('line_id=');
+    // THE WINDOW IS THE WHOLE BRANCH, not a fixed 6,000 chars. At 6,000 this
+    // assertion failed the moment the branch grew a money roll-up — line_id=
+    // sits at ~9,100 now — and a window that has to be re-tuned every time the
+    // code around it changes is measuring the wrong thing. The branch is
+    // bounded by the next tool's own guard clause, so slicing to its end is
+    // both correct and stable.
+    //
+    // What this test can see is that the SOURCE mentions both ids. That the
+    // ids are actually PRINTED, and when — co_id on every row, line_id only
+    // when one change order is in hand — is held behaviourally in
+    // test/change-order-read-shape.test.js, which executes both doors.
+    const whole = AI.slice(AI.indexOf("if (name === 'read_change_orders')"));
+    const branch = whole.slice(0, whole.indexOf('Unknown project-inline tool'));
+    expect(branch.length).toBeGreaterThan(1000);
+    expect(branch).toContain('co_id=');
+    expect(branch).toContain('line_id=');
   });
 
   test('86 is TOLD to read a change order before writing one', () => {

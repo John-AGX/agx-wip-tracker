@@ -2951,22 +2951,61 @@ async function buildLeadContext(leadId, organization, opts) {
     }
   } catch (_) { /* linked-estimate lookup is best-effort */ }
 
-  // Attachments — photos to the vision pipeline (cap 12), docs to a manifest
-  // the model reads on demand. Same partition rule buildEstimateContext uses.
+  // ── PHOTOS ARE A MANIFEST, NOT TWELVE IMAGES ON EVERY TURN ────────────
+  // buildJobContext and buildEstimateContext both default includePhotos to
+  // FALSE and render ids instead, with the reason written down at
+  // buildJobContext: "so the per-turn user.message stays small; 86 calls
+  // view_attachment_image by id when it actually needs to see one."
+  //
+  // This builder never got that change. A lead surface attached up to 12
+  // photos as vision blocks on EVERY turn — order ~15,000 tokens, rebuilt
+  // and re-sent whole on every turn of the conversation, whether or not the
+  // question had anything to do with photos. Leads are exactly where
+  // site-survey photos live, so this was the worst surface to leave
+  // un-gated, and it is the largest single per-turn cost measured in this
+  // pass.
+  //
+  // NOTHING IS LOST. view_attachment_image hands back a real image block on
+  // every dispatcher — one forwarding shape, held by
+  // test/tool-result-blocks-forwarding.test.js — so 86 can still see any
+  // photo it names, and read_project_photos({entity_type:'lead'}) still
+  // lists captions, tags and GPS.
+  const includePhotos = !!(opts && opts.includePhotos);
   let photoBlocks = [];
   try {
     const atts = await pool.query(
       `SELECT * FROM attachments WHERE entity_type='lead' AND entity_id=$1
          ORDER BY position, uploaded_at`,
       [leadId]);
-    const photoRows = atts.rows.filter(a => a.mime_type && a.mime_type.startsWith('image/') && a.thumb_key);
-    const docRows = atts.rows.filter(a => !(a.mime_type && a.mime_type.startsWith('image/') && a.thumb_key));
+    const isPhoto = (a) => a.mime_type && a.mime_type.startsWith('image/') && a.thumb_key;
+    // NEWEST FIRST, and sorted here rather than in the ORDER BY because the
+    // test shim parses neither NULLS LAST nor a mixed-direction sort. The
+    // old order was `position, uploaded_at` — a human's gallery ordering,
+    // oldest upload first — so the cap dropped the photos taken TODAY and
+    // kept the ones from the first site visit. The cap has to drop the
+    // oldest, not the newest.
+    const ts = (r) => { const t = new Date(r && r.uploaded_at || 0).getTime(); return isFinite(t) ? t : 0; };
+    const photoRows = atts.rows.filter(isPhoto).slice().sort((a, b) => ts(b) - ts(a));
+    const docRows = atts.rows.filter((a) => !isPhoto(a));
     if (photoRows.length) {
       lines.push('');
-      lines.push('# Photos (' + photoRows.length + ')' + (photoRows.length > 12 ? ' — first 12 attached as images' : ' — attached as images'));
-      for (const p of photoRows.slice(0, 12)) {
-        const block = await loadPhotoAsBlock(p);
-        if (block) photoBlocks.push(block);
+      lines.push('# Photos (' + photoRows.length + ') — newest first');
+      if (includePhotos) {
+        for (const p of photoRows.slice(0, 12)) {
+          const block = await loadPhotoAsBlock(p);
+          if (block) photoBlocks.push(block);
+        }
+        lines.push(photoBlocks.length + ' shown inline as vision content below.');
+      } else {
+        lines.push('Call `view_attachment_image({attachment_id})` on the specific one you need to actually see — each image costs vision tokens, so pull only what the question requires. The ids are below.');
+      }
+      photoRows.slice(0, 24).forEach(function(p) {
+        lines.push('  - [' + p.id + '] ' + (p.filename || '(unnamed)') +
+          (p.size_bytes ? ' · ' + Math.max(1, Math.round(p.size_bytes / 1024)) + ' KB' : ''));
+      });
+      if (photoRows.length > 24) {
+        lines.push('  - … and ' + (photoRows.length - 24) + ' older photo(s) NOT listed here — ' +
+          'read_project_photos({entity_type:"lead", entity_id:"' + leadId + '"}) lists every one with its caption, tags and GPS.');
       }
     }
     if (docRows.length) {
@@ -8391,7 +8430,7 @@ const PROJECT_INLINE_TOOLS = [
     name: 'read_change_orders',
     tier: 'auto',
     description:
-      'List/read CHANGE ORDERS on a job, INCLUDING THEIR LINE ITEMS. READ-ONLY. Org-scoped. Pass `job_id` to restrict to one job, `co_id` to read one (accepts the co_ row id OR the CO number like "CO-3"), `status` to scope (draft|pending|approved|applied; pending = sent to the owner, awaiting approval, and counts $0 exactly as a draft does). Returns the co_ ROW ID, the CO number, status and lock state, the income (the price to the owner) and the cost, and every line with its `line_id`, description, qty, unit cost, promised Unit Sell and markup. THE co_ ID AND THE line_id ARE THE ADDRESSES A WRITE NEEDS: read the change order before asking the Scribe to change a line on it, and pass the ids you read. Use for "what change orders are on job X", "what is on CO-3", "why does CO-3 show no profit", and before ANY change-order edit.',
+      'List/read CHANGE ORDERS on a job, WITH THEIR LINE ITEMS WHEN YOU NAME ONE. READ-ONLY. Org-scoped. Pass `job_id` to restrict to one job, `co_id` to read one (accepts the co_ row id OR the CO number like "CO-3"), `status` to scope (draft|pending|approved|applied; pending = sent to the owner, awaiting approval, and counts $0 exactly as a draft does). Returns the co_ ROW ID, number, status, lock state, income (price to the owner) and cost. A LIST also carries a money roll-up that keeps drafts out of the job\'s money, and gives each change order a ONE-LINE summary of its lines. NAMING ONE — co_id, or a filter that matches exactly one — additionally prints every line with its `line_id`, description, qty, unit cost, promised Unit Sell and markup. THE co_ ID AND THE line_id ARE THE ADDRESSES A WRITE NEEDS: read the ONE change order you are about to edit and pass the ids it prints. Use for "what change orders are on job X" (list), "what is on CO-3" (name it), and before ANY change-order edit.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -8401,6 +8440,9 @@ const PROJECT_INLINE_TOOLS = [
         status: { type: 'string', description: 'Optional status filter (draft | pending | approved | applied).' },
         filter: { type: 'string', description: 'Case-insensitive substring on co_number or title.' },
         limit: { type: 'number', description: 'Cap results. Default 20, max 100.' },
+        // Lines come with ONE change order automatically. This is for the rare
+        // case of wanting them across a whole list, and it is budgeted.
+        include_lines: { type: 'boolean', description: 'Only when reading a LIST: also print every line of every change order. Off by default — a list gives each change order a one-line summary of its lines, and naming one (co_id) prints that one\'s lines in full. Turning this on can cost tens of thousands of characters.' },
       },
     },
   },
@@ -17115,7 +17157,62 @@ async function execProjectInlineTool(name, input, ctx) {
     if (!rows.length) return 'No change orders found.';
     const money = (v) => '$' + Math.round(Number(v) || 0).toLocaleString();
     const cell = (v) => (v === '' || v == null ? '—' : String(v));
+
+    // ── LINES COME WITH ONE CHANGE ORDER, NOT WITH A LIST ───────────────
+    // This door printed every line of every change order it returned, always.
+    // Measured on one job: 42,962 characters — ~11,000 tokens, then carried
+    // for the rest of the conversation — to answer "what change orders are on
+    // this job", a question none of those lines are an answer to. Line ids are
+    // for a WRITE, and a write addresses ONE change order.
+    //
+    // So: naming one (co_id, or a filter that matched exactly one) prints its
+    // lines in full — the write-prep path the baseline tells 86 to take. A
+    // list prints each change order's lines as ONE summary line: how many,
+    // how many carry a promised price, how many carry a placeholder cost —
+    // which is what a reader needs in order to choose which one to open.
+    const wantAllLines = !!(input && input.include_lines);
+    const detail = rows.length === 1 || wantAllLines;
+    // One line budget for the whole answer. A single change order gets the
+    // whole of it (24,000 chars is ~95 lines, more than any real CO carries),
+    // so the write-prep path is never clipped in practice; a 100-CO
+    // include_lines list is what this is actually for.
+    const lineBudget = { total: 24000, remaining: 24000, lineDropped: 0, coDropped: 0 };
+
+    // ── WHAT THESE ARE WORTH, WITH THE DRAFTS KEPT OUT OF IT ────────────
+    // A total over every row returned would be a number nobody can spend: a
+    // pending or draft CO is worth exactly $0 to the job until a human
+    // approves it. Every row below already says that one at a time, and
+    // nothing said it in aggregate. The counting rule is
+    // money/change-order-totals.js's own COUNTED_STATUSES, read rather than
+    // re-typed, so this line cannot drift from the editor's math.
+    const counted = { n: 0, income: 0, costs: 0 };
+    const notYet = {};
+    for (const x of rows) {
+      const m = jobMoney.changeOrderMoney(x.data || {});
+      const st = String(x.status || 'draft');
+      if (jobMoney.COUNTED_STATUSES.has(st)) {
+        counted.n += 1;
+        counted.income += Number(m.income) || 0;
+        counted.costs += Number(m.costs) || 0;
+      } else {
+        const b = notYet[st] || (notYet[st] = { n: 0, income: 0 });
+        b.n += 1;
+        b.income += Number(m.income) || 0;
+      }
+    }
+    const notYetBits = Object.keys(notYet).sort()
+      .map((st) => st + ' ' + money(notYet[st].income) + ' (' + notYet[st].n + ')');
     const out = [`${rows.length} change order${rows.length === 1 ? '' : 's'}:`];
+    out.push('In the job\'s money: ' + counted.n + ' approved/applied · income ' +
+      money(counted.income) + ' · cost ' + money(counted.costs) + '.' +
+      (notYetBits.length
+        ? ' NOT in any contract, WIP, backlog or pay-application total yet: ' +
+          notYetBits.join(' · ') + ' — worth $0 to this job until approved.'
+        : ''));
+    if (!detail && rows.length > 1) {
+      out.push('Lines are summarised below. For one change order\'s lines with their ' +
+        'line_ids — what a write needs — call read_change_orders again with co_id=<its co_ id>.');
+    }
     for (const x of rows) {
       const d = x.data || {};
       const m = jobMoney.changeOrderMoney(d);
@@ -17130,23 +17227,59 @@ async function execProjectInlineTool(name, input, ctx) {
             + ' — contributes $0 to the job WIP until approved]' : ''));
       const lines = Array.isArray(d.lines) ? d.lines : [];
       if (!lines.length) { out.push('    (no line items — this change order is worth $0)'); continue; }
+      if (!detail) {
+        // The summary a reader needs in order to choose: how many lines, and
+        // the two conditions that make a line worth opening — a promised price
+        // that overrides markup, and a placeholder cost that is really a
+        // missing cost.
+        const real = lines.filter((l) => l && typeof l === 'object' && l.section !== '__section_header__');
+        const promised = real.filter((l) => !(l.unitSell === '' || l.unitSell == null)).length;
+        const pending = real.filter((l) => l.costPending).length;
+        out.push('    ' + real.length + ' line' + (real.length === 1 ? '' : 's') +
+          (promised ? ' · ' + promised + ' with a PROMISED price' : '') +
+          (pending ? ' · ' + pending + ' with a PLACEHOLDER cost' : '') +
+          ' — co_id=' + x.id + ' reads them with their line_ids.');
+        continue;
+      }
+      // Lines in full, and budgeted even here: include_lines over a 100-row
+      // list is the one way back to the old cost, and a cap that cannot be
+      // seen is the defect, not the cap.
       let n = 0;
+      if (lineBudget.remaining <= 0) {
+        lineBudget.coDropped += 1;
+        out.push('    (' + lines.length + ' line(s) NOT printed — the per-answer line budget of ' +
+          lineBudget.total.toLocaleString('en-US') + ' characters was spent on the change orders above. ' +
+          'Read this one on its own with co_id=' + x.id + '.)');
+        continue;
+      }
       for (const l of lines) {
         if (!l || typeof l !== 'object') continue;
+        if (lineBudget.remaining <= 0) { lineBudget.lineDropped += 1; continue; }
         if (l.section === '__section_header__') {
-          out.push('    -- section: ' + wrapUserData('change_order.line', String(l.label || '').slice(0, 60)));
+          const secText = '    -- section: ' + wrapUserData('change_order.line', String(l.label || '').slice(0, 60));
+          lineBudget.remaining -= secText.length;
+          out.push(secText);
           continue;
         }
         n++;
-        out.push('    #' + n + ' [line_id=' + (l.id == null ? '' : l.id) + '] ' +
+        const lineText = '    #' + n + ' [line_id=' + (l.id == null ? '' : l.id) + '] ' +
           wrapUserData('change_order.line', String(l.description || '(no description)').slice(0, 80)) +
           ' · qty ' + cell(l.qty) + ' ' + (l.unit || 'ea') +
           ' · unitCost ' + cell(l.unitCost) +
           ' · unitSell ' + cell(l.unitSell) + (l.unitSell === '' || l.unitSell == null
             ? ' (no promise — priced from cost x markup)' : ' (PROMISED — this line\'s price is fixed and its markup is ignored)') +
           ' · markup ' + cell(l.markup) +
-          (l.costPending ? ' · COST IS A PLACEHOLDER EQUAL TO THE PRICE — needs the real cost' : ''));
+          (l.costPending ? ' · COST IS A PLACEHOLDER EQUAL TO THE PRICE — needs the real cost' : '');
+        lineBudget.remaining -= lineText.length;
+        out.push(lineText);
       }
+    }
+    // A budget that bit says what it dropped, in the same breath as the rest.
+    if (lineBudget.lineDropped || lineBudget.coDropped) {
+      out.push('[BUDGETED — NOT ALL LINES ARE HERE: ' + lineBudget.lineDropped +
+        ' line(s), and the lines of ' + lineBudget.coDropped + ' further change order(s), were not printed, ' +
+        'because one answer prints at most ' + lineBudget.total.toLocaleString('en-US') + ' characters of lines. ' +
+        'Read one change order at a time with co_id to see all of its lines. Do not treat this as the full line list.]');
     }
     out.push('To change a line, hand the Scribe the co_id and the line_id above and ask for a ' +
       'line_edits op — never a full lines[] replacement, which drops every line you did not list.');
