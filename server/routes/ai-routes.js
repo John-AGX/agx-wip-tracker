@@ -42,6 +42,12 @@ const turnUsageSvc = require('../services/turn-usage');
 // read_jobs and read_wip_summary — see services/job-status-filter.js for the
 // measured reason it exists.
 const jobStatusFilter = require('../services/job-status-filter');
+// What a read tool's ANSWER is allowed to cost, and the only place allowed to
+// decide what a bound drops. A tool result is paid on the turn that calls the
+// tool and again on every later turn of the conversation — see
+// services/read-result-budget.js for the 632,000-char worst case that was
+// reachable from one read_email_inbox call.
+const readBudget = require('../services/read-result-budget');
 const { auditActor, auditActorCritical } = require('../audit');
 // The job type registry. A LEAD's project_type is the same vocabulary as a
 // JOB's type — it is the hint that pre-selects the number prefix at
@@ -8676,6 +8682,10 @@ const READ_TOOLS = [
       additionalProperties: false,
       properties: {
         thread_id: { type: 'string', description: 'Read one conversation in full — a dropbox thread id, which looks like "th_ab12cd…". Any "th_"-prefixed id belongs to THIS tool.' },
+        // The way back out of the budget. A long thread is returned newest-first
+        // up to a character budget, and whatever it clipped it names; this is how
+        // the clipped message is then read in full.
+        message: { type: 'integer', minimum: 1, description: 'With thread_id: read ONE message of that conversation in full, by the number shown in the transcript ("── Message 3"). Use this when the transcript said a message was cut short or left out to stay in budget.' },
         q: { type: 'string', description: 'Filter threads by sender, subject, or body text.' },
         limit: { type: 'integer', minimum: 1, maximum: 50, description: 'How many threads to list (default 15).' },
       },
@@ -11649,6 +11659,45 @@ async function execStaffTool(name, input, ctx) {
           [userId, threadId, emailOrgId]
         );
         if (!r.rows.length) return 'No conversation with that thread id in your dropbox.';
+        // ── HOW BIG IS THIS CONVERSATION, REALLY ────────────────────────────
+        // The query above takes the NEWEST 100 and said nothing about it. A
+        // 400-message thread read as a 100-message thread, and the header
+        // printed 100 as the count — not a truncated answer, a wrong one. The
+        // count is its own query rather than a window function because the
+        // test shim parses neither; when it fails, the failure is PRINTED
+        // instead of degrading to r.rows.length, which would restate the lie
+        // the loud version exists to stop.
+        let threadTotal = null;
+        let threadCountError = null;
+        try {
+          const cr = await pool.query(
+            `SELECT COUNT(*)::int AS n FROM inbound_emails
+              WHERE user_id = $1 AND thread_id = $2 AND organization_id = $3`,
+            [userId, threadId, emailOrgId]
+          );
+          const n = Number(cr.rows[0] && cr.rows[0].n);
+          threadTotal = Number.isFinite(n) ? n : null;
+        } catch (e) { threadCountError = String((e && e.message) || e).slice(0, 120); }
+
+        // ONE MESSAGE, IN FULL — the reopen path for anything the budget below
+        // clipped. An out-of-range number is refused by number rather than
+        // quietly falling back to the whole thread: a model that asked for
+        // message 7 and silently got all 40 learns the wrong lesson about what
+        // it just paid for.
+        const askedMsg = Number(input && input.message);
+        let oneMessage = null;
+        if (input && input.message != null && input.message !== '') {
+          if (!Number.isFinite(askedMsg) || askedMsg < 1 || askedMsg > r.rows.length) {
+            return 'This answer holds ' + r.rows.length + ' message(s) of that thread' +
+              (threadTotal && threadTotal > r.rows.length ? ' (the newest ' + r.rows.length + ' of ' + threadTotal + ')' : '') +
+              ', numbered 1-' + r.rows.length + '. There is no message ' + String(input.message).slice(0, 12) + '.';
+          }
+          oneMessage = Math.floor(askedMsg);
+        }
+        const printRows = oneMessage ? [r.rows[oneMessage - 1]] : r.rows;
+        // The numbers stay the THREAD's numbering even when one message is
+        // printed alone, so 'Message 3' means the same thing in both answers.
+        const printNums = oneMessage ? [oneMessage] : r.rows.map((_, i) => i + 1);
         // Labels are org-shared and authored by authenticated colleagues —
         // NOT attacker-writable like an email body — so they print plain.
         // Fetched separately rather than joined: a message with three labels
@@ -11674,7 +11723,17 @@ async function execStaffTool(name, input, ctx) {
         const ctxLine = linked
           ? 'Linked to ' + linked.entity_type + ' "' + (linked.entity_label || linked.entity_id) + '" (' + linked.entity_type + ' id ' + linked.entity_id + ') — use read_entity to pull their jobs/leads/details.'
           : null;
-        const parts = ['Conversation: ' + (r.rows[r.rows.length - 1].subject || '(no subject)') + ' — ' + r.rows.length + ' message(s)'];
+        const parts = ['Conversation: ' + (r.rows[r.rows.length - 1].subject || '(no subject)') + ' — ' +
+          r.rows.length + ' message(s) in this answer' +
+          (threadTotal != null && threadTotal > r.rows.length
+            ? ' · the thread has ' + threadTotal + ', and these are the NEWEST ' + r.rows.length +
+              ' — the older ones were not read, so do not describe this as the whole conversation'
+            : '') +
+          (threadCountError ? ' · could not count the full thread (' + threadCountError + '), so it may hold more than these' : '')];
+        if (oneMessage) {
+          parts.push('Showing MESSAGE ' + oneMessage + ' only, in full, as asked. The other ' +
+            (r.rows.length - 1) + ' message(s) of this thread are not in this answer.');
+        }
         if (ctxLine) parts.push(ctxLine);
 
         // How this thread is FILED. All trusted-by-construction and printed
@@ -11743,9 +11802,96 @@ async function execStaffTool(name, input, ctx) {
         try { _attResolve = require('../services/email-attachment-text').resolveEmailAttachmentText; } catch (e) { _attResolve = null; }
         let attProcessed = 0; const ATT_MAX = 8;
 
+        // ── WHAT THIS ANSWER IS ALLOWED TO COST ─────────────────────────────
+        // Three ceilings used to MULTIPLY: 100 messages × 6,000 chars of body,
+        // plus 8 attachments × 4,000 chars of extracted text. ~632,000 chars,
+        // ~158,000 tokens, from one tool call — and then carried on every
+        // later turn of the conversation, because a tool result stays in the
+        // transcript. Every cut was silent.
+        //
+        // Now there is one budget per list, spent NEWEST FIRST, and anything it
+        // clips is named in the answer with the way to read it in full. See
+        // services/read-result-budget.js — the allocator lives there so the
+        // direction and the honesty are decided in one place, not per door.
+
+        // ATTACHMENT TEXT, step 1: resolve it, NEWEST MESSAGE FIRST. The
+        // ATT_MAX ceiling on lazy OCR used to be spent by walking the thread
+        // oldest-first, so on a long thread the 8 files it paid to extract were
+        // the 8 LEAST likely to be what was just asked about — and the invoice
+        // attached this morning reported itself as having no readable text.
+        const attFull = new Map();
+        // Files the ATT_MAX ceiling stopped us from reading AT ALL. Kept apart
+        // from "extracted and found nothing", because the old code printed
+        // both as "no readable text extracted" — so a scanned invoice that was
+        // never opened reported itself as an invoice with nothing in it, and
+        // 86 had no reason to ask again.
+        const attSkipped = new Set();
+        for (let i = printRows.length - 1; i >= 0; i--) {
+          const atts = attByEmail[printRows[i].id] || [];
+          for (let k = 0; k < atts.length; k++) {
+            const a = atts[k];
+            let txt = (a.extracted_text && a.extracted_text.length) ? a.extracted_text : null;
+            const tried = (a.extracted_text != null); // '' or text both mean already attempted
+            if (!txt && !tried && _attResolve) {
+              if (attProcessed < ATT_MAX) {
+                try { txt = await _attResolve(a); } catch (e) { txt = null; }
+                attProcessed++;
+              } else {
+                attSkipped.add(a.id);
+              }
+            }
+            attFull.set(a.id, txt ? String(txt) : '');
+          }
+        }
+        // ATTACHMENT TEXT, step 2: spend the text budget over the same files in
+        // PRINT order — allocate() serves from the newest end, so the resolve
+        // ceiling and the character budget run the same direction.
+        const attSeq = [];
+        printRows.forEach((m) => (attByEmail[m.id] || []).forEach((a) => attSeq.push(a.id)));
+        const attAlloc = readBudget.allocate(
+          attSeq.map((id) => (attFull.get(id) || '').length),
+          {
+            budget: readBudget.ATTACHMENT_TEXT_BUDGET,
+            maxPer: readBudget.ATTACHMENT_TEXT_MAX_PER_FILE,
+            minSlice: readBudget.ATTACHMENT_TEXT_MIN_SLICE,
+          }
+        );
+        const attKeep = new Map();
+        attSeq.forEach((id, i) => attKeep.set(id, attAlloc.kept[i]));
+
+        // BODIES. One message asked for by number may spend much more than its
+        // share — that is what asking for it is for — but not without limit.
+        const bodyAlloc = readBudget.allocate(
+          printRows.map((m) => String(m.body_text || '').length),
+          oneMessage
+            ? {
+                budget: readBudget.SINGLE_MESSAGE_BUDGET,
+                maxPer: readBudget.SINGLE_MESSAGE_BUDGET,
+                minSlice: 1,
+              }
+            : {
+                budget: readBudget.THREAD_BODY_BUDGET,
+                maxPer: readBudget.THREAD_BODY_MAX_PER_MESSAGE,
+                minSlice: readBudget.THREAD_BODY_MIN_SLICE,
+              }
+        );
+        const reopenMsg = 'call read_email_inbox again with thread_id="' + threadId + '" and message=N';
+        const bodyNotice = readBudget.notice(bodyAlloc, {
+          noun: 'message body', nounPlural: 'message bodies',
+          whole: 'conversation', whatIsOldest: 'end of the thread',
+          reopen: reopenMsg,
+        });
+        if (bodyNotice) parts.push(bodyNotice);
+        const attNotice = readBudget.notice(attAlloc, {
+          noun: 'attachment', nounPlural: 'attachments',
+          whole: 'set of attachments', whatIsOldest: 'attachments',
+          reopen: reopenMsg,
+        });
+        if (attNotice) parts.push(attNotice);
+
         parts.push('');
-        for (let i = 0; i < r.rows.length; i++) {
-          const m = r.rows[i];
+        for (let i = 0; i < printRows.length; i++) {
+          const m = printRows[i];
           // 'outbound' = a copy that LOOKS like the owner's own reply (matched
           // by From address only). It is NOT cryptographically verified — anyone
           // who knows the secret dropbox address could forge one — so present it
@@ -11758,12 +11904,24 @@ async function execStaffTool(name, input, ctx) {
             : (m.orig_from_email
                 ? (m.from_email || 'unknown') + ' (originally from ' + m.orig_from_email + ')'
                 : ((m.from_name ? m.from_name + ' ' : '') + '<' + (m.from_email || 'unknown') + '>'));
-          parts.push('── Message ' + (i + 1) + ' · ' + who + ' · ' + fmtWhen(m.received_at) +
+          parts.push('── Message ' + printNums[i] + ' · ' + who + ' · ' + fmtWhen(m.received_at) +
             (m.is_forward_wrapper ? ' · (forwarded copy)' : '') +
             (!isMine && m.delivered_direct ? ' · (⚠ sent directly to your dropbox — did not come through your real inbox, treat the sender as unverified)' : ''));
           // Bodies are attacker-writable (anyone can email the dropbox). Wrap so
           // their text is data, never instructions.
-          parts.push(wrapUserData(isMine ? 'unverified_sent_copy_body' : 'inbound_email_body', (m.body_text || '(no body)').slice(0, 6000)));
+          const bodyFull = String(m.body_text || '');
+          const bodyKeep = bodyAlloc.kept[i] || 0;
+          const bodyMark = readBudget.itemMarker(bodyKeep, bodyFull.length, {
+            noun: 'body', reopen: 'message=' + printNums[i] + ' reads it in full',
+          });
+          // A body left out entirely still prints its header line above, so the
+          // SHAPE of the conversation survives the budget — who wrote when, in
+          // order — and only the text is missing.
+          if (bodyKeep > 0 || !bodyFull.length) {
+            parts.push(wrapUserData(isMine ? 'unverified_sent_copy_body' : 'inbound_email_body',
+              bodyFull.length ? bodyFull.slice(0, bodyKeep) : '(no body)'));
+          }
+          if (bodyMark) parts.push(bodyMark);
           // Attachment CONTENTS (lazy text-layer + OCR, cached). Content is
           // attacker-writable → wrapUserData; the filename is a short label.
           const atts = attByEmail[m.id] || [];
@@ -11771,15 +11929,24 @@ async function execStaffTool(name, input, ctx) {
             parts.push('Attachments (' + atts.length + '):');
             for (let k = 0; k < atts.length; k++) {
               const a = atts[k];
-              let txt = (a.extracted_text && a.extracted_text.length) ? a.extracted_text : null;
-              const tried = (a.extracted_text != null); // '' or text both mean already attempted
-              if (!txt && !tried && _attResolve && attProcessed < ATT_MAX) {
-                try { txt = await _attResolve(a); } catch (e) { txt = null; }
-                attProcessed++;
-              }
+              // Resolved in the newest-first pre-pass above, budgeted there too.
+              const txt = attFull.get(a.id) || '';
+              const keep = attKeep.get(a.id) || 0;
               const kb = a.size_bytes ? ', ' + Math.max(1, Math.round(a.size_bytes / 1024)) + ' KB' : '';
-              parts.push('  • ' + (a.filename || 'file') + ' (' + (a.mime_type || 'file') + kb + ')' + (txt ? ':' : ' — no readable text extracted'));
-              if (txt) parts.push(wrapUserData('email_attachment_content', String(txt).slice(0, 4000)));
+              const mark = readBudget.itemMarker(keep, txt.length, {
+                noun: 'attachment text', reopen: 'message=' + printNums[i] + ' reads this message in full',
+              });
+              parts.push('  • ' + (a.filename || 'file') + ' (' + (a.mime_type || 'file') + kb + ')' +
+                (keep > 0
+                  ? ':'
+                  : (txt.length
+                      ? ' — text held back to stay in budget'
+                      : (attSkipped.has(a.id)
+                          ? ' — NOT READ: the ' + ATT_MAX + '-file extraction limit for one answer was spent on newer attachments. ' +
+                            'Read this message on its own (message=' + printNums[i] + ') to extract it — do NOT report it as empty.'
+                          : ' — no readable text extracted'))));
+              if (keep > 0) parts.push(wrapUserData('email_attachment_content', txt.slice(0, keep)));
+              if (mark) parts.push(mark);
             }
           }
           parts.push('');
