@@ -3099,11 +3099,54 @@ function renderSidebarJobCard(jobIdOverride){
   // reconfirmed 08-02): the job page always shows a metrics ribbon
   // (Total income / Costs / Margin) above this card, and a second copy of
   // the same dollars in a 290px rail is noise, not emphasis.
+  // WHAT THE STRIP SAYS ABOUT THIS JOB.
+  //
+  // Deliberately none of the money: the metrics strip directly above the card
+  // already carries Total Income, Actual and Accrued Costs, % Complete,
+  // Revenue Earned, Gross Profit and Margin. Repeating any of it here would
+  // cost the space and say nothing new. These are the facts that were
+  // nowhere on the head — the ones you would otherwise open Job Information
+  // to read.
+  //
+  // Every one is omitted when absent, so a thin job stays a thin strip
+  // instead of growing a row of em-dashes.
   var _facts=[];
-  var _sd=(job.startDate && window.p86EntityCard.shortDate) ? window.p86EntityCard.shortDate(job.startDate) : '';
-  if(_sd) _facts.push({icon:'calendar', text:_sd});
+  var _fmtDay=function(v){
+    return (v && window.p86EntityCard.shortDate) ? window.p86EntityCard.shortDate(v) : '';
+  };
+  var _sd=_fmtDay(job.startDate), _ed=_fmtDay(job.endDate);
+  // One date fact, as a span when the job has both ends — "Sep 24 → Nov 3"
+  // is the schedule; two separate chips are two numbers to reconcile.
+  if(_sd||_ed) _facts.push({icon:'calendar', text:(_sd&&_ed)?(_sd+' → '+_ed):(_sd||_ed)});
   var _place=[job.city,job.state].filter(Boolean).join(', ');
   if(_place) _facts.push({icon:'map-pin', text:_place});
+  // The job's TYPE as the job carries it (Renovation / Service / Work Order).
+  if(job.jobType) _facts.push({icon:'briefcase', text:String(job.jobType)});
+  if(job.market) _facts.push({icon:'building-community', text:String(job.market)});
+  // WHO RUNS IT. Resolved the way the Jobs list resolves it, falling back to
+  // the job's own text. Nothing is shown when nobody is assigned, rather than
+  // the list's "—" placeholder, which on a strip reads as a broken field.
+  var _pm='';
+  try{
+    if(window.p86Admin && window.p86Admin.findUserById){
+      var _u=window.p86Admin.findUserById(job.owner_id);
+      if(_u && _u.name) _pm=_u.name;
+    }
+  }catch(e){}
+  if(!_pm && job.pm) _pm=String(job.pm);
+  if(_pm) _facts.push({icon:'user', text:_pm});
+  // BUILDERTREND'S OWN WORD, and only when it is Open — the one state worth
+  // showing here, because it is the disagreement: still open over there,
+  // whatever P86 calls it. Closed and Warranty are not news beside a P86
+  // status pill two inches to the left.
+  if(String(job.btStatus||'').trim().toLowerCase()==='open'){
+    _facts.push({icon:'external-link', text:'BT Open'});
+  }
+  // The client's own reference, when Buildertrend carried one across — what a
+  // client says on the phone ("PO 4471"), readable until now only inside Job
+  // Information.
+  var _cpo=(job.clientPoNumber||job.clientWoNumber||'');
+  if(_cpo) _facts.push({icon:'hash', text:String(_cpo)});
 
   // The head slot wants the strip; the sidebar rail wants the column.
   function buildCard(taskVm, asStrip){

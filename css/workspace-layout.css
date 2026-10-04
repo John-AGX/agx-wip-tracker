@@ -1314,7 +1314,8 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
    the behaviour at every width: the head is one line — the job's card across
    it and this at the end — and the three are capability-gated in
    js/workspace-layout.js, which they never were while they sat in the page. */
-.jh-job-more {
+.jh-job-more,
+.p86-head-more {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1328,10 +1329,14 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
   color: var(--text-dim, #9aa0b4);
   cursor: pointer;
 }
-.jh-job-more:hover { color: var(--text, #f5f5f7); }
-.jh-job-more[aria-expanded="true"] { border-color: var(--accent, #4f8cff); color: var(--accent, #4f8cff); }
-.jh-job-actions { display: none; }
-.jh-job-actions.is-open {
+.jh-job-more:hover,
+.p86-head-more:hover { color: var(--text, #f5f5f7); }
+.jh-job-more[aria-expanded="true"],
+.p86-head-more[aria-expanded="true"] { border-color: var(--accent, #4f8cff); color: var(--accent, #4f8cff); }
+.jh-job-actions,
+.p86-head-actions { display: none; }
+.jh-job-actions.is-open,
+.p86-head-actions.is-open {
   display: flex;
   position: fixed;
   right: 8px;
@@ -1346,8 +1351,10 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
   border-radius: 12px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
-body.light-mode .jh-job-actions.is-open { box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18); }
-.jh-job-actions.is-open > button {
+body.light-mode .jh-job-actions.is-open,
+body.light-mode .p86-head-actions.is-open { box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18); }
+.jh-job-actions.is-open > button,
+.p86-head-actions.is-open > button {
   justify-content: flex-start;
   min-height: 38px;
   padding: 0 12px !important;
@@ -1357,10 +1364,12 @@ body.light-mode .jh-job-actions.is-open { box-shadow: 0 12px 32px rgba(15, 23, 4
   border-radius: 8px !important;
   text-align: left;
 }
-.jh-job-actions.is-open > button:hover { background: var(--row-hover, #232329) !important; }
+.jh-job-actions.is-open > button:hover,
+.p86-head-actions.is-open > button:hover { background: var(--row-hover, #232329) !important; }
 /* Delete last and ruled off, so it is never the neighbour of a pointer aimed
    at Archive. */
-.jh-job-actions.is-open > button[onclick*="deleteCurrentJob"] {
+.jh-job-actions.is-open > button[onclick*="deleteCurrentJob"],
+.p86-head-actions.is-open > button[onclick*="delete"] {
   margin-top: 4px;
   border-top: 1px solid var(--border, #2a2a32) !important;
   border-radius: 0 0 8px 8px !important;
@@ -1554,7 +1563,10 @@ body.light-mode .jh-job-actions.is-open { box-shadow: 0 12px 32px rgba(15, 23, 4
    until a card is in it, so the New Lead form (no lead id, no card) keeps the
    header it always had. */
 .ld-head-card { flex: 0 0 0; min-width: 0; }
-.ld-head-card.has-card { flex: 1 1 320px; min-width: 260px; max-width: 460px; }
+/* Spans the header. The pixel basis stays because #ld-header's row ends
+   with a flex:1 spacer that would otherwise take the width and leave the
+   card at zero — which is exactly what it did the first time. */
+.ld-head-card.has-card { flex: 1 1 320px; min-width: 260px; }
 .ld-head-card .app-entitynav { margin: 0; padding: 0; }
 @media (max-width: 760px) {
   .ld-head-card.has-card { flex: 1 1 100%; max-width: none; order: 9; }

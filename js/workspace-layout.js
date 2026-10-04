@@ -721,10 +721,18 @@
         moreBtn.setAttribute('aria-haspopup', 'menu');
         moreBtn.setAttribute('aria-expanded', 'false');
         moreBtn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>';
-        moreBtn.addEventListener('click', function (e) {
-          e.stopPropagation();
-          setJobActionsOpen(!jobActions.classList.contains('is-open'));
-        });
+        // Opening, closing, Escape, a click elsewhere and the drop position
+        // all come from js/head-menu.js — the same control the lead page's
+        // head uses. The fallback keeps the page working if that file is
+        // missing from a stale cache.
+        if (window.p86HeadMenu && window.p86HeadMenu.wire) {
+          window.p86HeadMenu.wire(moreBtn, jobActions);
+        } else {
+          moreBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            setJobActionsOpen(!jobActions.classList.contains('is-open'));
+          });
+        }
         // In the HEAD row now, not the strip: the head is one line — the job's
         // card across it and this at the end — so the actions stopped taking a
         // 36px band of their own on every job page. Hidden entirely when the
@@ -739,11 +747,9 @@
     } catch (e) { /* actions bar is best-effort */ }
   }
 
-  // Open/close the phone job-actions menu. Only a touch phone ever opens it
-  // (jobSubnavIsMobile, the same test that keeps the section strip in the
-  // page); the panel is fixed-position and drops from the strip's bottom
-  // edge, measured at open time because the strip's height follows the
-  // phone's text size.
+  // Open/close the job-actions menu. The shared module (js/head-menu.js) does
+  // this when it is loaded; this stays as the fallback path AND as the entry
+  // point other code calls (setJobActionsOpen(false) on a pick).
   function setJobActionsOpen(open) {
     var bar = document.querySelector('.jh-job-actions');
     var more = document.querySelector('.jh-job-more');

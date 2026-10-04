@@ -2107,7 +2107,13 @@ function p86Ask(message, opts) {
         escapeHTML(sm.label) + '</span>';
     }
     // Delete + Convert buttons only meaningful in edit mode (we have an id).
-    if (delBtn) delBtn.style.display = (l && l.id) ? '' : 'none';
+    // DELETE IS CAPABILITY-GATED, which it was not: the server asks for
+    // LEADS_EDIT (lead-routes.js DELETE /:id), and the button is built here —
+    // after auth's document-wide [data-cap] sweep has already run — so nothing
+    // checked it. Convert and Service Ticket below have always checked.
+    var canDeleteLead = !window.p86Auth || !window.p86Auth.hasCapability ||
+      window.p86Auth.hasCapability('LEADS_EDIT');
+    if (delBtn) delBtn.style.display = (l && l.id && canDeleteLead) ? '' : 'none';
     if (convertBtn && l) {
       var canEditJobs = window.p86Auth && (
         window.p86Auth.hasCapability('JOBS_EDIT_ANY') ||
@@ -2127,6 +2133,23 @@ function p86Ask(message, opts) {
       var canEditLeads = window.p86Auth && window.p86Auth.hasCapability('LEADS_EDIT');
       ticketBtn.style.display = (l && l.id && canEditLeads) ? '' : 'none';
     }
+    wireLeadHeadMenu();
+  }
+
+  // The ⋯ that holds those three. Offered only when at least one of them is
+  // available — a button that opens an empty menu is worse than no button —
+  // and wired through the shared head-menu module (js/head-menu.js), the same
+  // one the job page's head uses.
+  function wireLeadHeadMenu() {
+    var btn = document.getElementById('ld-head-more');
+    var panel = document.querySelector('.ld-head-actions');
+    if (!btn || !panel) return;
+    var any = Array.prototype.some.call(panel.querySelectorAll('button'), function (b) {
+      return b.style.display !== 'none';
+    });
+    btn.style.display = any ? '' : 'none';
+    if (!any && window.p86HeadMenu && btn._p86HeadMenu) btn._p86HeadMenu.close();
+    if (any && window.p86HeadMenu) window.p86HeadMenu.wire(btn, panel);
   }
   window.refreshLeadDetailHeader = refreshLeadDetailHeader;
 

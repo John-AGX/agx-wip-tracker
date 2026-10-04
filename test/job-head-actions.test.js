@@ -121,8 +121,10 @@ describe('the head is the card and that button, nothing else', () => {
     // The menu is display:none until .is-open — the stylesheet, not the markup,
     // is what keeps three buttons out of the row.
     const css = require('fs').readFileSync(require('path').join(__dirname, '..', 'css', 'workspace-layout.css'), 'utf8');
-    expect(css).toMatch(/\n\.jh-job-actions \{ display: none; \}/);
-    expect(css).toMatch(/\n\.jh-job-actions\.is-open \{/);
+    // One rule set for both heads: the lead page's head runs the same control,
+    // so the selectors are shared rather than copied.
+    expect(css).toMatch(/\n\.jh-job-actions,\r?\n\.p86-head-actions \{ display: none; \}/);
+    expect(css).toMatch(/\n\.jh-job-actions\.is-open,\r?\n\.p86-head-actions\.is-open \{/);
     // ...and NOTHING sets display on that element inline. It shipped once with
     // the three buttons still sitting in the head, because buildHeader set
     // style.cssText = "display:flex;…" on this element and an inline display

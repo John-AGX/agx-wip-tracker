@@ -39,7 +39,9 @@
     var wrap = document.createElement('div');
     wrap.id = 'app-' + kind + 'nav';
     wrap.className = 'app-entitynav';
-    wrap.innerHTML = window.p86EntityCard.render(vm || {}, { compact: true });
+    // In a page head the card is a STRIP — one slim line read left to right,
+    // the shape the job's head card uses. In the sidebar it stays a column.
+    wrap.innerHTML = window.p86EntityCard.render(vm || {}, { compact: true, strip: !!headSlot });
     // Delegate every [data-act] control in the card to the host. Listener
     // lives on the wrapper, so a re-mount (which replaces the wrapper)
     // disposes it — no accumulating handlers across repaints.

@@ -253,7 +253,7 @@
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
     <link rel="stylesheet" href="css/styles.css?v=336">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
-    <link rel="stylesheet" href="css/workspace-layout.css?v=75">
+    <link rel="stylesheet" href="css/workspace-layout.css?v=76">
     <link rel="stylesheet" href="css/workspace.css?v=41">
     <!-- Work Orders (1.30): the office ticket editor, Review & approve, crew flags.
          After styles.css and workspace-layout.css so they win at equal specificity. -->
@@ -1721,6 +1721,11 @@
                                          is not the same decision and isn't mine to make.
                                          Create Job survives for the same reason Export did on the
                                          estimate: a real action with no equivalent on this page. -->
+                                    <!-- The lead's actions, behind the one ⋯ button below — the job
+                                         page's arrangement, so the head is the card and nothing else.
+                                         Each button keeps its own id and visibility rule; what changed
+                                         is where they are. -->
+                                    <div class="ld-head-actions p86-head-actions">
                                     <button class="ee-btn danger" id="ld-delete-btn" style="display:none;" onclick="deleteLeadFromEditor()" title="Delete this lead (cannot be undone)">&#x1F5D1; Delete</button>
                                     <!-- Raise a work order during the pursuit — a survey, a service
                                          call, a site visit. Hidden until the lead is SAVED (a ticket
@@ -1730,6 +1735,10 @@
                                          there without a second divergent wiring list. -->
                                     <button class="ee-btn secondary" id="ld-ticket-btn" style="display:none;" onclick="window.p86ServiceTickets && window.p86ServiceTickets.createForLead()" data-cap="LEADS_EDIT" title="Raise a service ticket on this lead">&#x1F527; Service Ticket</button>
                                     <button class="ee-btn success" id="ld-convert-btn" style="display:none;" onclick="startLeadConvert()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Turn this lead into a job, a service ticket or a work order">&#x1F3D7; Convert&hellip;</button>
+                                    </div>
+                                    <button type="button" class="ld-head-more p86-head-more" id="ld-head-more" title="Lead actions" aria-label="Lead actions" style="display:none;">
+                                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+                                    </button>
                                     <span class="p86-ask86-mount"></span>
                                 </div>
                                 <div id="ld-status-msg" style="font-size:12px;min-height:14px;color:var(--text-dim,#888);"></div>
@@ -3647,7 +3656,7 @@
          leads.js, which delegates its weather host to it. -->
     <script src="js/site-conditions.js?v=2"></script>
     <script src="js/bt-badge.js?v=5"></script>
-    <script src="js/leads.js?v=110"></script>
+    <script src="js/leads.js?v=111"></script>
     <script src="js/job-costs-import.js?v=19"></script>
     <script src="js/qb-costs-view.js?v=26"></script>
     <script src="js/insights.js?v=14"></script>
@@ -3658,7 +3667,9 @@
          Loads before its callers (entities-map.js, workspace-layout.js). -->
     <script src="js/entity-card.js?v=13"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
-    <script src="js/entity-subnav.js?v=4"></script>
+    <!-- One menu implementation for every detail-page head (job, lead). -->
+    <script src="js/head-menu.js?v=1"></script>
+    <script src="js/entity-subnav.js?v=5"></script>
     <!-- The pure decision core of the job/estimate save path. MUST load before
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
@@ -3870,7 +3881,7 @@
 
     <script src="js/workspace.js?v=56"></script>
     <script src="js/workspace-gc.js?v=1"></script>
-    <script src="js/workspace-layout.js?v=117"></script>
+    <script src="js/workspace-layout.js?v=118"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
@@ -4141,7 +4152,7 @@
     </div>
     <script src="nodegraph/engine.js?v=126"></script>
     <script src="js/cost-buckets.js?v=6"></script>
-    <script src="nodegraph/ui.js?v=343"></script>
+    <script src="nodegraph/ui.js?v=344"></script>
     <!-- Ribbon popovers (Layers / More) + layer visibility persistence.
          Loads after ui.js; only owns the popover chrome — the moved
          ribbon buttons stay wired by ui.js itself. -->
