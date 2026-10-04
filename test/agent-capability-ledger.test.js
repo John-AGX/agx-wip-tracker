@@ -110,11 +110,24 @@ function scan() {
 //     Either register it or stop promising it.
 //
 //   read_change_orders, read_project_photos, view_attachment_image / baseline:scribe
-//     The Scribe holds exactly ONE tool. These three sentences have never been
-//     actionable. Either the Scribe gets reads, or the instructions go. Note
-//     the Scribe is scheduled to retire LAST of the three agents, so "the
-//     instructions go" is probably right — but that is a decision, and this
-//     suite's job is to make sure it is made rather than forgotten.
+//     THE INSTRUCTIONS GO. Not a toss-up, and the measurement is why: the
+//     Scribe's baseline is 22,536 chars — the LARGEST of the three, against
+//     job's 20,858 and the Assistant's 12,537 — while it holds exactly ONE
+//     tool, emit_payload_file. And driveScribeWrite opens a BRAND-NEW managed
+//     session per write (sessions.create at ai-routes.js:15368), so unlike
+//     every other agent it pays cache_creation on that whole prefix EVERY
+//     WRITE and amortizes nothing. Registering reads here would grow the one
+//     prefix in the system that is re-paid per unit of work; it is the single
+//     place in this codebase where adding a tool is strictly backwards.
+//     The direction of travel is the opposite: execQuickWrite (:15689) already
+//     reaches execEmitPayloadFile directly with no model turn and no session,
+//     so the destination is more of the write surface moving THERE, not the
+//     Scribe acquiring reads.
+//     Measure before deleting, though — one prefix-probe run with
+//     agentKey='scribe' (admin-agents-routes.js:5472 already accepts it, zero
+//     new code). The per-write figure quoted in the planning docs is a
+//     chars-ratio estimate, and this program has been wrong three times from
+//     exactly that kind of number.
 const GRANDFATHERED = new Set([
   'baseline:assistant|emit_payload_file',
   'baseline:job|read_purchase_history',

@@ -3418,20 +3418,59 @@ router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'
     if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
     const baseline = AGENT_SYSTEM_BASELINE[key];
 
+    // FOUR DEFECTS, all in one create, all of them silent. This route is the
+    // "force a fresh agent" button, so each one shipped a WORSE agent than the
+    // one it replaced — and beta.agents has archive and NO delete, so there is
+    // no undo.
+    //
+    //   1. model: aiInternals.defaultModel() — the GLOBAL default, not the
+    //      per-agent one. Reregistering the scribe or the assistant silently
+    //      promoted it onto 86's model. The comment at :3036 claims the
+    //      per-agent model is "routed through every agents.create /
+    //      agents.update site"; it was not routed through this one.
+    //   2. system: baseline — the PLATFORM baseline only. So a reregistered 86
+    //      lost org.identity_body, every org_memory row and the reference-sheet
+    //      index: the one agent that composes org content, reregistered into
+    //      the one state where it has none.
+    //   3. no mcp_servers — permanently dropping the org's MCP connectors,
+    //      with no delete to recover by.
+    //   4. name: 'Project 86 ' + KEY — ignoring managedAgentName, so a
+    //      multi-tenant deployment got identically-named agents.
+    //
+    // Mirrors ensureManagedAgent's payload exactly (:3362-3371). The two are
+    // still two call sites rather than one builder, which is why the test
+    // beside this asserts that every create and update in this file carries
+    // mcp_servers — the invariant is enforced even though the duplication
+    // remains.
+    const orgRow = await pool.query(
+      'SELECT id, slug, name, description, identity_body FROM organizations WHERE id = $1',
+      [req.orgId]
+    );
+    if (!orgRow.rows.length) {
+      return res.status(409).json({ error: 'Organization not found for this request.' });
+    }
+    const organization = orgRow.rows[0];
+
     const aiInternals = require('./ai-routes-internals');
-    const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-opus-4-8';
-    const skills = await collectSkillsFor(key);
+    const model = modelForAgentKey(key);
+    const skills = await collectSkillsFor(key, organization);
     const customTools = customToolsFor(key);
     const builtinTools = builtinToolsetFor(key);
+    const mcpServers = await collectMcpServersFor(organization);
+    const composedSystem = (aiInternals && aiInternals.composedAgentSystem)
+      ? await aiInternals.composedAgentSystem(key, baseline, organization)
+      : baseline;
 
-    const created = await anthropic.beta.agents.create({
+    const createPayload = {
       model: model,
-      name: 'Project 86 ' + key.toUpperCase(),
-      description: baseline.slice(0, 200),
-      system: baseline,
+      name: managedAgentName(key, organization),
+      description: (organization.description || baseline).slice(0, 200),
+      system: composedSystem,
       skills: skills,
       tools: [...builtinTools, ...customTools]
-    });
+    };
+    if (mcpServers.length) createPayload.mcp_servers = mcpServers;
+    const created = await anthropic.beta.agents.create(createPayload);
 
     // Replace the registry row in place. The OLD anthropic_agent_id
     // is left active on Anthropic's side (sessions bound to it keep
@@ -4975,11 +5014,21 @@ async function resyncDriftedAgents(force) {
           // admin's sync-all endpoint handles that.
           continue;
         }
+        // mcp_servers on the BASE, so both the full push below and the
+        // tools-rejected fallback carry them. This is the worst of the four
+        // sites that omitted them: the other three need somebody to press
+        // something, and this one is a 15-minute background tick. An
+        // agents.update mints a new immutable version from the payload it is
+        // handed, and there is no beta.agents.delete — so an unattended sweep
+        // was the one path that could drop an org's connectors with nobody
+        // present to notice.
+        const mcpServers = await collectMcpServersFor(org);
         const baseUpdate = Object.assign(
           // name included: without it a rename could never land, however many
           // times the sweep ran.
           { version: remote.version, system: composed, name: agentName },
-          model ? { model } : {}
+          model ? { model } : {},
+          mcpServers.length ? { mcp_servers: mcpServers } : {}
         );
         // Defense-in-depth: a single malformed tool entry must never block the
         // system+model sync (that failure mode — a bare code_execution entry the
@@ -5833,17 +5882,29 @@ router.post('/managed/sync-all',
         const composedSystem = (aiInternals && aiInternals.composedAgentSystem)
           ? await aiInternals.composedAgentSystem(agentKey, baseline, org)
           : baseline;
+        // NEITHER branch below carried these, and this is the route that gets
+        // run after every tool, baseline or skill change — so the connector
+        // loss was not an edge case reachable by an archived row, it was on the
+        // routine path. Every agents.update mints a new immutable version from
+        // the payload it is given, which is why the single-agent sync at :5356
+        // already adds mcp_servers to its updatePayload; this one did not.
+        // Included in both branches: if omission turns out not to clear them,
+        // passing them costs nothing, and if it does, this is a connector loss
+        // on every sync with no beta.agents.delete to recover by.
+        const mcpServers = await collectMcpServersFor(org);
 
         const remote = await anthropic.beta.agents.retrieve(agentId);
         if (remote.archived_at) {
-          const created = await anthropic.beta.agents.create({
+          const createPayload = {
             model: model,
             name: name,
             description: description,
             system: composedSystem,
             skills: skills,
             tools: toolList
-          });
+          };
+          if (mcpServers.length) createPayload.mcp_servers = mcpServers;
+          const created = await anthropic.beta.agents.create(createPayload);
           await pool.query(
             `UPDATE managed_agent_registry
                 SET anthropic_agent_id = $3,
@@ -5869,7 +5930,7 @@ router.post('/managed/sync-all',
         }
 
         const currentVersion = remote.version;
-        const updated = await anthropic.beta.agents.update(agentId, {
+        const updatePayload = {
           version: currentVersion,
           name: name,
           description: description,
@@ -5877,7 +5938,9 @@ router.post('/managed/sync-all',
           system: composedSystem,
           skills: skills,
           tools: toolList
-        });
+        };
+        if (mcpServers.length) updatePayload.mcp_servers = mcpServers;
+        const updated = await anthropic.beta.agents.update(agentId, updatePayload);
 
         // Record this manual sync against the throttle map (same two-hash shape
         // the background sweep uses) so the 15-min tick sees system+tools
