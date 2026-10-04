@@ -491,7 +491,7 @@
           return /^image\//.test(a.mime_type || '');
         })[0];
         var img = hero ? (hero.web_url || hero.original_url) : '';
-        return '<section class="doc-cover"' + (img ? ' style="background-image:linear-gradient(180deg,rgba(15,35,70,.55),rgba(15,35,70,.88)),url(\'' + escapeAttrLocal(img) + '\');"' : '') + '>' +
+        return '<section class="doc-cover"' + (img ? ' style="background-image:linear-gradient(180deg,rgba(0,63,81,.55),rgba(0,63,81,.90)),url(\'' + escapeAttrLocal(img) + '\');"' : '') + '>' +
           '<img class="cover-logo" src="' + escapeAttrLocal(docLogoSrc()) + '" alt="Logo" />' +
           '<h1 class="cover-title">' + escapeHTMLLocal(estimate.community || estimate.title || 'Proposal') + '</h1>' +
           '<div class="cover-sub">' + escapeHTMLLocal(estimate.title || '') + '</div>' +
@@ -785,7 +785,9 @@
               ? ' <span class="agx-sec-amt">— ' + escapeHTMLLocal(fmtProposalCurrency(sec.amount)) + '</span>'
               : '') +
             '</h3>';
-          out += sec.bodyHTML || '<p class="doc-muted">Scope not entered for this section.</p>';
+          out += '<div class="agx-sec-body">' +
+            (sec.bodyHTML || '<p class="doc-muted">Scope not entered for this section.</p>') +
+            '</div>';
         });
         return out || '<p class="doc-muted">Scope of work not yet entered.</p>';
       },
@@ -1395,45 +1397,65 @@
       // the title, and right-aligned Total Price on its own visual
       // line (no top border — the divider above the heading carries
       // the separation).
-      '.p86-proposal { font-family: Arial, Helvetica, sans-serif; color: #222; font-size: 11pt; line-height: 1.5; max-width: 8.5in; margin: 0 auto; padding: 0.55in 0.6in 0.6in; background: #fff; box-shadow: 0 2px 18px rgba(0,0,0,0.4); }' +
+      // THE PALETTE, MEASURED OFF THE SIGNED PROPOSAL. Every value below was
+      // read out of the reference PDF's own content streams — text colours,
+      // the filled table header band, its hairline weight — rather than picked
+      // by eye, so the printed document and the app agree on what AGX looks
+      // like. (Its typeface is Liberation Sans, metric-identical to Arial,
+      // which is why the stack below is unchanged and the difference was never
+      // the font: it was the colour and the table treatment.)
+      //
+      // These live on .p86-proposal so EVERY layout inherits them — the point
+      // of the pass was that the templates line up with each other, not that
+      // one of them looks good alone.
+      '.p86-proposal { --ink: #202020; --navy: #003f51; --teal: #3a8878; --muted: #7f8591; ' +
+        '--foot: #8b909b; --hair: #c9d4d8; --rule: #9aa5ab; --panel: #f1f5f6; }' +
+      '.p86-proposal { font-family: Arial, Helvetica, sans-serif; color: var(--ink); font-size: 10pt; line-height: 1.45; max-width: 8.5in; margin: 0 auto; padding: 0.55in 0.6in 0.6in; background: #fff; box-shadow: 0 2px 18px rgba(0,0,0,0.4); }' +
+      // Numerals align in a column without going monospace-technical: the
+      // reference sets money in the body face.
+      '.p86-proposal .c-money, .p86-proposal .c-qty { font-variant-numeric: tabular-nums; }' +
+      // Ordered lists everywhere take the teal numeral the reference uses.
+      '.p86-proposal ol > li::marker { color: var(--teal); font-weight: 700; }' +
       '.p86-proposal .proposal-header { text-align: center; margin-bottom: 6px; }' +
       '.p86-proposal .proposal-header img { height: 70px; display: block; margin: 0 auto 4px; }' +
-      '.p86-proposal .company-line { font-size: 10pt; color: #222; letter-spacing: 0.2px; margin-top: 4px; }' +
+      '.p86-proposal .company-line { font-size: 9pt; color: var(--muted); letter-spacing: 0.2px; margin-top: 4px; }' +
       '.p86-proposal .proposal-meta { display: flex; justify-content: space-between; gap: 30px; margin: 28px 0 8px; font-size: 10pt; }' +
       '.p86-proposal .meta-left { flex: 1; line-height: 1.45; }' +
       '.p86-proposal .meta-left > div { margin: 0; }' +
       '.p86-proposal .meta-right { text-align: right; flex: 0 0 auto; min-width: 200px; font-size: 10pt; line-height: 1.45; }' +
       '.p86-proposal .meta-right > div { margin: 0; }' +
-      '.p86-proposal .meta-label { font-weight: 700; color: #222; }' +
+      '.p86-proposal .meta-label { font-weight: 700; color: var(--navy); }' +
       '.p86-proposal .meta-print-date { margin-top: 4px; }' +
-      '.p86-proposal .proposal-title { font-size: 18pt; font-weight: 700; color: #222; margin: 26px 0 18px; line-height: 1.2; }' +
-      '.p86-proposal .intro, .p86-proposal .about { margin: 14px 0; text-align: left; font-size: 11pt; line-height: 1.55; }' +
+      '.p86-proposal .proposal-title { font-size: 15pt; font-weight: 700; color: var(--navy); margin: 22px 0 16px; line-height: 1.22; }' +
+      '.p86-proposal .intro, .p86-proposal .about { margin: 12px 0; text-align: left; font-size: 10pt; line-height: 1.5; }' +
       '.p86-proposal .about { margin-bottom: 22px; }' +
-      '.p86-proposal .divider { border: none; border-top: 1px solid #c8c8c8; margin: 18px 0 22px; }' +
-      '.p86-proposal .section-heading { font-size: 13pt; font-weight: 700; color: #222; margin: 18px 0 10px; }' +
-      '.p86-proposal .italic-heading { font-style: italic; font-size: 11pt; margin: 18px 0 10px; }' +
+      '.p86-proposal .divider { border: none; border-top: 1px solid var(--hair); margin: 16px 0 20px; }' +
+      // Section headings: navy, 10.5pt, with a hairline under them. The rule is
+      // what stops a page of 10pt body text reading as one grey slab.
+      '.p86-proposal .section-heading { font-size: 10.5pt; font-weight: 700; color: var(--navy); margin: 20px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--hair); letter-spacing: 0.2px; page-break-after: avoid; break-after: avoid; }' +
+      '.p86-proposal .italic-heading { font-style: italic; font-size: 10pt; color: var(--navy); margin: 20px 0 8px; }' +
       '.p86-proposal .scope-text { margin: 6px 0 10px; }' +
-      '.p86-proposal .scope-text p { margin: 2px 0; font-size: 10.5pt; line-height: 1.5; }' +
+      '.p86-proposal .scope-text p { margin: 2px 0; font-size: 10pt; line-height: 1.5; }' +
       // Total block — right-aligned on its own visual row. The
       // divider above the Assumptions heading handles the rule, so
       // no border on the total itself.
-      '.p86-proposal .total-block { text-align: right; font-size: 15pt; font-weight: 700; color: #222; margin: 8px 0 22px; }' +
-      '.p86-proposal .total-block .total-label { color: #222; margin-right: 8px; }' +
+      '.p86-proposal .total-block { text-align: right; font-size: 13pt; font-weight: 700; color: var(--navy); margin: 8px 0 20px; }' +
+      '.p86-proposal .total-block .total-label { color: var(--navy); margin-right: 8px; }' +
       // Numbered exclusions: indented list, items spaced out so the
       // wrapped lines read as paragraphs rather than dense bullets.
       '.p86-proposal .exclusions { padding-left: 26px; margin: 10px 0 22px; }' +
-      '.p86-proposal .exclusions li { margin: 10px 0; font-size: 10.5pt; text-align: left; line-height: 1.5; padding-left: 4px; }' +
+      '.p86-proposal .exclusions li { margin: 8px 0; font-size: 9pt; text-align: left; line-height: 1.5; padding-left: 4px; }' +
       '.p86-proposal .exclusions li ul { padding-left: 20px; margin: 6px 0; }' +
       '.p86-proposal .exclusions li ul li { margin: 6px 0; font-size: 10.5pt; }' +
       '.p86-proposal .sig-intro { margin-top: 26px; font-size: 10pt; }' +
       '.p86-proposal .sig-block { margin-top: 18px; }' +
       '.p86-proposal .sig-row { display: flex; align-items: center; gap: 14px; margin: 22px 0; font-size: 10pt; }' +
       '.p86-proposal .sig-label { font-weight: 700; min-width: 90px; }' +
-      '.p86-proposal .sig-line { flex: 1; border-bottom: 1.5px solid #333; height: 0; }' +
+      '.p86-proposal .sig-line { flex: 1; border-bottom: 1px solid var(--rule); height: 0; }' +
       '.p86-proposal .attached-photos { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 10px 0 18px; }' +
-      '.p86-proposal .attached-photo { margin: 0; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; background: #fafafa; page-break-inside: avoid; }' +
+      '.p86-proposal .attached-photo { margin: 0; border: 1px solid var(--hair); border-radius: 3px; overflow: hidden; background: var(--panel); page-break-inside: avoid; }' +
       '.p86-proposal .attached-photo img { width: 100%; height: auto; display: block; }' +
-      '.p86-proposal .attached-photo figcaption { padding: 4px 8px; font-size: 9pt; color: #555; background: #f3f4f6; border-top: 1px solid #e5e7eb; word-break: break-all; }' +
+      '.p86-proposal .attached-photo figcaption { padding: 4px 8px; font-size: 8pt; color: var(--muted); background: var(--panel); border-top: 1px solid var(--hair); word-break: break-all; }' +
       '.p86-proposal .attached-docs { padding-left: 22px; margin: 6px 0 18px; font-size: 10pt; }' +
       '.p86-proposal .attached-docs li { margin: 4px 0; }' +
       '.p86-proposal .attached-docs a { color: #0b5fff; text-decoration: underline; }' +
@@ -1443,91 +1465,94 @@
       // section labels, disclaimer — get unique selectors.
       '.p86-proposal.p86-takeoff .takeoff-disclaimer { background: #fff8e1; border-left: 3px solid #d97706; padding: 10px 12px; margin: 12px 0 14px; font-size: 10pt; line-height: 1.45; color: #4a3500; }' +
       '.p86-proposal.p86-takeoff .takeoff-disclaimer strong { color: #b45309; letter-spacing: 0.3px; }' +
-      '.p86-proposal.p86-takeoff .takeoff-subheading { font-size: 11pt; font-weight: 700; color: #333; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.4px; }' +
+      '.p86-proposal.p86-takeoff .takeoff-subheading { font-size: 10pt; font-weight: 700; color: var(--navy); margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.8px; }' +
       '.p86-proposal.p86-takeoff .takeoff-section { margin: 8px 0 14px; page-break-inside: avoid; }' +
-      '.p86-proposal.p86-takeoff .takeoff-section-name { font-size: 10.5pt; font-weight: 700; color: #222; margin: 10px 0 4px; padding: 4px 8px; background: #f3f4f6; border-left: 3px solid #4f8cff; }' +
+      '.p86-proposal.p86-takeoff .takeoff-section-name { font-size: 10pt; font-weight: 700; color: var(--navy); margin: 10px 0 4px; padding: 5px 9px; background: var(--panel); border-left: 3px solid var(--teal); }' +
       '.p86-proposal.p86-takeoff .takeoff-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 10pt; }' +
-      '.p86-proposal.p86-takeoff .takeoff-table th, .p86-proposal.p86-takeoff .takeoff-table td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }' +
-      '.p86-proposal.p86-takeoff .takeoff-table th { text-align: left; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.5px; color: #555; background: #fafafa; border-bottom: 1px solid #d1d5db; }' +
+      '.p86-proposal.p86-takeoff .takeoff-table th, .p86-proposal.p86-takeoff .takeoff-table td { padding: 6px 9px; border-bottom: 1px solid var(--hair); vertical-align: top; }' +
+      '.p86-proposal.p86-takeoff .takeoff-table th { text-align: left; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.9px; color: #fff; background: var(--navy); border-bottom: none; }' +
       '.p86-proposal.p86-takeoff .takeoff-table .col-desc { width: auto; }' +
-      '.p86-proposal.p86-takeoff .takeoff-table .col-qty { width: 80px; text-align: right; font-family: "SF Mono", Consolas, monospace; }' +
-      '.p86-proposal.p86-takeoff .takeoff-table .col-unit { width: 80px; text-align: left; color: #555; }' +
+      '.p86-proposal.p86-takeoff .takeoff-table .col-qty { width: 80px; text-align: right; font-variant-numeric: tabular-nums; }' +
+      '.p86-proposal.p86-takeoff .takeoff-table .col-unit { width: 80px; text-align: left; color: var(--muted); }' +
       '.p86-proposal.p86-takeoff .takeoff-group { margin-bottom: 18px; }' +
       // ── Layout structure ─────────────────────────────────────────────
       // Structural CSS for the section builders. Everything here is scoped
       // under .p86-proposal so it inherits the same Arial/11pt/letter-paper
       // body as the original document — a layout changes the SKELETON, never
-      // the AGX look. Colors stay in the existing palette (#0f2346 navy,
-      // #4f8cff accent, #d97706 warning) so any layout prints as one family.
-      '.p86-proposal .doc-band { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 2px solid #0f2346; padding-bottom: 10px; margin-bottom: 6px; }' +
+      // the AGX look. Every colour below is a palette token (above), measured
+      // off the signed proposal, so all seven layouts print as one family
+      // rather than as one good document and six near-misses.
+      '.p86-proposal .doc-band { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1.5px solid var(--navy); padding-bottom: 10px; margin-bottom: 6px; }' +
       '.p86-proposal .doc-band .band-logo { height: 52px; width: auto; }' +
-      '.p86-proposal .doc-band .band-meta { text-align: right; font-size: 9.5pt; line-height: 1.6; color: #333; }' +
-      '.p86-proposal .doc-label { display: inline-block; min-width: 62px; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.6px; color: #6b7280; }' +
-      '.p86-proposal .doc-licence { font-size: 9pt; color: #6b7280; margin: 0 0 14px; }' +
+      '.p86-proposal .doc-band .band-meta { text-align: right; font-size: 9pt; line-height: 1.6; color: var(--ink); }' +
+      '.p86-proposal .doc-label { display: inline-block; min-width: 62px; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--navy); }' +
+      '.p86-proposal .doc-licence { font-size: 8pt; color: var(--muted); letter-spacing: 0.4px; margin: 0 0 14px; }' +
 
       // Cover page — the hero image is a background so a missing or slow
       // attachment degrades to flat navy instead of a broken <img>.
-      '.p86-proposal .doc-cover { background: #0f2346; color: #fff; background-size: cover; background-position: center; padding: 54px 40px 44px; margin: -0.55in -0.6in 26px; text-align: center; page-break-after: avoid; }' +
+      '.p86-proposal .doc-cover { background: var(--navy); color: #fff; background-size: cover; background-position: center; padding: 54px 40px 44px; margin: -0.55in -0.6in 26px; text-align: center; page-break-after: avoid; }' +
       '.p86-proposal .doc-cover .cover-logo { height: 60px; margin: 0 auto 22px; display: block; filter: brightness(0) invert(1); }' +
       '.p86-proposal .doc-cover .cover-title { font-size: 24pt; font-weight: 700; line-height: 1.2; margin: 0 0 8px; color: #fff; border: 0; padding: 0; }' +
       '.p86-proposal .doc-cover .cover-sub { font-size: 12pt; color: rgba(255,255,255,0.86); margin-bottom: 22px; }' +
       '.p86-proposal .doc-cover .cover-meta { display: flex; justify-content: center; flex-wrap: wrap; gap: 18px; font-size: 9.5pt; color: rgba(255,255,255,0.75); border-top: 1px solid rgba(255,255,255,0.25); padding-top: 14px; }' +
-      '.p86-proposal .doc-rfp-cover { border-bottom: 2px solid #0f2346; padding-bottom: 14px; margin-bottom: 18px; }' +
+      '.p86-proposal .doc-rfp-cover { border-bottom: 1.5px solid var(--navy); padding-bottom: 14px; margin-bottom: 18px; }' +
       '.p86-proposal .doc-rfp-cover .band-logo { height: 52px; margin-bottom: 12px; }' +
 
       // Key/value project block — the "who and what" table every bid carries.
       '.p86-proposal .doc-kv { width: 100%; border-collapse: collapse; margin: 0 0 18px; font-size: 10pt; }' +
-      '.p86-proposal .doc-kv td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }' +
-      '.p86-proposal .doc-kv td:first-child { width: 170px; color: #6b7280; text-transform: uppercase; font-size: 8.5pt; letter-spacing: 0.5px; }' +
+      '.p86-proposal .doc-kv td { padding: 6px 9px; border-bottom: 1px solid var(--hair); vertical-align: top; }' +
+      '.p86-proposal .doc-kv td:first-child { width: 170px; color: var(--navy); font-weight: 700; text-transform: uppercase; font-size: 8pt; letter-spacing: 1px; }' +
       '.p86-proposal .doc-servicemeta { font-size: 10pt; line-height: 1.7; margin-bottom: 14px; }' +
 
       // Shared priced table — SOV, base bid, alternates, unit prices and every
       // takeoff level all render through this one chassis so a client reading
       // two AGX documents side by side sees one table, not two.
       '.p86-proposal .doc-table { width: 100%; border-collapse: collapse; margin: 0 0 16px; font-size: 10pt; }' +
-      '.p86-proposal .doc-table th, .p86-proposal .doc-table td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }' +
-      '.p86-proposal .doc-table th { text-align: left; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.5px; color: #555; background: #fafafa; border-bottom: 1px solid #d1d5db; }' +
-      '.p86-proposal .doc-table .c-no { width: 46px; color: #6b7280; font-family: "SF Mono", Consolas, monospace; }' +
+      '.p86-proposal .doc-table th, .p86-proposal .doc-table td { padding: 6px 9px; border-bottom: 1px solid var(--hair); vertical-align: top; }' +
+      // The header band is the single biggest difference between the reference
+      // document and a plain HTML table: navy fill, white uppercase label.
+      '.p86-proposal .doc-table th { text-align: left; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.9px; color: #fff; background: var(--navy); border-bottom: none; padding: 7px 9px; }' +
+      '.p86-proposal .doc-table .c-no { width: 46px; color: var(--teal); font-weight: 700; }' +
       '.p86-proposal .doc-table .c-desc { width: auto; }' +
-      '.p86-proposal .doc-table .c-sec { width: 130px; color: #555; }' +
-      '.p86-proposal .doc-table .c-qty { width: 74px; text-align: right; font-family: "SF Mono", Consolas, monospace; }' +
-      '.p86-proposal .doc-table .c-unit { width: 74px; color: #555; }' +
-      '.p86-proposal .doc-table .c-money { width: 108px; text-align: right; font-family: "SF Mono", Consolas, monospace; white-space: nowrap; }' +
+      '.p86-proposal .doc-table .c-sec { width: 130px; color: var(--muted); }' +
+      '.p86-proposal .doc-table .c-qty { width: 74px; text-align: right; }' +
+      '.p86-proposal .doc-table .c-unit { width: 74px; color: var(--muted); }' +
+      '.p86-proposal .doc-table .c-money { width: 112px; text-align: right; white-space: nowrap; }' +
       '.p86-proposal .doc-table .c-check { width: 34px; text-align: center; }' +
       // Write-in columns the estimate model cannot fill (spec, notes). A ruled
       // blank cell tells the reader it is theirs to complete; an empty one just
       // looks like missing data.
-      '.p86-proposal .doc-table .c-write { width: 118px; border-bottom: 1px solid #e5e7eb; background: repeating-linear-gradient(180deg, transparent, transparent 90%, #e5e7eb 90%, #e5e7eb 100%); }' +
-      '.p86-proposal .doc-table .grp-row td { background: #0f2346; color: #fff; font-weight: 700; font-size: 9.5pt; letter-spacing: 0.4px; padding: 6px 8px; }' +
-      '.p86-proposal .doc-table .sec-row td { background: #f3f4f6; font-weight: 700; font-size: 9pt; color: #333; border-left: 3px solid #4f8cff; }' +
-      '.p86-proposal .doc-table .sub-row td { font-weight: 700; background: #fafafa; border-top: 1px solid #d1d5db; border-bottom: 1px solid #d1d5db; }' +
-      '.p86-proposal .doc-table .tot-row td { font-weight: 700; font-size: 11pt; border-top: 2px solid #0f2346; border-bottom: none; }' +
-      '.p86-proposal .doc-table .asm-child td { color: #555; font-style: italic; background: #fcfcfd; }' +
+      '.p86-proposal .doc-table .c-write { width: 118px; border-bottom: 1px solid var(--hair); background: repeating-linear-gradient(180deg, transparent, transparent 90%, var(--hair) 90%, var(--hair) 100%); }' +
+      '.p86-proposal .doc-table .grp-row td { background: var(--navy); color: #fff; font-weight: 700; font-size: 9.5pt; letter-spacing: 0.4px; padding: 6px 9px; }' +
+      '.p86-proposal .doc-table .sec-row td { background: var(--panel); font-weight: 700; font-size: 9pt; color: var(--navy); border-left: 3px solid var(--teal); }' +
+      '.p86-proposal .doc-table .sub-row td { font-weight: 700; background: var(--panel); border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair); }' +
+      '.p86-proposal .doc-table .tot-row td { font-weight: 700; font-size: 10.5pt; color: var(--navy); background: var(--panel); border-top: 1.2px solid var(--navy); border-bottom: none; padding: 8px 9px; }' +
+      '.p86-proposal .doc-table .asm-child td { color: var(--muted); font-style: italic; background: #fbfdfd; }' +
       '.p86-proposal .doc-table .asm-parent td { font-weight: 600; }' +
-      '.p86-proposal .doc-table .doc-empty { color: #9ca3af; font-style: italic; text-align: center; padding: 12px 8px; }' +
+      '.p86-proposal .doc-table .doc-empty { color: var(--muted); font-style: italic; text-align: center; padding: 12px 8px; }' +
       '.p86-proposal .matrix-table th { text-align: right; }' +
       '.p86-proposal .matrix-table th:first-child { text-align: left; }' +
-      '.p86-proposal .doc-box { display: inline-block; width: 11px; height: 11px; border: 1px solid #6b7280; border-radius: 2px; vertical-align: middle; }' +
+      '.p86-proposal .doc-box { display: inline-block; width: 11px; height: 11px; border: 1px solid var(--rule); border-radius: 2px; vertical-align: middle; }' +
 
       // Option tiers — three cards across, one flagged as the recommendation.
       // Grid so 2, 3 or 4 options all lay out without a per-count rule.
       '.p86-proposal .tier-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin: 18px 0 22px; }' +
-      '.p86-proposal .tier { border: 1px solid #d1d5db; border-radius: 8px; padding: 16px 14px; page-break-inside: avoid; position: relative; }' +
-      '.p86-proposal .tier-rec { border: 2px solid #0f2346; box-shadow: 0 2px 10px rgba(15,35,70,0.12); }' +
-      '.p86-proposal .tier-badge { position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: #0f2346; color: #fff; font-size: 7.5pt; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; padding: 3px 10px; border-radius: 10px; white-space: nowrap; }' +
-      '.p86-proposal .tier-name { font-size: 12pt; font-weight: 700; color: #0f2346; margin-bottom: 4px; }' +
-      '.p86-proposal .tier-price { font-size: 17pt; font-weight: 700; color: #222; font-family: "SF Mono", Consolas, monospace; margin-bottom: 10px; }' +
-      '.p86-proposal .tier-body { font-size: 9.5pt; line-height: 1.5; color: #444; }' +
+      '.p86-proposal .tier { border: 1px solid var(--hair); border-radius: 4px; padding: 16px 14px; page-break-inside: avoid; position: relative; }' +
+      '.p86-proposal .tier-rec { border: 1.5px solid var(--teal); box-shadow: 0 2px 10px rgba(0,63,81,0.10); }' +
+      '.p86-proposal .tier-badge { position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: var(--teal); color: #fff; font-size: 7.5pt; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; padding: 3px 10px; border-radius: 10px; white-space: nowrap; }' +
+      '.p86-proposal .tier-name { font-size: 11pt; font-weight: 700; color: var(--navy); margin-bottom: 4px; }' +
+      '.p86-proposal .tier-price { font-size: 15pt; font-weight: 700; color: var(--teal); font-variant-numeric: tabular-nums; margin-bottom: 10px; }' +
+      '.p86-proposal .tier-body { font-size: 9pt; line-height: 1.5; color: var(--ink); }' +
       '.p86-proposal .tier-body p { margin: 0 0 6px; }' +
       '.p86-proposal .doc-select { margin: 16px 0 10px; font-size: 10.5pt; }' +
 
       // Shared prose bits used across layouts.
-      '.p86-proposal .doc-para { font-size: 10.5pt; line-height: 1.55; margin: 0 0 12px; }' +
-      '.p86-proposal .doc-lead { font-size: 11.5pt; line-height: 1.6; }' +
-      '.p86-proposal .doc-subhead { font-size: 11pt; font-weight: 700; color: #0f2346; margin: 14px 0 5px; }' +
-      '.p86-proposal .doc-list { padding-left: 20px; margin: 6px 0 16px; font-size: 10pt; line-height: 1.6; }' +
-      '.p86-proposal .doc-muted { color: #9ca3af; font-style: italic; }' +
-      '.p86-proposal .doc-small { font-size: 9pt; }' +
+      '.p86-proposal .doc-para { font-size: 10pt; line-height: 1.5; margin: 0 0 11px; }' +
+      '.p86-proposal .doc-lead { font-size: 10.5pt; line-height: 1.55; }' +
+      '.p86-proposal .doc-subhead { font-size: 10pt; font-weight: 700; color: var(--teal); margin: 13px 0 4px; }' +
+      '.p86-proposal .doc-list { padding-left: 20px; margin: 6px 0 14px; font-size: 10pt; line-height: 1.55; }' +
+      '.p86-proposal .doc-muted { color: var(--muted); font-style: italic; }' +
+      '.p86-proposal .doc-small { font-size: 7.5pt; line-height: 1.5; }' +
       '.p86-proposal .sig-block .sig-row { margin: 12px 0; }' +
 
       // Honest flags. The internal one is deliberately loud: a T4 cost sheet
@@ -1539,37 +1564,48 @@
       '.p86-proposal .doc-flag-caveat { background: #fff8e1; border-left: 4px solid #d97706; color: #4a3500; }' +
 
       // ── AGX Standard ───────────────────────────────────────────────
-      '.p86-proposal .agx-letterhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 26px; }' +
-      '.p86-proposal .agx-mark { height: 58px; width: auto; }' +
-      '.p86-proposal .agx-lines { text-align: right; font-size: 9.5pt; line-height: 1.5; color: #333; }' +
-      '.p86-proposal .agx-lic { margin-top: 6px; letter-spacing: 0.4px; }' +
-      '.p86-proposal .agx-eyebrow { font-size: 10pt; font-weight: 700; letter-spacing: 2.4px; text-transform: uppercase; color: #0f2346; }' +
-      '.p86-proposal .agx-title { font-size: 17pt; font-weight: 700; margin: 6px 0 2px; line-height: 1.25; color: #222; }' +
-      '.p86-proposal .agx-subtitle { font-size: 11pt; color: #444; margin-bottom: 4px; }' +
-      '.p86-proposal .agx-parties { display: flex; gap: 34px; margin: 22px 0 18px; font-size: 10pt; line-height: 1.5; }' +
+      '.p86-proposal .agx-letterhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 22px; }' +
+      '.p86-proposal .agx-mark { height: 56px; width: auto; }' +
+      '.p86-proposal .agx-lines { text-align: right; font-size: 8pt; line-height: 1.55; color: var(--muted); }' +
+      '.p86-proposal .agx-lic { margin-top: 5px; letter-spacing: 0.6px; color: var(--navy); font-weight: 700; }' +
+      '.p86-proposal .agx-eyebrow { font-size: 8.5pt; font-weight: 700; letter-spacing: 2.6px; text-transform: uppercase; color: var(--teal); }' +
+      '.p86-proposal .agx-title { font-size: 15pt; font-weight: 700; margin: 5px 0 2px; line-height: 1.22; color: var(--navy); }' +
+      '.p86-proposal .agx-subtitle { font-size: 10.5pt; color: var(--muted); margin-bottom: 2px; }' +
+      // The rule under the title is what separates the letterhead from the
+      // document on the reference, and it is the navy, not a grey hairline.
+      '.p86-proposal .agx-parties { display: flex; gap: 34px; margin: 18px 0; padding-top: 14px; border-top: 1.5px solid var(--navy); font-size: 9.5pt; line-height: 1.5; }' +
       '.p86-proposal .agx-party { flex: 1 1 0; }' +
-      '.p86-proposal .agx-party-label { font-size: 8.5pt; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; color: #6b7280; border-bottom: 1px solid #d4d4d4; padding-bottom: 3px; margin-bottom: 6px; }' +
-      '.p86-proposal .agx-party-name { font-weight: 700; color: #222; }' +
-      '.p86-proposal .agx-party-date { margin-top: 4px; }' +
-      '.p86-proposal .agx-sec-head { font-size: 11.5pt; font-weight: 700; color: #0f2346; margin: 20px 0 6px; page-break-after: avoid; break-after: avoid; }' +
-      '.p86-proposal .agx-sec-no { color: #0f2346; }' +
-      '.p86-proposal .agx-sec-amt { font-weight: 700; color: #222; white-space: nowrap; }' +
-      '.p86-proposal .agx-sec-plain { margin-top: 22px; }' +
+      '.p86-proposal .agx-party-label { font-size: 8pt; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--navy); border-bottom: 1px solid var(--hair); padding-bottom: 3px; margin-bottom: 6px; }' +
+      '.p86-proposal .agx-party-name { font-weight: 700; color: var(--ink); }' +
+      '.p86-proposal .agx-party-date { margin-top: 4px; color: var(--muted); }' +
+      '.p86-proposal .agx-sec-head { font-size: 10.5pt; font-weight: 700; color: var(--navy); margin: 18px 0 5px; page-break-after: avoid; break-after: avoid; }' +
+      '.p86-proposal .agx-sec-no { color: var(--teal); }' +
+      '.p86-proposal .agx-sec-amt { font-weight: 700; color: var(--teal); white-space: nowrap; font-variant-numeric: tabular-nums; }' +
+      '.p86-proposal .agx-sec-plain { margin-top: 20px; }' +
       '.p86-proposal .agx-sec-list { margin: 4px 0 12px; }' +
-      '.p86-proposal .agx-sec-ref { color: #6b7280; font-weight: 400; }' +
+      '.p86-proposal .agx-sec-body { margin-bottom: 12px; }' +
+      '.p86-proposal .agx-sec-body p { margin: 3px 0; font-size: 10pt; line-height: 1.5; }' +
+      // The opening line of a section is its summary on the reference — set
+      // muted and italic, which is also what tells a reader where each section
+      // starts when the body runs long.
+      '.p86-proposal .agx-sec-body > p:first-child { font-size: 8.5pt; font-style: italic; color: var(--muted); margin-bottom: 6px; }' +
+      '.p86-proposal .agx-sec-body ol, .p86-proposal .agx-sec-body ul { padding-left: 20px; margin: 4px 0 8px; }' +
+      '.p86-proposal .agx-sec-body li { margin: 3px 0; line-height: 1.5; }' +
+      '.p86-proposal .agx-sec-ref { color: var(--muted); font-weight: 400; }' +
       '.p86-proposal .agx-sum { margin: 8px 0 10px; }' +
-      '.p86-proposal .agx-note { color: #555; font-style: normal; line-height: 1.5; margin: 6px 0 16px; }' +
-      '.p86-proposal .agx-terms { width: 100%; border-collapse: collapse; margin: 6px 0 10px; font-size: 10.5pt; }' +
-      '.p86-proposal .agx-terms td { padding: 6px 10px 6px 0; vertical-align: top; border-bottom: 1px solid #ececec; }' +
-      '.p86-proposal .agx-terms .agx-term { font-weight: 700; white-space: nowrap; width: 90px; }' +
-      '.p86-proposal .agx-sigs { display: flex; gap: 40px; margin-top: 18px; page-break-inside: avoid; break-inside: avoid; }' +
-      '.p86-proposal .agx-sig-col { flex: 1 1 0; }' +
-      '.p86-proposal .agx-sig-line { border-bottom: 1.2px solid #333; height: 26px; }' +
-      '.p86-proposal .agx-sig-cap { font-size: 8.5pt; color: #6b7280; margin: 2px 0 10px; }' +
-      '.p86-proposal .agx-sig-who { font-weight: 700; font-size: 10pt; margin-top: 6px; }' +
-      '.p86-proposal .agx-sig-sub { font-size: 9.5pt; color: #555; }' +
+      '.p86-proposal .agx-note { color: var(--muted); font-style: normal; line-height: 1.5; margin: 6px 0 16px; }' +
+      '.p86-proposal .agx-terms { width: 100%; border-collapse: collapse; margin: 6px 0 10px; font-size: 10pt; }' +
+      '.p86-proposal .agx-terms td { padding: 7px 10px 7px 0; vertical-align: top; border-bottom: 1px solid var(--hair); }' +
+      '.p86-proposal .agx-terms .agx-term { font-weight: 700; color: var(--navy); white-space: nowrap; width: 90px; }' +
+      // Both signatures sit in the reference's panels, not on bare lines.
+      '.p86-proposal .agx-sigs { display: flex; gap: 22px; margin-top: 16px; page-break-inside: avoid; break-inside: avoid; }' +
+      '.p86-proposal .agx-sig-col { flex: 1 1 0; background: var(--panel); padding: 14px 16px 16px; }' +
+      '.p86-proposal .agx-sig-line { border-bottom: 1px solid var(--rule); height: 24px; }' +
+      '.p86-proposal .agx-sig-cap { font-size: 8pt; color: var(--muted); margin: 2px 0 10px; }' +
+      '.p86-proposal .agx-sig-who { font-weight: 700; font-size: 9.5pt; margin-top: 6px; color: var(--navy); }' +
+      '.p86-proposal .agx-sig-sub { font-size: 8.5pt; color: var(--muted); }' +
       // On screen the running foot is just a last line; print pins it to every page.
-      '.p86-proposal .agx-runfoot { margin-top: 26px; padding-top: 8px; border-top: 1px solid #e2e2e2; font-size: 8.5pt; color: #6b7280; text-align: center; }' +
+      '.p86-proposal .agx-runfoot { margin-top: 24px; padding-top: 8px; border-top: 1px solid var(--hair); font-size: 7.5pt; color: var(--foot); text-align: center; letter-spacing: 0.3px; }' +
       ''
     );
   }

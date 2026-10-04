@@ -247,6 +247,14 @@ describe('scope sections', () => {
     expect(base).toMatch(/\$[\d,]+\.\d{2}/);
   });
 
+  test('a section with no scope typed says so, instead of printing an empty heading', async () => {
+    // A blank body under a numbered heading reads as a document that lost a
+    // paragraph in the mail; it has to name the gap for whoever is editing.
+    const S2 = makeSandbox({ estimate: makeEstimate({ alternates: [{ id: 'a1', name: 'Base repair', scope: '' }] }) });
+    const html = await S2.render('agx');
+    expect(html).toMatch(/Scope not entered for this section/);
+  });
+
   test('the standard closing sections print as numbered items', () => {
     const jobsite = HTML.slice(HTML.indexOf('Jobsite Management'));
     expect(jobsite).toMatch(/agx-sec-list/);
