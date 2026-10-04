@@ -43,6 +43,7 @@
     client:      { type: 'text',  first: 'asc',  th: 'client' },
     pm:          { type: 'text',  first: 'asc',  th: 'pm' },
     status:      { type: 'num',   first: 'asc',  th: 'status' },
+    btstatus:    { type: 'num',   first: 'asc',  th: null },
     market:      { type: 'text',  first: 'asc',  th: 'market' },
     start:       { type: 'plain', first: 'desc', th: null },
     contract:    { type: 'num',   first: 'desc', th: 'contract' },
@@ -68,6 +69,11 @@
     { id: 'start-asc', label: 'Start date, earliest first', menu: true },
     { id: 'status-asc', label: 'Status', menu: true },
     { id: 'status-desc', label: 'Status, reversed' },
+    // Buildertrend's OWN word, not P86's. The two disagree on purpose — a job
+    // Open in Buildertrend can be On Hold here — so this is its own sort, and
+    // picking it answers "what is still open over there" in one click.
+    { id: 'btstatus-asc', label: 'Buildertrend: Open first', menu: true },
+    { id: 'btstatus-desc', label: 'Buildertrend: Open last' },
     { id: 'contract-desc', label: 'Income, high to low', menu: true },
     { id: 'contract-asc', label: 'Income, low to high' },
     { id: 'pctcomplete-desc', label: '% complete, high to low', menu: true },
@@ -144,6 +150,24 @@
     var m = /^(\d{4}-\d{2}-\d{2})/.exec(String(v == null ? '' : v).trim());
     return m ? m[1] : null;
   }
+  // ── what Buildertrend says ────────────────────────────────────────
+  // The sync writes Buildertrend's own word onto the job as data.btStatus,
+  // which reaches the client flattened onto the job. ONE reader, because the
+  // Jobs list filters on the same word the sort ranks by — two spellings of
+  // "open" would mean the filter and the sort disagree about the same job.
+  var BT_ORDER = ['open', 'warranty', 'closed'];
+  function btWord(job) { return String((job && job.btStatus) || '').trim().toLowerCase(); }
+  // Open first, then warranty, then closed, then any word Buildertrend adds
+  // later. A job Buildertrend has never heard of ranks null, and null sorts
+  // LAST in both directions — "Open last" must not mean "jobs that are not in
+  // Buildertrend at all, first".
+  function btRank(job) {
+    var w = btWord(job);
+    if (!w) return null;
+    var i = BT_ORDER.indexOf(w);
+    return i < 0 ? BT_ORDER.length : i;
+  }
+
   function titleOf(j) { return j.title || j.job_title || j.jobName || j.name || ''; }
   function numberOf(j) { return j.jobNumber || j.job_number || ''; }
 
@@ -163,6 +187,7 @@
         var i = STATUS_ORDER.indexOf(s);
         return i < 0 ? STATUS_ORDER.length : i;
       }
+      case 'btstatus': return btRank(job);
       case 'start': return dayKey(job.startDate);
       case 'contract': w = ctx.wip ? ctx.wip(job) : {}; return num(w && w.totalIncome);
       case 'pctcomplete': w = ctx.wip ? ctx.wip(job) : {}; return num(w && w.pctComplete);
@@ -238,6 +263,10 @@
     headerNext: headerNext,
     headerMark: headerMark,
     sort: sortJobs,
+    // Exported because the Jobs list FILTERS on the same word this ranks by.
+    btWord: btWord,
+    btRank: btRank,
+    BT_ORDER: BT_ORDER,
     load: load,
     save: save
   };

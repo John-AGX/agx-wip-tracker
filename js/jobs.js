@@ -1763,6 +1763,32 @@ function renderJobsMain() {
         // legacy freeform `address` (via the shared p86Address module) so both
         // new + old jobs filter correctly without a migration.
         function _jobAddr(j) { return (window.p86Address ? window.p86Address.get(j) : { street: '', city: j.city || '', state: j.state || '', zip: j.zip || '' }); }
+        // BUILDERTREND'S OWN WORD as a filter facet. The word is whatever the
+        // sync stored (data.btStatus); the chips are built from the data rather
+        // than hard-coded, so a word Buildertrend adds later still gets a chip
+        // instead of quietly becoming unfilterable. Open / Warranty / Closed
+        // lead because that is the order anybody asks about them in.
+        function jobsBtStatusOptions() {
+            var JS = window.p86JobsSort;
+            var order = (JS && JS.BT_ORDER) || ['open', 'warranty', 'closed'];
+            var seen = {}, extra = [], hasNone = false;
+            (appData.jobs || []).forEach(function(j) {
+                var w = JS ? JS.btWord(j) : String(j.btStatus || '').trim().toLowerCase();
+                if (!w) { hasNone = true; return; }
+                if (seen[w]) return;
+                seen[w] = true;
+                if (order.indexOf(w) < 0) extra.push(w);
+            });
+            var cap = function(w) { return w.charAt(0).toUpperCase() + w.slice(1); };
+            var out = order.filter(function(w) { return seen[w]; })
+                .concat(extra.sort())
+                .map(function(w) { return { v: w, label: cap(w) }; });
+            // Only offered when such a job exists, so the chip never promises a
+            // set that is always empty.
+            if (hasNone) out.push({ v: '__none', label: 'Not in Buildertrend' });
+            return out;
+        }
+
         function jobsFilterFields() {
             var statusOpts = jobsDistinct(function(j) { return j.status; }).map(function(s) { return { v: s, label: s }; });
             var pmOpts = jobsDistinct(function(j) { return getJobOwnerName(j); }).map(function(s) { return { v: s, label: s }; });
@@ -1773,6 +1799,7 @@ function renderJobsMain() {
             var zipOpts = jobsDistinct(function(j) { return _jobAddr(j).zip; }).map(function(s) { return { v: s, label: s }; });
             return [
                 { key: 'status', label: 'Status', type: 'chips', options: statusOpts },
+                { key: 'btStatus', label: 'Buildertrend', type: 'chips', options: jobsBtStatusOptions() },
                 { key: 'pm', label: 'PM', type: 'select', options: [{ v: '', label: 'Anyone' }].concat(pmOpts) },
                 { key: 'jobType', label: 'Job Type', type: 'select', options: [{ v: '', label: 'Any' }].concat(jtOpts) },
                 { key: 'market', label: 'Market', type: 'select', options: [{ v: '', label: 'Any' }].concat(mktOpts) },
@@ -1789,6 +1816,12 @@ function renderJobsMain() {
             if (!d) return true;
             var FD = window.p86FilterDrawer; if (!FD) return true;
             if (d.status && d.status.length && d.status.indexOf(j.status) < 0) return false;
+            if (d.btStatus && d.btStatus.length) {
+                // Same reader the sort ranks by (js/jobs-sort.js), so filtering
+                // to Open and sorting Open-first can never disagree.
+                var _bw = window.p86JobsSort ? window.p86JobsSort.btWord(j) : String(j.btStatus || '').trim().toLowerCase();
+                if (d.btStatus.indexOf(_bw || '__none') < 0) return false;
+            }
             if (d.pm && String(getJobOwnerName(j)) !== String(d.pm)) return false;
             if (d.jobType && String(j.jobType || '') !== String(d.jobType)) return false;
             if (d.market && String(j.market || '') !== String(d.market)) return false;
@@ -2143,10 +2176,16 @@ function renderJobsMain() {
             let jobs = (window.p86MarketFilter ? window.p86MarketFilter(appData.jobs) : appData.jobs);
             const filter = appState.currentStatusFilter;
             var drawerHasStatus = !!(_jobsDrawer && _jobsDrawer.status && _jobsDrawer.status.length);
+            // Asking what Buildertrend still calls Open is a question about the
+            // WHOLE portfolio: a job BT lists as Open that was archived here is
+            // precisely the disagreement the facet exists to surface, and the
+            // default "hide Archived" would hide it. The row still shows its own
+            // P86 status, so nothing is disguised by showing it.
+            var drawerHasBt = !!(_jobsDrawer && _jobsDrawer.btStatus && _jobsDrawer.btStatus.length);
             if (filter) {
                 jobs = jobs.filter(j => j.status === filter);
-            } else if (drawerHasStatus) {
-                // The drawer's Status chips control the status set (may include Archived).
+            } else if (drawerHasStatus || drawerHasBt) {
+                // The drawer controls the status set (may include Archived).
             } else {
                 // "All Active" = hide Archived by default
                 jobs = jobs.filter(j => j.status !== 'Archived');
