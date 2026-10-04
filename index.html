@@ -253,7 +253,7 @@
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
     <link rel="stylesheet" href="css/styles.css?v=336">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
-    <link rel="stylesheet" href="css/workspace-layout.css?v=70">
+    <link rel="stylesheet" href="css/workspace-layout.css?v=71">
     <link rel="stylesheet" href="css/workspace.css?v=41">
     <!-- Work Orders (1.30): the office ticket editor, Review & approve, crew flags.
          After styles.css and workspace-layout.css so they win at equal specificity. -->
@@ -1420,6 +1420,11 @@
                              (window.p86Explorer) scoped to this job. Render
                              driver: window.renderJobFiles (js/job-media.js). -->
                         <div id="job-files" class="sub-tab-content-job"></div>
+
+                        <!-- Tasks — the job's own to-dos (tasks.entity_type='job'),
+                             the same list the Overview dashboard mounts, as a
+                             section of its own. renderJobTasks (js/job-media.js). -->
+                        <div id="job-tasks" class="sub-tab-content-job"></div>
 
                         <!-- Job Daily Logs — the reports engine (js/job-reports.js)
                              filtered to the 'daily-log' template, with the
@@ -3775,7 +3780,7 @@
          attachments.js, file-explorer.js, messaging.js and jobs.js so
          window.p86Explorer / p86Attachments / p86Messaging / appData are all
          available. -->
-    <script src="js/job-media.js?v=2"></script>
+    <script src="js/job-media.js?v=3"></script>
     <!-- Service Tickets tab (renderJobServiceTickets). Same placement rule as
          job-media.js above: after api.js and jobs.js so p86Api and appData
          exist, and BEFORE workspace-layout.js, which reads the renderer name
@@ -3857,12 +3862,12 @@
 
     <script src="js/workspace.js?v=56"></script>
     <script src="js/workspace-gc.js?v=1"></script>
-    <script src="js/workspace-layout.js?v=114"></script>
+    <script src="js/workspace-layout.js?v=115"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=40"></script>
+    <script src="js/router.js?v=41"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /
@@ -4128,7 +4133,7 @@
     </div>
     <script src="nodegraph/engine.js?v=126"></script>
     <script src="js/cost-buckets.js?v=6"></script>
-    <script src="nodegraph/ui.js?v=340"></script>
+    <script src="nodegraph/ui.js?v=341"></script>
     <!-- Ribbon popovers (Layers / More) + layer visibility persistence.
          Loads after ui.js; only owns the popover chrome — the moved
          ribbon buttons stay wired by ui.js itself. -->

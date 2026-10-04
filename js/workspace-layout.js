@@ -67,7 +67,12 @@
     // Service Tickets — the WORK ORDER tier above tasks (js/service-tickets.js).
     // It sits with the field/document cluster because that is who a work order
     // is FOR: the crew who gets dispatched and the client who gets shown it.
-    { id: 'job-service-tickets', label: 'Service Tickets', icon: 'daily-logs' }
+    { id: 'job-service-tickets', label: 'Service Tickets', icon: 'daily-logs' },
+    // The job's own to-dos. They already existed (tasks.entity_type='job')
+    // but only as a panel buried in the Overview's side column, so "what is
+    // outstanding on this job" meant scrolling the dashboard. Same list, its
+    // own section — which is also where a phone can reach it.
+    { id: 'job-tasks', label: 'Tasks', icon: 'check-circle' }
   ];
 
   // ── Layout: which of those tabs this job actually shows ───
@@ -92,6 +97,7 @@
   const TICKET_LAYOUT_TABS = [
     'job-overview',
     'job-service-tickets',
+    'job-tasks',
     'job-details',
     'job-photos',
     'job-qb-costs',
@@ -394,6 +400,21 @@
     if (accordion) accordion.remove();
   }
 
+  // #job-info-card belongs to the page, not to the head we built around it.
+  // Without this the head's removal in cleanup() takes the card with it and
+  // the next job opens with no Job Information at all.
+  function rescueJobInfoFromHead(detail) {
+    var panel = document.getElementById('jh-job-info-panel');
+    if (!panel) return;
+    var jobInfo = panel.querySelector('#job-info-card');
+    var home = detail || document.getElementById('jobs-job-detail-view');
+    if (jobInfo && home) {
+      jobInfo.style.display = '';
+      home.appendChild(jobInfo);
+    }
+    panel.remove();
+  }
+
   // ── Cleanup old injections ────────────────────────────────
   function cleanup() {
     // Restore the main sidebar nav and tear down the job-context subnav
@@ -427,8 +448,12 @@
     // detail view, not inside the header)
     var strip = document.querySelector(".jh-metrics-strip");
     if (strip) strip.remove();
+    // The card goes back to the page before the head that holds it is removed.
+    rescueJobInfoFromHead(document.getElementById("jobs-job-detail-view"));
     var jobActionsBar = document.querySelector(".jh-job-actions");
     if (jobActionsBar) jobActionsBar.remove();
+    var jobHeadRow = document.getElementById("jh-job-head");
+    if (jobHeadRow) jobHeadRow.remove();
 
     // Un-hide original job detail header and elements
     var detail = document.getElementById("jobs-job-detail-view");
@@ -637,6 +662,19 @@
         var jobActions = document.createElement("div");
         jobActions.className = "jh-job-actions";
         jobActions.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;padding:6px 16px 0;";
+        // THE PAGE HEAD. The actions used to sit alone in a right-aligned row
+        // with ~1,400px of empty bar beside them, while the job's identity card
+        // lived in the left sidebar. The card moves HERE, into that space, and
+        // becomes the control that opens Job Information (attachJobInfoToHead).
+        // The actions keep their own element so the phone behaviour below —
+        // hide the row, show it as a menu under the ⋯ button — is untouched.
+        var jobHead = document.createElement("div");
+        jobHead.id = "jh-job-head";
+        jobHead.className = "jh-job-head";
+        var cardSlot = document.createElement("div");
+        cardSlot.id = "jh-job-card";
+        cardSlot.className = "jh-job-card";
+        jobHead.appendChild(cardSlot);
         var btnBase = "padding:6px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid var(--border,#2a2a32);background:var(--surface,#17171c);color:var(--text,#eef0f6);cursor:pointer;";
         // "Open Estimate" — only when this job has a linked estimate (job.estimate_id).
         var estId = jobForActions && jobForActions.estimate_id ? String(jobForActions.estimate_id).replace(/['"\\]/g, '') : '';
@@ -645,10 +683,11 @@
           : '';
         jobActions.innerHTML =
           openEstBtn +
-          '<button type="button" onclick="if(window.toggleEditJobInfo)window.toggleEditJobInfo()" title="Edit job info" style="' + btnBase + '">Edit</button>' +
+          '<button type="button" onclick="if(window.p86OpenJobInfo)window.p86OpenJobInfo();if(window.toggleEditJobInfo)window.toggleEditJobInfo()" title="Edit job info" style="' + btnBase + '">Edit</button>' +
           '<button type="button" onclick="if(window.archiveCurrentJob)window.archiveCurrentJob()" title="Archive job" style="' + btnBase + '">Archive</button>' +
           '<button type="button" onclick="if(window.deleteCurrentJob)window.deleteCurrentJob()" title="Delete job permanently" style="' + btnBase + 'color:#ff6b6b;border-color:rgba(255,107,107,.45);">Delete</button>';
-        strip.parentNode.insertBefore(jobActions, strip.nextSibling);
+        jobHead.appendChild(jobActions);
+        strip.parentNode.insertBefore(jobHead, strip.nextSibling);
 
         // Phones: ONE "More" button at the right end of the strip instead of
         // a pinned row of three 29px buttons with Delete touching Archive —
@@ -1721,7 +1760,8 @@
       'job-daily-logs': 'renderJobDailyLogs',
       'job-comments': 'renderJobComments',
       'job-reports': 'renderJobReports',
-      'job-service-tickets': 'renderJobServiceTickets'
+      'job-service-tickets': 'renderJobServiceTickets',
+      'job-tasks': 'renderJobTasks'
     };
     safeRenderTabContent(targetId, target, jobId, renderers[targetId]);
   }
@@ -2111,7 +2151,8 @@
       'job-daily-logs': 'renderJobDailyLogs',
       'job-comments': 'renderJobComments',
       'job-reports': 'renderJobReports',
-      'job-service-tickets': 'renderJobServiceTickets'
+      'job-service-tickets': 'renderJobServiceTickets',
+      'job-tasks': 'renderJobTasks'
     };
 
     function activateTab(targetId) {
@@ -2227,32 +2268,74 @@
     }
   }
 
-  function moveJobInfoToAccordion(detail, rightContent) {
-    if (!rightContent) return;
-    // Search document-wide in case the card isn't inside detail
-    var jobInfo = document.getElementById('job-info-card');
-    if (!jobInfo) return;
-    // Don't move if already in an accordion
-    if (jobInfo.closest('.ws-job-info-details')) return;
-
-    // Clear the display:none that applyLayout set
-    jobInfo.style.display = '';
-
-    // Make it collapsible at the top of the right content
-    var wrapper = document.createElement('details');
-    wrapper.className = 'ws-job-info-details';
-    var summary = document.createElement('summary');
-    summary.textContent = 'Job Information';
-    summary.className = 'ws-job-info-summary';
-    wrapper.appendChild(summary);
-
-    jobInfo.classList.add('ws-accordion-content');
-    jobInfo.style.border = 'none';
-    jobInfo.style.boxShadow = 'none';
-    wrapper.appendChild(jobInfo);
-
-    rightContent.insertBefore(wrapper, rightContent.firstChild);
+  // JOB INFORMATION HANGS OFF THE CARD.
+  //
+  // It used to be a <details> bar titled "Job Information" inserted at the top
+  // of the right content — so every section, on every job, opened with a strip
+  // of furniture above its own heading. The card in the page head already says
+  // which job this is; now it also OPENS the job's details, which is the thing
+  // the bar was for. One control, in the head, instead of a bar riding every
+  // page.
+  //
+  // The panel lives beside the head rather than inside the section content, so
+  // switching sections neither rebuilds it nor closes it.
+  var JOB_INFO_OPEN_KEY = 'p86_job_info_open';
+  function setJobInfoOpen(open) {
+    var slot = document.getElementById('jh-job-card');
+    var panel = document.getElementById('jh-job-info-panel');
+    if (!slot || !panel) return;
+    panel.hidden = !open;
+    slot.setAttribute('aria-expanded', open ? 'true' : 'false');
+    slot.classList.toggle('is-open', !!open);
+    try { localStorage.setItem(JOB_INFO_OPEN_KEY, open ? '1' : '0'); } catch (e) {}
   }
+  function attachJobInfoToHead(detail) {
+    var head = document.getElementById('jh-job-head');
+    var jobInfo = document.getElementById('job-info-card');
+    if (!head || !jobInfo) return;
+    var panel = document.getElementById('jh-job-info-panel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'jh-job-info-panel';
+      panel.className = 'jh-job-info-panel';
+      panel.hidden = true;
+      head.parentNode.insertBefore(panel, head.nextSibling);
+    }
+    if (jobInfo.parentNode !== panel) {
+      // Undo whatever the old accordion did to it, then adopt.
+      jobInfo.style.display = '';
+      jobInfo.style.border = '';
+      jobInfo.style.boxShadow = '';
+      jobInfo.classList.remove('ws-accordion-content');
+      panel.appendChild(jobInfo);
+    }
+    var slot = document.getElementById('jh-job-card');
+    if (slot && !slot._p86InfoWired) {
+      slot._p86InfoWired = true;
+      slot.setAttribute('role', 'button');
+      slot.setAttribute('tabindex', '0');
+      slot.setAttribute('aria-controls', 'jh-job-info-panel');
+      slot.setAttribute('aria-expanded', 'false');
+      slot.title = 'Job information';
+      var toggle = function (e) {
+        // The card's own controls (Add follow-up, the icon row) keep their job.
+        if (e && e.target && e.target.closest && e.target.closest('[data-act]')) return;
+        setJobInfoOpen(document.getElementById('jh-job-card').getAttribute('aria-expanded') !== 'true');
+      };
+      slot.addEventListener('click', toggle);
+      slot.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(e); }
+      });
+    }
+    // Remembered per browser: somebody who works with the details open gets
+    // them open, and the default stays closed.
+    var want = '0';
+    try { want = localStorage.getItem(JOB_INFO_OPEN_KEY) || '0'; } catch (e) {}
+    setJobInfoOpen(want === '1');
+  }
+  // Editing job info from the head: open the panel first, or the Edit button
+  // puts the card into edit mode somewhere the user cannot see.
+  window.p86OpenJobInfo = function () { setJobInfoOpen(true); };
 
   // ── Main layout application ───────────────────────────────
   var _applyingLayout = false;
@@ -2359,7 +2442,7 @@
       _step = 'populateRightPanels'; populateRightPanels(detail);
       _step = 'wireResizer'; wireResizer();
       _step = 'wireTabSwitching'; wireTabSwitching();
-      _step = 'moveJobInfoToAccordion'; moveJobInfoToAccordion(detail, document.getElementById('wsRightContent'));
+      _step = 'attachJobInfoToHead'; attachJobInfoToHead(detail);
       // Relocate the job subtabs into the left sidebar (desktop) and swap
       // the main nav out for a Back-to-Jobs + job-context view. Done AFTER
       // wireTabSwitching so the tabs keep their click handlers when moved.

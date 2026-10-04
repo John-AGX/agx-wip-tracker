@@ -73,7 +73,11 @@
     // Service Tickets — the work-order tier. Listed so
     // /jobs/:id/job-service-tickets round-trips through parse and serialize;
     // without it the tab opens but the URL falls back to the job's default.
-    'job-service-tickets'
+    'job-service-tickets',
+    // Tasks — the job's own to-dos as a section. Same reason as the line
+    // above: without it the section opens but /jobs/:id/job-tasks is not a
+    // link anybody can send.
+    'job-tasks'
   ];
   // Legacy sub-tab id → new id. Old shared links / bookmarks using
   // /jobs/:id/job-wip transparently route to job-wip-report (the new

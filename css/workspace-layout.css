@@ -1454,3 +1454,52 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
     box-shadow: none;
   }
 }
+
+/* ── The job page head: identity card left, job actions right ──────────────
+   The actions used to sit alone in a right-aligned bar with the whole width
+   empty beside them, while the job's card lived in the left sidebar. The card
+   moved into that space and became the control that opens Job Information, so
+   the "Job Information" strip no longer rides the top of every section.
+   .jh-job-actions keeps its own box: the phone rules further down turn THAT
+   element into the ⋯ menu, and wrapping it would have taken the card with it. */
+.jh-job-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px 0;
+  min-width: 0;
+}
+.jh-job-head .jh-job-actions { padding: 0; margin-left: auto; flex: 0 0 auto; }
+.jh-job-card { flex: 1 1 auto; min-width: 0; max-width: 520px; cursor: pointer; border-radius: 12px; }
+.jh-job-card:focus-visible { outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px; }
+.jh-job-card .ng-jobheadcard { margin: 0; }
+/* The affordance: the card is a disclosure, so it says so on hover and when
+   it is open. A caret rides the card's top-right corner. */
+.jh-job-card::after {
+  content: '';
+  position: absolute;
+  right: 14px;
+  top: 16px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.6px solid var(--text-dim, #9aa5ab);
+  border-bottom: 1.6px solid var(--text-dim, #9aa5ab);
+  transform: rotate(45deg);
+  transition: transform .15s ease;
+  pointer-events: none;
+}
+.jh-job-card { position: relative; }
+.jh-job-card.is-open::after { transform: rotate(-135deg); }
+.jh-job-card:hover { background: var(--hover, rgba(255,255,255,.04)); }
+
+/* Job Information, hung off the card instead of riding every section. */
+.jh-job-info-panel { padding: 10px 16px 0; }
+.jh-job-info-panel[hidden] { display: none; }
+.jh-job-info-panel #job-info-card { margin: 0; }
+
+@media (max-width: 760px) {
+  /* The card takes the row; the actions are already a ⋯ menu down here. */
+  .jh-job-head { flex-wrap: wrap; padding: 6px 12px 0; }
+  .jh-job-card { max-width: none; flex: 1 1 100%; }
+  .jh-job-info-panel { padding: 8px 12px 0; }
+}

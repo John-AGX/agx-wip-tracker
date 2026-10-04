@@ -98,6 +98,36 @@
       unavailable(pane, 'Photos');
     }
   }
+  // THE JOB'S TASKS, as a section. The panel itself is the shared one
+  // (p86Tasks.mountEntityPanel) that the Overview dashboard and the client and
+  // estimate pages already use — the same list, the same add button, the same
+  // refresh registry. What is new is only that it has a section of its own, so
+  // "what is outstanding on this job" is one tap from the sidebar instead of a
+  // scroll down somebody else's dashboard.
+  //
+  // Remounted on every visit rather than cached: a task completed in the modal
+  // (or by 86) has to be gone when the section is reopened.
+  function renderJobTasks(jobId) {
+    var host = document.getElementById('job-tasks');
+    if (!host) return;
+    if (!(window.p86Tasks && typeof window.p86Tasks.mountEntityPanel === 'function')) {
+      host.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Tasks module not loaded.</div>';
+      return;
+    }
+    var id = jobId || (typeof appState !== 'undefined' ? appState.currentJobId : null);
+    if (!id) { host.innerHTML = ''; return; }
+    var job = (window.appData && (appData.jobs || []).find(function (j) { return j.id === id; })) || null;
+    // The job's forward-facing name, the same one every other surface prints.
+    var label = (window.p86JobLabel && job)
+      ? window.p86JobLabel.fromJob(job, { fallback: 'Job ' + id })
+      : ('Job ' + id);
+    // mountEntityPanel assigns the host's innerHTML, so the previous visit's
+    // rows go with it — a task completed in the modal is not still sitting
+    // here when the section is reopened.
+    window.p86Tasks.mountEntityPanel(host, 'job', id, label);
+  }
+
+  window.renderJobTasks = renderJobTasks;
   window.renderJobPhotos = renderJobPhotos;
 
   // ── Comments tab ───────────────────────────────────────────

@@ -3072,12 +3072,21 @@ function renderSidebarJobCard(jobIdOverride){
   // nav on leave. No Edit button here (matches the lead card; job stays editable elsewhere).
   var railEl=document.querySelector('.ng-sidebar');
   var railHidden=!railEl || getComputedStyle(railEl).display==='none' || railEl.getBoundingClientRect().width===0;
-  var jobnav=document.getElementById('app-jobnav');
+  // WHERE THE CARD LIVES: the page head (#jh-job-card, built by
+  // js/workspace-layout.js) when the job page is laid out, else the top of the
+  // left job nav as before. The head is the slot that also OPENS Job
+  // Information, so the card has to be inside it for the click to mean
+  // anything; the sidebar fallback keeps the Site Plan's own rail working.
+  var headSlot=document.getElementById('jh-job-card');
+  var jobnav=headSlot || document.getElementById('app-jobnav');
   if(jobnav && railHidden){
     var slot=document.getElementById('ng-jobheadcard');
+    // A card left in the sidebar from a previous paint would otherwise sit
+    // there for ever once the head exists.
+    if(slot && headSlot && slot.parentNode!==headSlot) { slot.remove(); slot=null; }
     if(!slot){
       slot=document.createElement('div'); slot.id='ng-jobheadcard'; slot.className='ng-jobheadcard';
-      slot.style.cssText='margin:6px 12px 10px;';
+      slot.style.cssText=headSlot ? 'margin:0;min-width:0;' : 'margin:6px 12px 10px;';
       // Delegate the card's [data-act] controls. Bound ONCE, on slot
       // creation — the innerHTML below is replaced on every repaint, so
       // binding per render would stack a handler per paint.
@@ -3092,7 +3101,7 @@ function renderSidebarJobCard(jobIdOverride){
         // the previous job — wrong entity, silently, with no error.
         if(b.getAttribute('data-act')==='addtask' && typeof slot._p86AddFollowUp==='function') slot._p86AddFollowUp();
       });
-      jobnav.insertBefore(slot, jobnav.firstChild);
+      if(headSlot) headSlot.appendChild(slot); else jobnav.insertBefore(slot, jobnav.firstChild);
     }
     slot._p86AddFollowUp=_addJobFollowUp;   // refreshed every render
     slot.innerHTML=cardHtml;

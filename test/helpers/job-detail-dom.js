@@ -29,15 +29,21 @@ const LEGACY_SUBS = [
 const PANES = LEGACY_SUBS.concat([
   'job-details', 'job-estimates', 'job-qb-costs', 'job-subs',
   'job-photos', 'job-files', 'job-daily-logs', 'job-reports',
-  'job-service-tickets'
+  'job-service-tickets', 'job-tasks'
 ]);
 
 function buildDom(document) {
   document.body.innerHTML =
+    // The site header: buildHeader() bails without one, and with it the
+    // metrics strip, the job-actions bar and the page head it anchors.
+    '<header><div class="header-content"><nav class="tabs"></nav></div></header>' +
     '<div id="app-sidebar"><div class="app-nav"></div></div>' +
     '<div id="jobs-main-view"></div>' +
     '<div id="jobs-job-detail-view" style="display:none">' +
       '<div class="job-detail-header"><h2 id="job-detail-title">JOB-1</h2></div>' +
+      // The Job Information card the page owns: the head hangs it off the
+      // job card (attachJobInfoToHead), and cleanup() has to give it back.
+      '<div class="card" id="job-info-card"><div id="job-info-title"></div></div>' +
       '<div class="sub-tabs">' +
         LEGACY_SUBS.map(function (id, i) {
           return '<button class="sub-tab-btn-job' + (i === 0 ? ' active' : '') +
@@ -75,6 +81,18 @@ function loadWorkspaceLayout(window, job, data) {
     data || {}
   );
   window.getJobWIP = function () { return {}; };
+  // buildHeader() asks for the job's forward-facing name. Without this stub it
+  // THROWS, applyLayout catches it, and the metrics strip / job-actions bar /
+  // page head never exist — which is why nothing above the tab strip was ever
+  // covered here.
+  window.p86JobLabel = window.p86JobLabel || {
+    fromJob: function (j, o) {
+      if (!j) return (o && o.fallback) || '';
+      var num = j.jobNumber || j.job_number || '';
+      var nm = j.title || j.name || '';
+      return (num ? num + ' ' : '') + nm;
+    }
+  };
   window.saveData = function () {};
   window.eval(fs.readFileSync(path.join(ROOT, 'js', 'workspace-layout.js'), 'utf8'));
   return observers;

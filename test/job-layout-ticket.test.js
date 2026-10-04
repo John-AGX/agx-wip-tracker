@@ -20,8 +20,11 @@
 
 const H = require('./helpers/job-detail-dom');
 
+// 6 -> 7: Tasks. The job's own to-dos were only reachable as a panel inside
+// the Overview dashboard; a call-out crew needs them on the short page too,
+// which is the whole point of the ticket layout. See test/job-head-card.test.js.
 const TICKET_SET = [
-  'job-overview', 'job-service-tickets', 'job-details',
+  'job-overview', 'job-service-tickets', 'job-tasks', 'job-details',
   'job-photos', 'job-qb-costs', 'job-invoices'
 ];
 
