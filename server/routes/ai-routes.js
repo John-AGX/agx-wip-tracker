@@ -11890,13 +11890,26 @@ async function execStaffTool(name, input, ctx) {
         // ceiling and the character budget run the same direction.
         const attSeq = [];
         printRows.forEach((m) => (attByEmail[m.id] || []).forEach((a) => attSeq.push(a.id)));
+        // ASKING FOR ONE MESSAGE HAS TO GET YOU MORE, OR THE NOTICE LIED.
+        // Measured live on this org's dropbox: a ONE-message thread carrying a
+        // long PDF printed the budget notice, because the per-file cap clipped
+        // the extracted text — and the notice told 86 to re-read the message
+        // for the rest, which returned the identical 4,000-char clip. So one
+        // message spends the single-message allowance on its attachments too,
+        // the same way its body does.
         const attAlloc = readBudget.allocate(
           attSeq.map((id) => (attFull.get(id) || '').length),
-          {
-            budget: readBudget.ATTACHMENT_TEXT_BUDGET,
-            maxPer: readBudget.ATTACHMENT_TEXT_MAX_PER_FILE,
-            minSlice: readBudget.ATTACHMENT_TEXT_MIN_SLICE,
-          }
+          oneMessage
+            ? {
+                budget: readBudget.SINGLE_MESSAGE_BUDGET,
+                maxPer: readBudget.SINGLE_MESSAGE_BUDGET,
+                minSlice: 1,
+              }
+            : {
+                budget: readBudget.ATTACHMENT_TEXT_BUDGET,
+                maxPer: readBudget.ATTACHMENT_TEXT_MAX_PER_FILE,
+                minSlice: readBudget.ATTACHMENT_TEXT_MIN_SLICE,
+              }
         );
         const attKeep = new Map();
         attSeq.forEach((id, i) => attKeep.set(id, attAlloc.kept[i]));

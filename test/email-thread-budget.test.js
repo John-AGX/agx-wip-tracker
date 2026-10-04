@@ -371,6 +371,29 @@ describe.each(DOORS)('read_email_inbox thread arm — %s', (label, door) => {
     expect(got).not.toContain('ea-z1');
   });
 
+  test('B12 asking for ONE message gets more of its attachment, or the notice lied', async () => {
+    // FOUND LIVE, not by reading the code: on this org's dropbox a ONE-message
+    // thread carrying a long PDF printed the budget notice and told 86 to
+    // re-read the message for the rest — and message=N returned the identical
+    // 4,000-char clip, because attachment text used the per-file cap in both
+    // modes. A bound that names a way back has to lead somewhere.
+    //
+    // th_atts carries 5,000 chars of cached text per file, over the 4,000
+    // per-file cap, so the thread view clips every one of them.
+    const thread = await read({ thread_id: 'th_atts' }, door);
+    expect(thread).toContain('4,000 of 5,0');
+
+    const alone = await read({ thread_id: 'th_atts', message: 6 }, door);
+    // The whole 5,000 chars, and therefore no cut marker and no notice.
+    expect(alone).toContain('ATT-A6');
+    expect(alone).not.toContain('cut short');
+    expect(alone).not.toContain('THIS IS NOT ALL OF IT');
+    // MUTANT: keeping ATTACHMENT_TEXT_MAX_PER_FILE in single-message mode —
+    // `alone` still says "cut short: 4,000 of 5,000" and the reopen path is a
+    // loop that never delivers.
+    const tail = alone.slice(alone.indexOf('ATT-A6'));
+    expect(tail.indexOf('z'.repeat(4500))).toBeGreaterThan(-1);
+  });
   test('B10 a file the ceiling never opened says so, and is not called empty', async () => {
     const out = await read({ thread_id: 'th_lazy' }, door);
     expect(out).toContain('LAZY-ea-z12');
