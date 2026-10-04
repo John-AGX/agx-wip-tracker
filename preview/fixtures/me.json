@@ -1,0 +1,6 @@
+{
+  "preview": true,
+  "hasPortal": true,
+  "user": { "email": "acme@vendor.test", "name": "Acme Roofing" },
+  "sub": { "id": "sub_1", "name": "Acme Roofing", "trade": "Roofing" }
+}

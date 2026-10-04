@@ -51,6 +51,9 @@ async function noticeJob(jobId, orgId) {
   return r.rows[0] || null;
 }
 const { requireAuth, requireCapability, hasCapability } = require('../auth');
+// Who may settle money on a job — shared with purchase orders so the two
+// doors cannot drift apart. See that file's header for the rule.
+const gate = require('../services/job-money-gate');
 const { poEffectiveTotal } = require('../services/job-financials');
 const { overbillVerdict } = require('../services/money/overbill');
 
@@ -441,12 +444,71 @@ router.post('/bills/:id/status', requireAuth, requireCapability('ESTIMATES_EDIT'
     const id = req.params.id;
     const next = String(req.body.status || '').toLowerCase();
     if (!STATUS_VALUES.includes(next)) return res.status(400).json({ error: 'Invalid status' });
+    // owner_id and the caller's own job grant come back on THIS query rather
+    // than two more: the approval gate below needs both, and the row is already
+    // being joined.
     const cur = await pool.query(
-      `SELECT b.status FROM job_vendor_bills b JOIN jobs j ON j.id = b.job_id
+      `SELECT b.status, b.job_id, ${gate.SELECT_COLUMNS}
+         FROM job_vendor_bills b
+         JOIN jobs j ON j.id = b.job_id
+         ${gate.jobAccessJoin('b', 3)}
         WHERE b.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
-      [id, req.user.organization_id]);
+      [id, req.user.organization_id, req.user.id]);
     if (!cur.rowCount) return res.status(404).json({ error: 'Not found' });
     const current = cur.rows[0].status;
+
+    // ── MOVING A PAYABLE'S STATUS IS A FINANCIAL DECISION ──────────────────
+    //
+    // This route used to be gated on ESTIMATES_EDIT alone — the same capability
+    // that CREATES a bill and edits its amount. ESTIMATES_EDIT is held by the
+    // builtin field_crew role, whose own description reads "Estimates and Cost
+    // Inbox only. NO JOBS, NO FINANCIALS." So the field crew could approve a
+    // vendor bill for payment, mark it paid, or void it — on any job in the
+    // organisation, with no ownership check — and could edit the amount first,
+    // because one capability opened all three doors. Nothing separated the
+    // person who enters a payable from the person who approves it.
+    //
+    // The rule is the one change orders already use
+    // (routes/change-order-routes.js): JOBS_EDIT_ANY, or you own the job. The
+    // outer requireCapability(ESTIMATES_EDIT) stays, so this can only ever
+    // REMOVE access and never grant it — a role that could not reach this route
+    // yesterday still cannot.
+    //
+    // IT GATES EVERY TRANSITION, not just 'approved'. A carve-out list is a
+    // thing that rots: 'void' is how a real payable is written off as well as
+    // how a duplicate is discarded, and un-marking a bill 'paid' is no smaller
+    // a claim than marking it. Recording a payable is bookkeeping; moving its
+    // status is the decision. One rule, nothing to keep in step.
+    //
+    // 'corporate' is deliberately NOT treated as privileged here, although the
+    // change-order gate does treat it so. That role is "read-only across all
+    // jobs" and holds no ESTIMATES_EDIT, so it cannot reach this route today —
+    // and writing it in would quietly hand a read-only role approval authority
+    // the day somebody adds ESTIMATES_EDIT to it. The pair below is the same
+    // one the DELETE door in this file already uses.
+    //
+    // "RUNS THIS JOB" INCLUDES A JOB GRANT, NOT JUST OWNERSHIP. The first draft
+    // of this gate tested jobs.owner_id alone, copying the change-order rule —
+    // and that is the OLDER answer. job_access is a shipped feature with its
+    // own admin card (Job Sharing), routes/job-routes.js canEdit admits an
+    // 'edit' grant, services/service-ticket-access.js states the rule as "the
+    // jobs I own OR HAVE BEEN GRANTED", and the owner-reassignment route
+    // documents adding a share as the way a PM keeps running a job after
+    // ownership moves. Owner-only would have refused exactly those people —
+    // PMs the product considers managers of the job — and they could not have
+    // fixed it themselves, because reassignment is admin-only.
+    //
+    // THE RULE ITSELF LIVES IN services/job-money-gate.js, because purchase
+    // orders need exactly the same one and two copies of an authorisation rule
+    // drift invisibly — nothing fails, one door just quietly becomes the
+    // lenient one. Its header has the full argument, including the two ways
+    // this was got wrong before it settled: owner-only locks out a PM who has
+    // been SHARED onto a job, and a share alone hands the right back to the
+    // field crew.
+    if (!gate.maySettleJobMoney(req.user, cur.rows[0])) {
+      return res.status(403).json(gate.refusal('change a bill’s status'));
+    }
+
     if (!ALLOWED_TRANSITIONS[current].includes(next)) return res.status(409).json({ error: 'Transition not allowed: ' + current + ' -> ' + next });
     const paidAt = next === 'paid' ? new Date() : null;
     const { rows } = await pool.query(

@@ -35,6 +35,8 @@ const assemblyTaxonomyRoutes = require('./routes/assembly-taxonomy-routes');
 const qbCostRoutes = require('./routes/qb-cost-routes');
 const subRoutes = require('./routes/sub-routes');
 const subPortalRoutes = require('./routes/sub-portal-routes');
+// 'See what they see' — read-only windows onto the external surfaces.
+const previewRoutes = require('./routes/preview-routes');
 const messageRoutes = require('./routes/message-routes');
 const scheduleRoutes = require('./routes/schedule-routes');
 // Production planning — the service manager's Thursday checklist, under Schedule.
@@ -299,6 +301,7 @@ app.use('/api/subs', subRoutes);
 // the sub-routes router gets first crack at /subs/* paths and falls
 // through to here only for the invite endpoints it doesn't define.
 app.use('/api', subPortalRoutes);
+app.use('/api/preview', previewRoutes);
 app.use('/api', taskShareRoutes);
 app.use('/api', reportShareRoutes);
 // Service tickets — the work-order tier above tasks. Its own prefix because

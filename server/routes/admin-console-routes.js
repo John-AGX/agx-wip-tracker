@@ -18,6 +18,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
+const { buildGrandLedger } = require('../services/usage-ledger');
 const { requireAuth, requireSystemAdmin } = require('../auth');
 
 const router = express.Router();
@@ -225,8 +226,18 @@ router.get('/metrics', requireAuth, requireSystemAdmin, async (req, res) => {
 });
 
 // GET /api/admin/console/usage-forensics?from=ISO&to=ISO — token-usage
-// forensics across EVERY Anthropic consumer the server records (chat
-// turns, watch runs, background agent jobs, subtasks, replays), bucketed
+// forensics across the Anthropic consumers that RECORD their tokens: chat
+// turns, background agent jobs, subtasks, replays (and watch runs, a
+// retired lane kept to prove it is zero). It used to say "EVERY Anthropic
+// consumer the server records" and publish a total called
+// `everything_total_in`. Both were wider than the number: ~9 other files
+// call the API (email triage per inbound email, receipt and document OCR,
+// business-card and caption passes, materials extraction, SMS, session
+// labels) and none of them persist a token count anywhere this endpoint
+// can read. Those lanes are now NAMED in `unmeasured_lanes` instead of
+// being silently excluded from a total called everything — the contract
+// services/agent-prefix-ledger.js sets out, applied to the other ledger.
+// Bucketed
 // so an Anthropic-Console usage spike can be attributed to a specific
 // agent / conversation / job. Read-only, parameterized, SYSTEM_ADMIN.
 // Defaults to the last 48h; span clamped to 31 days. All timestamps UTC
@@ -332,6 +343,33 @@ router.get('/usage-forensics', requireAuth, requireSystemAdmin, async (req, res)
        ORDER BY total_in DESC
        LIMIT 20`, P);
 
+    // The background lane TOTAL — every row in the window. The list above
+    // is LIMIT 20 for display, and summing a display list reported "the 20
+    // most expensive jobs" under the label "the lane". Cheap to get right:
+    // one aggregate with no LIMIT.
+    const agentJobsTotal = await pool.query(`
+      SELECT COUNT(*)::int AS n,
+             COALESCE(SUM(COALESCE(input_tokens,0) + COALESCE(cache_creation_tokens,0)
+                          + COALESCE(cache_read_tokens,0)), 0)::bigint AS total_in,
+             COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens
+        FROM agent_jobs WHERE created_at >= $1 AND created_at < $2`, P);
+
+    // How many assistant rows carry the per-TURN columns (added 2026-10-04)
+    // versus only the per-REQUEST four. A turn that made N model requests
+    // recorded one of them in the old columns, so a window that straddles
+    // the migration is TWO bases and must not be added up as one number.
+    const turnBasis = await pool.query(`
+      SELECT COUNT(*) FILTER (WHERE turn_input_tokens IS NOT NULL)::int AS rows_turn_basis,
+             COUNT(*) FILTER (WHERE turn_input_tokens IS NULL)::int     AS rows_request_basis_only,
+             COALESCE(SUM(turn_input_tokens), 0)::bigint                AS turn_input_tokens,
+             COALESCE(SUM(turn_cache_creation_tokens), 0)::bigint       AS turn_cache_creation,
+             COALESCE(SUM(turn_cache_read_tokens), 0)::bigint           AS turn_cache_read,
+             COALESCE(SUM(turn_output_tokens), 0)::bigint               AS turn_output_tokens,
+             COALESCE(SUM(model_requests), 0)::bigint                   AS model_requests,
+             COALESCE(SUM(tool_calls_executed), 0)::bigint              AS tool_calls_executed
+        FROM ai_messages
+       WHERE role = 'assistant' AND created_at >= $1 AND created_at < $2`, P);
+
     // Subtasks + replays (usually zero these days, but count them so the
     // ledger is complete).
     const subtasks = await pool.query(`
@@ -347,20 +385,19 @@ router.get('/usage-forensics', requireAuth, requireSystemAdmin, async (req, res)
              COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens
         FROM ai_replays WHERE run_at >= $1 AND run_at < $2`, P);
 
-    // Grand ledger — everything the server recorded, to hold against the
-    // Anthropic console total for the same window.
-    const s = (rows, k) => rows.reduce((a, r) => a + Number(r[k] || 0), 0);
+    // The ledger, assembled by services/usage-ledger.js — a SUBTOTAL that
+    // names the lanes it cannot see. Pure function on purpose: the honesty
+    // contract is testable without a database, and this route keeps only
+    // the queries.
     const chat = bySurface.rows;
-    const grand = {
-      chat_total_in: s(chat, 'input_tokens') + s(chat, 'cache_creation') + s(chat, 'cache_read'),
-      chat_output: s(chat, 'output_tokens'),
-      watches_total_in: s(watchRuns.rows, 'input_tokens') + s(watchRuns.rows, 'cache_creation') + s(watchRuns.rows, 'cache_read'),
-      agent_jobs_total_in: s(agentJobs.rows, 'total_in'),
-      subtasks_total_in: s(subtasks.rows, 'input_tokens') + s(subtasks.rows, 'cache_creation') + s(subtasks.rows, 'cache_read'),
-      replays_in: s(replays.rows, 'input_tokens'),
-    };
-    grand.everything_total_in = grand.chat_total_in + grand.watches_total_in
-      + grand.agent_jobs_total_in + grand.subtasks_total_in + grand.replays_in;
+    const grand = buildGrandLedger({
+      chatBySurface: chat,
+      agentJobsTotal: agentJobsTotal.rows[0],
+      subtasks: subtasks.rows,
+      replays: replays.rows,
+      watchRuns: watchRuns.rows,
+      turnBasis: turnBasis.rows[0],
+    });
 
     res.json({
       from: P[0], to: P[1],

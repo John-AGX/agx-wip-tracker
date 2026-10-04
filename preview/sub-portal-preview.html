@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Sub portal preview — harness</title>
+  <!-- Proves the REAL portal.html renders in preview mode: the banner appears
+       and names the sub, the files group exactly as a sub sees them, and the
+       upload control is GONE rather than disabled.
+
+       portal.html is loaded UNMODIFIED in an iframe and makes its own real
+       HTTP calls; preview/serve.js answers them from preview/fixtures/. An
+       earlier version of this harness patched the iframe's fetch from here and
+       could not work: the page navigates, the patch goes with the old window,
+       and the real request races it. Answering the real request is both
+       simpler and a truer test. -->
+  <style>
+    body { margin:0; padding:16px; background:#0b0b0f; color:#e5e7eb;
+           font-family:-apple-system,Segoe UI,Arial,sans-serif; }
+    h3 { font-size:12px; text-transform:uppercase; letter-spacing:.4px;
+         color:#9ca3af; margin:14px 0 6px; }
+    iframe { width:100%; height:520px; border:1px solid #2a2a3a;
+             border-radius:8px; background:#fff; }
+    #verdict { margin:14px 0; padding:12px 14px; border-radius:8px;
+               font-size:13px; line-height:1.5; white-space:pre-wrap; }
+    .ok { background:rgba(34,197,94,.12); border:1px solid #16a34a; }
+    .bad { background:rgba(248,113,113,.12); border:1px solid #f87171; }
+  </style>
+</head>
+<body>
+  <h3>portal.html?preview=sub_1 — the real page, preview mode</h3>
+  <iframe id="frame" src="/portal.html?preview=sub_1"></iframe>
+  <div id="verdict">checking…</div>
+
+  <script>
+    setTimeout(function () {
+      var d = document.getElementById('frame').contentDocument;
+      var fails = [];
+      if (!d) {
+        fails.push('no iframe document');
+      } else {
+        var banner = d.getElementById('preview-banner');
+        var body = d.body ? d.body.textContent : '';
+        if (!banner || banner.style.display === 'none') {
+          fails.push('the preview banner did not show');
+        } else {
+          if (!/Acme Roofing/.test(banner.textContent)) fails.push('the banner does not name the sub');
+          if (!/nothing here can be changed/i.test(banner.textContent)) fails.push('the banner does not say it is read-only');
+        }
+        if (!/Certificate of Insurance/.test(body)) fails.push('the files did not render');
+        if (!/1042 River Landing/.test(body)) fails.push('the folder label did not resolve');
+        if (d.querySelector('.portal-upload')) fails.push('THE UPLOAD CONTROL IS STILL PRESENT in preview');
+        if (d.querySelector('[data-upload-btn]')) fails.push('an upload button is still present');
+      }
+      var v = document.getElementById('verdict');
+      v.className = fails.length ? 'bad' : 'ok';
+      v.textContent = fails.length
+        ? 'FAIL\n- ' + fails.join('\n- ')
+        : 'PASS — the real portal rendered in preview mode: the banner names the sub and says it is read-only, the files and their folder labels painted, and the upload control is absent rather than disabled.';
+    }, 1200);
+  </script>
+</body>
+</html>

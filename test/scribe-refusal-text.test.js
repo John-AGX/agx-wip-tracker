@@ -150,7 +150,14 @@ beforeEach(() => {
 const text = (t) => ({ type: 'agent.message', content: [{ type: 'text', text: t }] });
 const idle = (kind) => ({ type: 'session.status_idle', stop_reason: { type: kind || 'end_turn' } });
 const toolUse = (id, name, input) => ({ type: 'agent.custom_tool_use', id, tool_name: name, input });
-const usage = (n) => ({ type: 'span.model_request_end', model_usage: { input_tokens: n, output_tokens: 0 } });
+// `cacheRead` matters since 2026-10-04: the fail-stop used to compare its
+// ceiling against input + output only, which on a cached workload is a
+// rounding error (one real background job billed 237,043 input of which 8
+// were uncached), so it could not trip. It now sums all four fields.
+const usage = (n, cacheRead) => ({
+  type: 'span.model_request_end',
+  model_usage: { input_tokens: n, output_tokens: 0, cache_read_input_tokens: cacheRead || 0 }
+});
 
 const CTX = { userId: USER, orgId: ORG, parentSession: { id: SESSION, organization_id: ORG } };
 
@@ -226,7 +233,7 @@ describe('driveScribeWrite — the ok:false endings, enumerated by driving them'
   });
 
   test('E6 TOKEN-BUDGET STOP — error is the fail-stop, text is chatter', async () => {
-    sdk.turns.push([text(CHATTER), usage(400000), idle('end_turn')]);
+    sdk.turns.push([text(CHATTER), usage(1200000), idle('end_turn')]);
     const r = await driveScribeWrite({ instruction: 'x' }, CTX);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/exceeded token budget/);
@@ -234,6 +241,19 @@ describe('driveScribeWrite — the ok:false endings, enumerated by driving them'
     expect(r.noPayload).toBe(false);
   });
 
+  test('E6b TOKEN-BUDGET STOP counts CACHE tokens — the shape a real runaway actually has', async () => {
+    // Almost nothing uncached, which is what every real fire looks like: the
+    // one observed background job billed 237,043 input of which 8 were
+    // uncached. The old comparison (input + output) saw 50 of 1,200,050 and
+    // let it run; the stop is only a stop if it counts what it is holding.
+    sdk.turns.push([text(CHATTER), usage(50, 1200000), idle('end_turn')]);
+    const r = await driveScribeWrite({ instruction: 'x' }, CTX);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/exceeded token budget/);
+    // The sentence carries the number it tripped on, so the ceiling can be
+    // re-tuned from the refusal rather than from a guess.
+    expect(r.error).toMatch(/1200050 of 1000000/);
+  });
   test('E7 STREAM FAILURE — error is the transport failure, text is chatter', async () => {
     sdk.turns.push([text(CHATTER), { type: 'session.error', error: { message: 'upstream 529 overloaded' } }]);
     const r = await driveScribeWrite({ instruction: 'x' }, CTX);
@@ -341,7 +361,7 @@ describe('execScribeWrite — the sentence each channel carries', () => {
   });
 
   test('TOKEN-BUDGET STOP: every channel keeps the fail-stop, NOT the chatter', async () => {
-    sdk.turns.push([text(CHATTER), usage(400000), idle('end_turn')]);
+    sdk.turns.push([text(CHATTER), usage(1200000), idle('end_turn')]);
     const { ledger, chat, push } = await runDetached();
 
     expect(ledger.apply_error).toMatch(/exceeded token budget/);

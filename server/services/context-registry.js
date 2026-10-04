@@ -9,7 +9,7 @@
 //   const { logContextLoad } = require('../services/context-registry');
 //   logContextLoad(pool, {
 //     organization_id, user_id,
-//     layer: 'memory',           // 'memory' | 'entity_read' | 'entity_search' | 'turn_context' | 'skill' | 'watch'
+//     layer: 'memory',           // 'memory' | 'entity_read' | 'entity_search' | 'turn_context' | 'skill' | 'watch' | 'tool_result'
 //     item_id: row.id,           // (optional) string identifier
 //     item_name: row.topic,      // (optional) human-readable name
 //     item_meta: { kind, importance, score }  // (optional) JSONB context

@@ -1173,10 +1173,17 @@
       d = d || {};
       var g = d.grand || {};
       var cards = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px;">' +
-        card('Everything · tokens in', tokK(g.everything_total_in), 'input + cache, all sources') +
+        // RECORDED, not "everything" — the server now names the lanes it
+        // cannot see (grand.unmeasured_lanes) and this card must not go on
+        // calling the subtotal a total. The old label read
+        // 'input + cache, all sources' over a number that omitted ~9 model
+        // call sites and the managed-agent session-runtime charge.
+        card('Recorded · tokens in', tokK(g.recorded_total_in),
+          'chat + jobs + subtasks + replays' + (g.unmeasured_lanes && g.unmeasured_lanes.length
+            ? ' · ' + g.unmeasured_lanes.length + ' lanes unmeasured' : '')) +
         card('Chat', tokK(g.chat_total_in), tokK(g.chat_output) + ' out') +
-        card('Agent jobs', tokK(g.agent_jobs_total_in), 'background') +
-        card('Watches', tokK(g.watches_total_in)) +
+        card('Agent jobs', tokK(g.agent_jobs_total_in),
+          'background' + (g.agent_jobs_n ? ' · ' + num(g.agent_jobs_n) + ' jobs' : '')) +
         card('Subtasks', tokK(g.subtasks_total_in)) +
         card('Replays', tokK(g.replays_in)) +
         '</div>';
@@ -1223,11 +1230,24 @@
       }
 
       var unl = (d.unlogged || []).reduce(function (a, r) { return a + (Number(r.turns_without_usage) || 0); }, 0);
+      // What the ledger cannot see, printed where the ledger is read —
+      // the per-turn basis (so a multi-request turn stops hiding behind
+      // one request), the retired lane, and the named unmeasured lanes.
+      var tbz = g.chat_turn_basis || {};
+      var extra = tbz.model_requests
+        ? ' Chat on the per-TURN basis: ' + tokK(tbz.total_in) + ' in over ' + num(tbz.model_requests) +
+          ' model requests across ' + num(tbz.rows_turn_basis) + ' turns' +
+          (tbz.rows_request_basis_only ? ' (' + num(tbz.rows_request_basis_only) + ' older turns record one request each, not the turn).' : '.') +
+          (tbz.tool_calls_executed ? ' ' + num(tbz.tool_calls_executed) + ' tool calls executed.' : '')
+        : '';
+      var unm = (g.unmeasured_lanes || []).map(function (l) { return l.lane; }).join(
+);
       out += '<div style="font-size:10.5px;color:var(--text-dim,#777);margin:10px 2px 0;">Window ' + esc(_fxHrs) + 'h · tokens-in = fresh input + cache create + cache read.' +
-        (unl ? ' ' + num(unl) + ' assistant turns had no usage recorded (undercount).' : '') + '</div>';
+        (unl ? ' ' + num(unl) + ' assistant turns had no usage recorded (undercount).' : '') + extra +
+        (unm ? ' NOT in this ledger: ' + esc(unm) + '.' : '') + '</div>';
 
       el.innerHTML = sectionTitle('Usage forensics', presets() +
-        '<span style="font-size:11.5px;color:var(--text-dim,#888);">total in ' + tokK(g.everything_total_in) + '</span>') + out;
+        '<span style="font-size:11.5px;color:var(--text-dim,#888);">recorded in ' + tokK(g.recorded_total_in) + '</span>') + out;
       wire();
     }).catch(function (e) { el.innerHTML = sectionTitle('Usage forensics') + errBox('usage forensics', e); });
   }

@@ -76,16 +76,23 @@ router.post('/:id/seen', async (req, res) => {
 // POST /api/agent-jobs/:id/answer  { answer } — answer a paused (needs_input) task.
 // Stores the answer; the background worker resumes the task on its next tick,
 // reusing the kept-alive session so the agent continues right where it left off.
+//
+// `pause_answer IS NULL` is the claim. The worker takes up to one tick (10s) to
+// pick an answer up, and more than one surface can offer the box — the Queue
+// page and the Crew panel — so without it a second answer inside that window
+// silently overwrote the first and the agent resumed on the later one. Now the
+// second caller gets the same 404 as any other answer that cannot land, and
+// says so, instead of appearing to work.
 router.post('/:id/answer', async (req, res) => {
   try {
     const answer = String((req.body && req.body.answer) || '').trim();
     if (!answer) return res.status(400).json({ error: 'An answer is required' });
     const r = await pool.query(
       "UPDATE agent_jobs SET pause_answer = $1, seen_at = NOW(), updated_at = NOW() " +
-      " WHERE id = $2 AND user_id = $3 AND status = 'needs_input' RETURNING id",
+      " WHERE id = $2 AND user_id = $3 AND status = 'needs_input' AND pause_answer IS NULL RETURNING id",
       [answer.slice(0, 4000), req.params.id, req.user.id]
     );
-    if (!r.rows.length) return res.status(404).json({ error: 'Task not found or not awaiting an answer' });
+    if (!r.rows.length) return res.status(404).json({ error: 'Task not found, already answered, or not awaiting an answer' });
     res.json({ ok: true, status: 'resuming' });
   } catch (e) {
     console.error('POST /api/agent-jobs/:id/answer error:', e);

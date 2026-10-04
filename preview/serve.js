@@ -41,6 +41,26 @@ http.createServer((req, res) => {
     res.writeHead(403);
     return res.end('Forbidden');
   }
+  // ── HARNESS FIXTURES ────────────────────────────────────────────────
+  // A shipped page that fetches its own data cannot be exercised by patching
+  // fetch from a parent frame: the page navigates, the patch goes with the old
+  // window, and the real request races it. So the harness answers the real
+  // request instead. Any JSON under preview/fixtures/ is served at the path
+  // named by its filename, with slashes written as double underscores:
+  //   preview/fixtures/api__preview__sub-portal__me.json
+  //     -> GET /api/preview/sub-portal/<anything>/me
+  // The last path segment is matched, so the id in the URL is free.
+  if (url.indexOf('/api/') === 0) {
+    const tail = url.split('/').filter(Boolean).pop();
+    const fx = path.join(ROOT_PREVIEW, 'fixtures', tail + '.json');
+    if (fs.existsSync(fx)) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(fs.readFileSync(fx));
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'no fixture for ' + url }));
+  }
+
   const found = tryFile(decoded);
   if (!found) {
     res.writeHead(404);

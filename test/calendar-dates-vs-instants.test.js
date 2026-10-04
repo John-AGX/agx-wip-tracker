@@ -114,6 +114,7 @@ const LEDGER = {
   'js/cost-inbox.js:fmtDateTime': { cal: false, pg: false, inst: true, why: 'receipts created_at/updated_at, both TIMESTAMPTZ' },
   'js/report-document.js:fmtDate': { cal: false, pg: false, inst: true, why: 'only photo.shot_at = COALESCE(taken_at, uploaded_at), both TIMESTAMPTZ' },
   'js/estimate-preview.js:fmtDateShort': { cal: false, pg: false, inst: true, why: 'sole call passes a literal new Date() as the "Print Date"; estimates has no DATE column' },
+  'js/estimate-preview.js:fmtDateLong': { cal: false, pg: false, inst: true, why: 'sole call passes a literal new Date() for the AGX proposal\'s project-block date; estimates has no DATE column' },
   'js/field-tools.js:fmtDate': { cal: false, pg: false, inst: true, why: 'field_tool_runs / tool created_at, TIMESTAMPTZ' },
   'js/file-explorer.js:fmtDate': { cal: false, pg: false, inst: true, why: 'attachments.uploaded_at, TIMESTAMPTZ' },
   'js/my-files.js:fmtDate': { cal: false, pg: false, inst: true, why: 'attachments.uploaded_at / field_tool_runs.created_at, TIMESTAMPTZ' },

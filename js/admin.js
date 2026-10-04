@@ -1257,6 +1257,7 @@ function p86Ask(message, opts) {
     else if (name === 'system') renderAdminSystem();
     else if (name === 'ocr-inbox') renderAdminOcrInbox();
     else if (name === 'compliance') renderAdminCompliance();
+    else if (name === 'preview' && window.renderAdminPreview) renderAdminPreview();
     // Persist nav state so a refresh lands back on this admin sub-tab.
     if (typeof window.p86NavSave === 'function') window.p86NavSave();
   }
@@ -3900,6 +3901,21 @@ function p86Ask(message, opts) {
           '<label style="display:block;">Company Header Line</label>' +
           '<input id="tpl-company_header" type="text" value="' + escapeHTML(t.company_header || '') + '" style="width:100%;" placeholder="Address &middot; City &middot; Phone" />' +
         '</div>' +
+        // Letterhead, line by line, because the AGX Standard layout prints
+        // them as three right-aligned lines and the licence numbers have to be
+        // their own line on a Florida contractor's proposal.
+        '<div style="margin-bottom:14px;">' +
+          '<label style="display:block;font-weight:600;margin-bottom:4px;">Company name</label>' +
+          '<input id="tpl-company_name" type="text" value="' + escapeHTML(t.company_name || '') + '" style="width:100%;" placeholder="AG Exteriors" />' +
+        '</div>' +
+        '<div style="margin-bottom:14px;">' +
+          '<label style="display:block;font-weight:600;margin-bottom:4px;">Contact line</label>' +
+          '<input id="tpl-contact_line" type="text" value="' + escapeHTML(t.contact_line || '') + '" style="width:100%;" placeholder="813-725-5233 &middot; agxco.com" />' +
+        '</div>' +
+        '<div style="margin-bottom:14px;">' +
+          '<label style="display:block;font-weight:600;margin-bottom:4px;">Licence line</label>' +
+          '<input id="tpl-license_line" type="text" value="' + escapeHTML(t.license_line || '') + '" style="width:100%;" placeholder="CCC1336582 &middot; CGC1538588" />' +
+        '</div>' +
       '</fieldset>' +
       '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-bottom:14px;">' +
         '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Letter Body</legend>' +
@@ -3922,6 +3938,43 @@ function p86Ask(message, opts) {
         '<div>' +
           '<label style="display:block;">Signature Lead-In</label>' +
           '<textarea id="tpl-signature_text" rows="2" style="width:100%;resize:vertical;">' + escapeHTML(t.signature_text || '') + '</textarea>' +
+        '</div>' +
+        '<div style="margin-bottom:14px;">' +
+          '<label style="display:block;font-weight:600;margin-bottom:4px;">Acceptance paragraph</label>' +
+          '<textarea id="tpl-acceptance_text" rows="2" style="width:100%;resize:vertical;">' + escapeHTML(t.acceptance_text || '') + '</textarea>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">' +
+          '<div>' +
+            '<label style="display:block;font-weight:600;margin-bottom:4px;">Signer name</label>' +
+            '<input id="tpl-signer_name" type="text" value="' + escapeHTML(t.signer_name || '') + '" style="width:100%;" />' +
+          '</div>' +
+          '<div>' +
+            '<label style="display:block;font-weight:600;margin-bottom:4px;">Signer title</label>' +
+            '<input id="tpl-signer_title" type="text" value="' + escapeHTML(t.signer_title || '') + '" style="width:100%;" />' +
+          '</div>' +
+        '</div>' +
+        '<div style="margin-bottom:14px;">' +
+          '<label style="display:block;font-weight:600;margin-bottom:4px;">Pricing footnote</label>' +
+          '<textarea id="tpl-pricing_note" rows="3" style="width:100%;resize:vertical;">' + escapeHTML(t.pricing_note || '') + '</textarea>' +
+          '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;">Prints under the investment summary — permits, concealed conditions, material escalation.</div>' +
+        '</div>' +
+        '<div style="margin-bottom:14px;">' +
+          '<label style="display:block;font-weight:600;margin-bottom:4px;">Payment schedule</label>' +
+          '<textarea id="tpl-payment_schedule_text" rows="3" style="width:100%;resize:vertical;" ' +
+            'placeholder="35% | Deposit upon acceptance of proposal">' +
+            escapeHTML(paymentScheduleToText(t.payment_schedule)) + '</textarea>' +
+          '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;">One row per line, as <code>term | description</code>.</div>' +
+        '</div>' +
+        '<div style="margin-bottom:14px;">' +
+          '<label style="display:block;font-weight:600;margin-bottom:4px;">Payment note</label>' +
+          '<textarea id="tpl-payment_note" rows="3" style="width:100%;resize:vertical;">' + escapeHTML(t.payment_note || '') + '</textarea>' +
+        '</div>' +
+        '<div style="margin-bottom:14px;">' +
+          '<label style="display:block;font-weight:600;margin-bottom:4px;">Standard closing sections</label>' +
+          '<textarea id="tpl-standard_sections_text" rows="8" style="width:100%;resize:vertical;" ' +
+            'placeholder="Jobsite Management&#10;- Temporary fencing around the work zone.">' +
+            escapeHTML(standardSectionsToText(t.standard_sections)) + '</textarea>' +
+          '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:3px;">A section title on its own line, then its numbered items prefixed with <code>-</code>. These print after the scope groups on every proposal.</div>' +
         '</div>' +
       '</fieldset>'
     );
@@ -4059,14 +4112,76 @@ function p86Ask(message, opts) {
     });
   }
 
+  // The payment schedule and the standard closing sections are STRUCTURED in
+  // the setting (rows; title + items) because the proposal prints them as a
+  // table and as numbered lists. They are EDITED as text, one row per line,
+  // which is the shape a person can retype quickly — so each one gets a pair
+  // of pure functions, and a round trip through both must be lossless.
+  function paymentScheduleToText(rows) {
+    return (Array.isArray(rows) ? rows : []).map(function(r) {
+      return [(r && r.term) || '', (r && r.detail) || ''].join(' | ');
+    }).join('\n');
+  }
+  function paymentScheduleFromText(text) {
+    return String(text || '').split(/\r?\n/).map(function(line) {
+      var t = line.trim();
+      if (!t) return null;
+      var i = t.indexOf('|');
+      return i === -1
+        ? { term: '', detail: t }
+        : { term: t.slice(0, i).trim(), detail: t.slice(i + 1).trim() };
+    }).filter(Boolean);
+  }
+  // A title on its own line; its items prefixed with '-'. An item before any
+  // title is dropped rather than inventing an untitled section.
+  function standardSectionsToText(sections) {
+    return (Array.isArray(sections) ? sections : []).map(function(sec) {
+      var items = String((sec && sec.body) || '').split(/\r?\n/)
+        .map(function(l) { return l.trim(); }).filter(Boolean);
+      return [((sec && sec.title) || '')].concat(items.map(function(l) { return '- ' + l; })).join('\n');
+    }).join('\n\n');
+  }
+  function standardSectionsFromText(text) {
+    var out = [];
+    String(text || '').split(/\r?\n/).forEach(function(line) {
+      var t = line.trim();
+      if (!t) return;
+      if (t.charAt(0) === '-') {
+        if (!out.length) return;
+        var item = t.slice(1).trim();
+        if (!item) return;
+        out[out.length - 1].body = out[out.length - 1].body ? out[out.length - 1].body + '\n' + item : item;
+      } else {
+        out.push({ title: t, body: '' });
+      }
+    });
+    return out;
+  }
+
   function syncTopLevelDraftFromInputs() {
     if (!_templateDraft) _templateDraft = {};
-    ['company_header', 'intro_template', 'about_paragraph', 'signature_text'].forEach(function(k) {
+    ['company_name', 'company_header', 'contact_line', 'license_line',
+     'intro_template', 'about_paragraph', 'signature_text', 'acceptance_text',
+     'signer_name', 'signer_title', 'pricing_note', 'payment_note'].forEach(function(k) {
       var el = document.getElementById('tpl-' + k);
       if (el) _templateDraft[k] = el.value;
     });
+    var ps = document.getElementById('tpl-payment_schedule_text');
+    if (ps) _templateDraft.payment_schedule = paymentScheduleFromText(ps.value);
+    var ss = document.getElementById('tpl-standard_sections_text');
+    if (ss) _templateDraft.standard_sections = standardSectionsFromText(ss.value);
     syncBTMappingFromInputs();
   }
+
+  // Exposed for the proposal-template test: these two are the lossy-looking
+  // halves of the editor, so they are pinned as functions rather than inferred
+  // from a rendered form.
+  window.p86ProposalTemplateText = {
+    paymentScheduleToText: paymentScheduleToText,
+    paymentScheduleFromText: paymentScheduleFromText,
+    standardSectionsToText: standardSectionsToText,
+    standardSectionsFromText: standardSectionsFromText
+  };
 
   // ==================== BT MAPPING (sub-section of Templates tab) ====================
   // Renders the editable form for the bt_export_mapping setting. As of

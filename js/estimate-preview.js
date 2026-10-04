@@ -26,14 +26,39 @@
   // fails (offline mode, network glitch). Mirrors the seed in server/db.js so
   // an admin who hasn't yet edited templates still gets the canonical text.
   var FALLBACK_TEMPLATE = {
-    company_header: '13191 56th Court, Ste 102 · Clearwater, FL 33760-4030 · Phone: 813-725-5233',
-    intro_template: 'AG Exteriors is pleased to provide you with this proposal to complete the work outlined below.',
+    company_name: 'AG Exteriors',
+    company_header: '13191 56th Court, Suite 102 · Clearwater, FL 33760',
+    contact_line: '813-725-5233 · agxco.com',
+    // The licence numbers belong on the letterhead of every proposal a Florida
+    // contractor sends. The renderer has read template.license_line since the
+    // band layouts landed; nothing ever SET it, so it silently fell back to
+    // printing the address line twice.
+    license_line: 'CCC1336582 · CGC1538588',
+    intro_template: 'AG Exteriors is pleased to provide this proposal to furnish all materials, equipment and labor — subject to the exclusions listed below — required to complete the work described.',
     about_paragraph: 'We proudly specialize in a wide range of exterior services, including roofing, siding, painting, deck rebuilding, and more—delivering each with care and attention to detail. Backed by our leadership team with extensive experience in construction, development, and property management. AG Exteriors is committed to bringing a thoughtful, professional approach to every project. With this foundation, we’re committed to providing high-quality work and dependable service on every project.',
     exclusions: [
       'This proposal may be withdrawn by AG Exteriors if not accepted within 30 days.',
       'Pricing assumes unfettered access to the property during the project.'
     ],
-    signature_text: 'I confirm that my action here represents my electronic signature and is binding.'
+    signature_text: 'This proposal may be withdrawn by AG Exteriors if not accepted within 30 days. I confirm that my action here represents my electronic signature and is binding.',
+    acceptance_text: 'The above prices, scope, specifications and conditions are satisfactory and are hereby accepted. You are authorized to do the work specified.',
+    signer_name: 'Noah Pillsbury',
+    signer_title: 'President & Founder',
+    // Terms, as rows, because the document prints them as a two-column table
+    // and a single paragraph cannot be read at a glance by a board.
+    payment_schedule: [
+      { term: '35%', detail: 'Deposit upon acceptance of proposal' },
+      { term: 'Balance', detail: 'Progress billing as work is completed' }
+    ],
+    payment_note: 'Any prepayment of materials will be in addition to the 35% deposit. Material costs are guaranteed if materials are paid for at the time the proposal is accepted. Late payments may be subject to interest of 1.5% per month or the maximum allowed by law. Owner agrees to pay reasonable collection costs, including attorney fees, if collection becomes necessary.',
+    pricing_note: 'Permit fees and engineering fees are not included; if required, AG Exteriors will charge the client the cost of these fees plus an additional 10%. Excludes hidden or concealed conditions including structural deficiencies, mold, asbestos or lead paint, and existing code violations — any corrective work is handled by written change order. Material pricing is subject to escalation between contract signing and material purchase.',
+    // The sections that read the same on every proposal. Project-specific
+    // narrative is a scope group with no lines; THIS is the boilerplate that
+    // would otherwise be retyped every time. One line of body per numbered item.
+    standard_sections: [
+      { title: 'Jobsite Management', body: 'Temporary fencing around the work zone; a portable toilet for the crew and a roll-off dumpster for debris.\nScaffold as required for second-floor work.\nEquipment and materials stored on site in a location designated by the client.\nWork proceeds on consecutive days, weather permitting; cleanup is performed daily and upon completion.\nManagement provides daily on-site oversight for quality assurance and progress reviews.' },
+      { title: 'Resident / Construction Schedule', body: 'AG Exteriors will provide advance notice to management prior to beginning work so residents can be notified.' }
+    ]
   };
 
   function getTemplate() {
@@ -74,6 +99,16 @@
     if (!d) d = new Date();
     if (typeof d === 'string') d = new Date(d);
     return (d.getMonth() + 1) + '-' + d.getDate() + '-' + d.getFullYear();
+  }
+
+  // "October 3, 2026" — what the AGX document prints in its project block. The
+  // same instant fmtDateShort reads, so the same local accessors are right.
+  function fmtDateLong(d) {
+    if (!d) d = new Date();
+    if (typeof d === 'string') d = new Date(d);
+    var months = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+                  'August', 'September', 'October', 'November', 'December'];
+    return months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
   }
 
   function escapeHTMLLocal(s) {
@@ -190,7 +225,11 @@
       community: community,
       issue: issue,
       total: fmtCurrency(computeTotal(estimate)),
+      // Same number, to the cent: the AGX investment summary totals a column
+      // of cents, so it cannot print a dollar-rounded total under it.
+      totalExact: fmtProposalCurrency(computeTotal(estimate)),
       date: fmtDateShort(new Date()),
+      dateLong: fmtDateLong(new Date()),
       client: client
     };
   }
@@ -452,7 +491,7 @@
           return /^image\//.test(a.mime_type || '');
         })[0];
         var img = hero ? (hero.web_url || hero.original_url) : '';
-        return '<section class="doc-cover"' + (img ? ' style="background-image:linear-gradient(180deg,rgba(15,35,70,.55),rgba(15,35,70,.88)),url(\'' + escapeAttrLocal(img) + '\');"' : '') + '>' +
+        return '<section class="doc-cover"' + (img ? ' style="background-image:linear-gradient(180deg,rgba(0,63,81,.55),rgba(0,63,81,.90)),url(\'' + escapeAttrLocal(img) + '\');"' : '') + '>' +
           '<img class="cover-logo" src="' + escapeAttrLocal(docLogoSrc()) + '" alt="Logo" />' +
           '<h1 class="cover-title">' + escapeHTMLLocal(estimate.community || estimate.title || 'Proposal') + '</h1>' +
           '<div class="cover-sub">' + escapeHTMLLocal(estimate.title || '') + '</div>' +
@@ -678,6 +717,158 @@
             '<li>References from comparable HOA and property-management projects, on request</li>' +
           '</ul>';
       },
+      // ── The AGX house document ────────────────────────────────────────
+      // Letterhead: mark on the left, the company's own lines on the right,
+      // licences last. license_line is NOT defaulted to company_header here
+      // (the band layouts do that): on this document an org with no licence
+      // numbers prints none rather than printing its address a second time.
+      agxLetterhead: function () {
+        var lines = [template.company_header, template.contact_line, template.license_line]
+          .filter(function (x) { return x && String(x).trim(); })
+          .map(function (x, i) {
+            return '<div class="' + (i === 2 ? 'agx-lic' : 'agx-addr') + '">' + escapeHTMLLocal(x) + '</div>';
+          }).join('');
+        return '<div class="agx-letterhead">' +
+          '<img class="agx-mark" src="' + escapeAttrLocal(docLogoSrc()) + '" alt="' +
+            escapeAttrLocal(template.company_name || 'Logo') + '" />' +
+          '<div class="agx-lines">' + lines + '</div>' +
+        '</div>';
+      },
+      agxTitle: function () {
+        var head = estimate.issue || estimate.title || 'Proposal';
+        var sub = (estimate.title && estimate.title !== head) ? estimate.title : '';
+        return '<div class="agx-eyebrow">Proposal</div>' +
+          '<h1 class="agx-title">' + escapeHTMLLocal(head) + '</h1>' +
+          (sub ? '<div class="agx-subtitle">' + escapeHTMLLocal(sub) + '</div>' : '');
+      },
+      // Submitted to / Project, side by side. Two addresses that are not the
+      // same address: who signs and gets billed, and where the work happens.
+      agxParties: function () {
+        function addrLines(a) {
+          return String(a || '').split(/,\s*/).filter(Boolean)
+            .map(function (l) { return '<div>' + escapeHTMLLocal(l) + '</div>'; }).join('');
+        }
+        var toName = estimate.client || estimate.community || ctx.community;
+        var toSub = (estimate.community && estimate.community !== estimate.client)
+          ? '<div>' + escapeHTMLLocal(estimate.community) + '</div>' : '';
+        var attn = estimate.managerName || (ctx.salutation !== 'Client' ? ctx.salutation : '');
+        return '<div class="agx-parties">' +
+          '<div class="agx-party">' +
+            '<div class="agx-party-label">Submitted to</div>' +
+            '<div class="agx-party-name">' + escapeHTMLLocal(toName) + '</div>' + toSub +
+            (attn ? '<div>Attn: ' + escapeHTMLLocal(attn) + '</div>' : '') +
+            addrLines(estimate.billingAddr || estimate.propertyAddr) +
+          '</div>' +
+          '<div class="agx-party">' +
+            '<div class="agx-party-label">Project</div>' +
+            '<div class="agx-party-name">' + escapeHTMLLocal(estimate.community || estimate.title || '—') + '</div>' +
+            addrLines(estimate.propertyAddr) +
+            '<div class="agx-party-date">Date: ' + escapeHTMLLocal(ctx.dateLong || ctx.date) + '</div>' +
+          '</div>' +
+        '</div>';
+      },
+      agxIntro: function () {
+        return '<p class="intro">' + prep.introHTML + '</p>' +
+          (template.about_paragraph ? '<p class="about">' + escapeHTMLLocal(template.about_paragraph) + '</p>' : '');
+      },
+      agxScopeHeading: function () { return heading('Scope of Work'); },
+      // Numbered sections, continuous across narrative and priced ones, each
+      // priced section carrying its own amount in its heading. prep.agxScope
+      // is the ONE numbering — the investment summary cites the same numbers,
+      // so "(Section 3)" in the summary always points at the right section.
+      agxScopeSections: function () {
+        var out = '';
+        prep.agxScope.forEach(function (sec) {
+          out += '<h3 class="agx-sec-head"><span class="agx-sec-no">' + sec.no + '.</span> ' +
+            escapeHTMLLocal(sec.name) +
+            (sec.amount != null && cfg.subtotals
+              ? ' <span class="agx-sec-amt">— ' + escapeHTMLLocal(fmtProposalCurrency(sec.amount)) + '</span>'
+              : '') +
+            '</h3>';
+          out += '<div class="agx-sec-body">' +
+            (sec.bodyHTML || '<p class="doc-muted">Scope not entered for this section.</p>') +
+            '</div>';
+        });
+        return out || '<p class="doc-muted">Scope of work not yet entered.</p>';
+      },
+      // Investment summary + what is deliberately NOT in the total. The second
+      // table is the one that keeps a proposal honest: an excluded group is
+      // either a priced option or a TBD, and either way it is named here
+      // instead of being quietly dropped from the document.
+      agxInvestmentSummary: function () {
+        var rows = '';
+        prep.agxScope.forEach(function (sec) {
+          if (sec.amount == null) return;
+          rows += '<tr><td class="c-desc">' + escapeHTMLLocal(sec.name) +
+            ' <span class="agx-sec-ref">(Section ' + sec.no + ')</span></td>' +
+            '<td class="c-money">' + moneyCell(sec.amount) + '</td></tr>';
+        });
+        var html = heading('Investment Summary') +
+          '<table class="doc-table agx-sum"><thead><tr><th class="c-desc">Scope component</th>' +
+          '<th class="c-money">Amount</th></tr></thead><tbody>' +
+          (rows || '<tr><td class="c-desc doc-muted">No priced scope yet.</td><td class="c-money"></td></tr>') +
+          '<tr class="tot-row"><td class="c-desc">Total project investment</td>' +
+          '<td class="c-money">' + escapeHTMLLocal(ctx.totalExact || ctx.total) + '</td></tr></tbody></table>';
+
+        if (excluded.length) {
+          var notRows = '';
+          excluded.forEach(function (alt) {
+            var t = computeGroupTotal(estimate, alt.id);
+            notRows += '<tr><td class="c-desc">' + escapeHTMLLocal(alt.name || 'Item') + '</td>' +
+              '<td class="c-money">' + (t ? moneyCell(t) : 'TBD') + '</td></tr>';
+          });
+          html += '<h3 class="agx-sec-head agx-sec-plain">Not included in total</h3>' +
+            '<table class="doc-table agx-sum"><thead><tr><th class="c-desc">Item</th>' +
+            '<th class="c-money">Amount</th></tr></thead><tbody>' + notRows + '</tbody></table>';
+        }
+        if (template.pricing_note) {
+          html += '<p class="doc-small agx-note">' + escapeHTMLLocal(template.pricing_note) + '</p>';
+        }
+        return html;
+      },
+      agxPaymentSchedule: function () {
+        var rows = (template.payment_schedule || []).filter(function (r) { return r && (r.term || r.detail); });
+        if (!rows.length && !template.payment_note) return '';
+        var body = rows.map(function (r) {
+          return '<tr><td class="agx-term">' + escapeHTMLLocal(r.term || '') + '</td>' +
+            '<td>' + escapeHTMLLocal(r.detail || '') + '</td></tr>';
+        }).join('');
+        return heading('Payment Schedule') +
+          (body ? '<table class="agx-terms"><tbody>' + body + '</tbody></table>' : '') +
+          (template.payment_note ? '<p class="doc-small agx-note">' + escapeHTMLLocal(template.payment_note) + '</p>' : '');
+      },
+      // Both parties sign, side by side, and the contractor's signer is named:
+      // a signature block with no name under it is a document that comes back.
+      agxAcceptance: function () {
+        function col(label, who, sub) {
+          return '<div class="agx-sig-col">' +
+            '<div class="agx-party-label">' + escapeHTMLLocal(label) + '</div>' +
+            '<div class="agx-sig-line"></div><div class="agx-sig-cap">Signature</div>' +
+            '<div class="agx-sig-line"></div><div class="agx-sig-cap">Print name</div>' +
+            '<div class="agx-sig-line"></div><div class="agx-sig-cap">Date</div>' +
+            '<div class="agx-sig-who">' + escapeHTMLLocal(who) + '</div>' +
+            '<div class="agx-sig-sub">' + escapeHTMLLocal(sub) + '</div>' +
+          '</div>';
+        }
+        var owner = estimate.client || estimate.community || ctx.community;
+        var signer = [template.signer_name, template.signer_title].filter(Boolean).join(', ');
+        return heading('Acceptance of Proposal') +
+          (template.acceptance_text ? '<p class="doc-para">' + escapeHTMLLocal(template.acceptance_text) + '</p>' : '') +
+          (template.signature_text ? '<p class="doc-small agx-note">' + escapeHTMLLocal(template.signature_text) + '</p>' : '') +
+          '<div class="agx-sigs">' +
+            col('Accepted by — owner', owner, 'Authorized representative') +
+            col('Submitted by — contractor', template.company_name || 'Contractor', signer) +
+          '</div>';
+      },
+      // Repeats at the foot of every printed page (position: fixed). No page
+      // numbers: a browser cannot count pages from HTML, and Chrome's own
+      // print footer can add them if the operator wants them.
+      agxRunningFoot: function () {
+        var bits = [template.company_name || 'AG Exteriors',
+                    estimate.community || estimate.title || '', 'Proposal']
+          .filter(function (x) { return x && String(x).trim(); });
+        return '<div class="agx-runfoot">' + escapeHTMLLocal(bits.join(' · ')) + '</div>';
+      },
       exclusions: function () {
         if (!prep.exclusionsHTML) return '';
         return '<h2 class="section-heading italic-heading">Assumptions, Clarifications and Exclusions:</h2>' +
@@ -735,7 +926,12 @@
     // Escape the template body first so an admin can't inject markup; the
     // placeholder substitution then injects already-safe HTML built above.
     // {name} survives HTML escaping since the brace chars aren't escaped.
-    var safeIntroTemplate = escapeHTMLLocal(template.intro_template || '');
+    // A per-estimate intro WINS over the org paragraph when it is filled in:
+    // the opening of a real proposal names the RFP it answers and what is
+    // priced separately, and that sentence cannot live in an org-wide default.
+    // Empty (the usual case) falls back to the standard text.
+    var introSource = String(estimate.proposalIntro || '').trim() || template.intro_template || '';
+    var safeIntroTemplate = escapeHTMLLocal(introSource);
     var introHTML = fillPlaceholders(safeIntroTemplate, {
       issue: '<strong>' + escapeHTMLLocal(ctx.issue) + '</strong>',
       community: '<strong>' + escapeHTMLLocal(ctx.community) + '</strong>',
@@ -801,6 +997,44 @@
       exclusionsHTML += '<li>' + escapeHTMLLocal(item) + '</li>';
     });
 
+    // The AGX document's scope sections, numbered once: every included group in
+    // the operator's own order, then the org's standard closing sections. A
+    // group with no priced line is NARRATIVE — amount null, no price in its
+    // heading and no row in the investment summary — which is how a project
+    // approach or a water-management section is written without a second
+    // authoring surface to keep in sync.
+    var agxScope = (function () {
+      var allLines = (window.appData && window.appData.estimateLines) || [];
+      var out = [];
+      includedAlts.forEach(function (alt) {
+        var priced = allLines.some(function (l) {
+          return l.estimateId === estimate.id && l.alternateId === alt.id &&
+                 l.section !== '__section_header__';
+        });
+        out.push({
+          name: alt.name || 'Scope',
+          amount: priced ? computeGroupTotal(estimate, alt.id) : null,
+          bodyHTML: scopeBody((alt.scope || '').trim())
+        });
+      });
+      (template.standard_sections || []).forEach(function (sec) {
+        if (!sec || !sec.title) return;
+        var items = String(sec.body || '').split(/\r?\n/)
+          .map(function (l) { return l.trim(); }).filter(Boolean);
+        out.push({
+          name: sec.title,
+          amount: null,
+          bodyHTML: items.length
+            ? '<ol class="doc-list agx-sec-list">' + items.map(function (l) {
+                return '<li>' + escapeHTMLLocal(l) + '</li>';
+              }).join('') + '</ol>'
+            : ''
+        });
+      });
+      out.forEach(function (sec, i) { sec.no = i + 1; });
+      return out;
+    })();
+
     // Everything above is PREP — the same data the original single-layout
     // proposal computed. What follows is the layout WALK: the chosen layout
     // names its sections in order, and each one is drawn by the matching
@@ -814,6 +1048,7 @@
       introHTML: introHTML,
       scopeHTML: scopeHTML,
       exclusionsHTML: exclusionsHTML,
+      agxScope: agxScope,
       includedAlts: includedAlts
     };
     var sections = buildSections(estimate, template, ctx, cfg, prep);
@@ -1162,45 +1397,65 @@
       // the title, and right-aligned Total Price on its own visual
       // line (no top border — the divider above the heading carries
       // the separation).
-      '.p86-proposal { font-family: Arial, Helvetica, sans-serif; color: #222; font-size: 11pt; line-height: 1.5; max-width: 8.5in; margin: 0 auto; padding: 0.55in 0.6in 0.6in; background: #fff; box-shadow: 0 2px 18px rgba(0,0,0,0.4); }' +
+      // THE PALETTE, MEASURED OFF THE SIGNED PROPOSAL. Every value below was
+      // read out of the reference PDF's own content streams — text colours,
+      // the filled table header band, its hairline weight — rather than picked
+      // by eye, so the printed document and the app agree on what AGX looks
+      // like. (Its typeface is Liberation Sans, metric-identical to Arial,
+      // which is why the stack below is unchanged and the difference was never
+      // the font: it was the colour and the table treatment.)
+      //
+      // These live on .p86-proposal so EVERY layout inherits them — the point
+      // of the pass was that the templates line up with each other, not that
+      // one of them looks good alone.
+      '.p86-proposal { --ink: #202020; --navy: #003f51; --teal: #3a8878; --muted: #7f8591; ' +
+        '--foot: #8b909b; --hair: #c9d4d8; --rule: #9aa5ab; --panel: #f1f5f6; }' +
+      '.p86-proposal { font-family: Arial, Helvetica, sans-serif; color: var(--ink); font-size: 10pt; line-height: 1.45; max-width: 8.5in; margin: 0 auto; padding: 0.55in 0.6in 0.6in; background: #fff; box-shadow: 0 2px 18px rgba(0,0,0,0.4); }' +
+      // Numerals align in a column without going monospace-technical: the
+      // reference sets money in the body face.
+      '.p86-proposal .c-money, .p86-proposal .c-qty { font-variant-numeric: tabular-nums; }' +
+      // Ordered lists everywhere take the teal numeral the reference uses.
+      '.p86-proposal ol > li::marker { color: var(--teal); font-weight: 700; }' +
       '.p86-proposal .proposal-header { text-align: center; margin-bottom: 6px; }' +
       '.p86-proposal .proposal-header img { height: 70px; display: block; margin: 0 auto 4px; }' +
-      '.p86-proposal .company-line { font-size: 10pt; color: #222; letter-spacing: 0.2px; margin-top: 4px; }' +
+      '.p86-proposal .company-line { font-size: 9pt; color: var(--muted); letter-spacing: 0.2px; margin-top: 4px; }' +
       '.p86-proposal .proposal-meta { display: flex; justify-content: space-between; gap: 30px; margin: 28px 0 8px; font-size: 10pt; }' +
       '.p86-proposal .meta-left { flex: 1; line-height: 1.45; }' +
       '.p86-proposal .meta-left > div { margin: 0; }' +
       '.p86-proposal .meta-right { text-align: right; flex: 0 0 auto; min-width: 200px; font-size: 10pt; line-height: 1.45; }' +
       '.p86-proposal .meta-right > div { margin: 0; }' +
-      '.p86-proposal .meta-label { font-weight: 700; color: #222; }' +
+      '.p86-proposal .meta-label { font-weight: 700; color: var(--navy); }' +
       '.p86-proposal .meta-print-date { margin-top: 4px; }' +
-      '.p86-proposal .proposal-title { font-size: 18pt; font-weight: 700; color: #222; margin: 26px 0 18px; line-height: 1.2; }' +
-      '.p86-proposal .intro, .p86-proposal .about { margin: 14px 0; text-align: left; font-size: 11pt; line-height: 1.55; }' +
+      '.p86-proposal .proposal-title { font-size: 15pt; font-weight: 700; color: var(--navy); margin: 22px 0 16px; line-height: 1.22; }' +
+      '.p86-proposal .intro, .p86-proposal .about { margin: 12px 0; text-align: left; font-size: 10pt; line-height: 1.5; }' +
       '.p86-proposal .about { margin-bottom: 22px; }' +
-      '.p86-proposal .divider { border: none; border-top: 1px solid #c8c8c8; margin: 18px 0 22px; }' +
-      '.p86-proposal .section-heading { font-size: 13pt; font-weight: 700; color: #222; margin: 18px 0 10px; }' +
-      '.p86-proposal .italic-heading { font-style: italic; font-size: 11pt; margin: 18px 0 10px; }' +
+      '.p86-proposal .divider { border: none; border-top: 1px solid var(--hair); margin: 16px 0 20px; }' +
+      // Section headings: navy, 10.5pt, with a hairline under them. The rule is
+      // what stops a page of 10pt body text reading as one grey slab.
+      '.p86-proposal .section-heading { font-size: 10.5pt; font-weight: 700; color: var(--navy); margin: 20px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--hair); letter-spacing: 0.2px; page-break-after: avoid; break-after: avoid; }' +
+      '.p86-proposal .italic-heading { font-style: italic; font-size: 10pt; color: var(--navy); margin: 20px 0 8px; }' +
       '.p86-proposal .scope-text { margin: 6px 0 10px; }' +
-      '.p86-proposal .scope-text p { margin: 2px 0; font-size: 10.5pt; line-height: 1.5; }' +
+      '.p86-proposal .scope-text p { margin: 2px 0; font-size: 10pt; line-height: 1.5; }' +
       // Total block — right-aligned on its own visual row. The
       // divider above the Assumptions heading handles the rule, so
       // no border on the total itself.
-      '.p86-proposal .total-block { text-align: right; font-size: 15pt; font-weight: 700; color: #222; margin: 8px 0 22px; }' +
-      '.p86-proposal .total-block .total-label { color: #222; margin-right: 8px; }' +
+      '.p86-proposal .total-block { text-align: right; font-size: 13pt; font-weight: 700; color: var(--navy); margin: 8px 0 20px; }' +
+      '.p86-proposal .total-block .total-label { color: var(--navy); margin-right: 8px; }' +
       // Numbered exclusions: indented list, items spaced out so the
       // wrapped lines read as paragraphs rather than dense bullets.
       '.p86-proposal .exclusions { padding-left: 26px; margin: 10px 0 22px; }' +
-      '.p86-proposal .exclusions li { margin: 10px 0; font-size: 10.5pt; text-align: left; line-height: 1.5; padding-left: 4px; }' +
+      '.p86-proposal .exclusions li { margin: 8px 0; font-size: 9pt; text-align: left; line-height: 1.5; padding-left: 4px; }' +
       '.p86-proposal .exclusions li ul { padding-left: 20px; margin: 6px 0; }' +
       '.p86-proposal .exclusions li ul li { margin: 6px 0; font-size: 10.5pt; }' +
       '.p86-proposal .sig-intro { margin-top: 26px; font-size: 10pt; }' +
       '.p86-proposal .sig-block { margin-top: 18px; }' +
       '.p86-proposal .sig-row { display: flex; align-items: center; gap: 14px; margin: 22px 0; font-size: 10pt; }' +
       '.p86-proposal .sig-label { font-weight: 700; min-width: 90px; }' +
-      '.p86-proposal .sig-line { flex: 1; border-bottom: 1.5px solid #333; height: 0; }' +
+      '.p86-proposal .sig-line { flex: 1; border-bottom: 1px solid var(--rule); height: 0; }' +
       '.p86-proposal .attached-photos { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 10px 0 18px; }' +
-      '.p86-proposal .attached-photo { margin: 0; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; background: #fafafa; page-break-inside: avoid; }' +
+      '.p86-proposal .attached-photo { margin: 0; border: 1px solid var(--hair); border-radius: 3px; overflow: hidden; background: var(--panel); page-break-inside: avoid; }' +
       '.p86-proposal .attached-photo img { width: 100%; height: auto; display: block; }' +
-      '.p86-proposal .attached-photo figcaption { padding: 4px 8px; font-size: 9pt; color: #555; background: #f3f4f6; border-top: 1px solid #e5e7eb; word-break: break-all; }' +
+      '.p86-proposal .attached-photo figcaption { padding: 4px 8px; font-size: 8pt; color: var(--muted); background: var(--panel); border-top: 1px solid var(--hair); word-break: break-all; }' +
       '.p86-proposal .attached-docs { padding-left: 22px; margin: 6px 0 18px; font-size: 10pt; }' +
       '.p86-proposal .attached-docs li { margin: 4px 0; }' +
       '.p86-proposal .attached-docs a { color: #0b5fff; text-decoration: underline; }' +
@@ -1210,91 +1465,94 @@
       // section labels, disclaimer — get unique selectors.
       '.p86-proposal.p86-takeoff .takeoff-disclaimer { background: #fff8e1; border-left: 3px solid #d97706; padding: 10px 12px; margin: 12px 0 14px; font-size: 10pt; line-height: 1.45; color: #4a3500; }' +
       '.p86-proposal.p86-takeoff .takeoff-disclaimer strong { color: #b45309; letter-spacing: 0.3px; }' +
-      '.p86-proposal.p86-takeoff .takeoff-subheading { font-size: 11pt; font-weight: 700; color: #333; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.4px; }' +
+      '.p86-proposal.p86-takeoff .takeoff-subheading { font-size: 10pt; font-weight: 700; color: var(--navy); margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.8px; }' +
       '.p86-proposal.p86-takeoff .takeoff-section { margin: 8px 0 14px; page-break-inside: avoid; }' +
-      '.p86-proposal.p86-takeoff .takeoff-section-name { font-size: 10.5pt; font-weight: 700; color: #222; margin: 10px 0 4px; padding: 4px 8px; background: #f3f4f6; border-left: 3px solid #4f8cff; }' +
+      '.p86-proposal.p86-takeoff .takeoff-section-name { font-size: 10pt; font-weight: 700; color: var(--navy); margin: 10px 0 4px; padding: 5px 9px; background: var(--panel); border-left: 3px solid var(--teal); }' +
       '.p86-proposal.p86-takeoff .takeoff-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 10pt; }' +
-      '.p86-proposal.p86-takeoff .takeoff-table th, .p86-proposal.p86-takeoff .takeoff-table td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }' +
-      '.p86-proposal.p86-takeoff .takeoff-table th { text-align: left; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.5px; color: #555; background: #fafafa; border-bottom: 1px solid #d1d5db; }' +
+      '.p86-proposal.p86-takeoff .takeoff-table th, .p86-proposal.p86-takeoff .takeoff-table td { padding: 6px 9px; border-bottom: 1px solid var(--hair); vertical-align: top; }' +
+      '.p86-proposal.p86-takeoff .takeoff-table th { text-align: left; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.9px; color: #fff; background: var(--navy); border-bottom: none; }' +
       '.p86-proposal.p86-takeoff .takeoff-table .col-desc { width: auto; }' +
-      '.p86-proposal.p86-takeoff .takeoff-table .col-qty { width: 80px; text-align: right; font-family: "SF Mono", Consolas, monospace; }' +
-      '.p86-proposal.p86-takeoff .takeoff-table .col-unit { width: 80px; text-align: left; color: #555; }' +
+      '.p86-proposal.p86-takeoff .takeoff-table .col-qty { width: 80px; text-align: right; font-variant-numeric: tabular-nums; }' +
+      '.p86-proposal.p86-takeoff .takeoff-table .col-unit { width: 80px; text-align: left; color: var(--muted); }' +
       '.p86-proposal.p86-takeoff .takeoff-group { margin-bottom: 18px; }' +
       // ── Layout structure ─────────────────────────────────────────────
       // Structural CSS for the section builders. Everything here is scoped
       // under .p86-proposal so it inherits the same Arial/11pt/letter-paper
       // body as the original document — a layout changes the SKELETON, never
-      // the AGX look. Colors stay in the existing palette (#0f2346 navy,
-      // #4f8cff accent, #d97706 warning) so any layout prints as one family.
-      '.p86-proposal .doc-band { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 2px solid #0f2346; padding-bottom: 10px; margin-bottom: 6px; }' +
+      // the AGX look. Every colour below is a palette token (above), measured
+      // off the signed proposal, so all seven layouts print as one family
+      // rather than as one good document and six near-misses.
+      '.p86-proposal .doc-band { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1.5px solid var(--navy); padding-bottom: 10px; margin-bottom: 6px; }' +
       '.p86-proposal .doc-band .band-logo { height: 52px; width: auto; }' +
-      '.p86-proposal .doc-band .band-meta { text-align: right; font-size: 9.5pt; line-height: 1.6; color: #333; }' +
-      '.p86-proposal .doc-label { display: inline-block; min-width: 62px; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.6px; color: #6b7280; }' +
-      '.p86-proposal .doc-licence { font-size: 9pt; color: #6b7280; margin: 0 0 14px; }' +
+      '.p86-proposal .doc-band .band-meta { text-align: right; font-size: 9pt; line-height: 1.6; color: var(--ink); }' +
+      '.p86-proposal .doc-label { display: inline-block; min-width: 62px; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--navy); }' +
+      '.p86-proposal .doc-licence { font-size: 8pt; color: var(--muted); letter-spacing: 0.4px; margin: 0 0 14px; }' +
 
       // Cover page — the hero image is a background so a missing or slow
       // attachment degrades to flat navy instead of a broken <img>.
-      '.p86-proposal .doc-cover { background: #0f2346; color: #fff; background-size: cover; background-position: center; padding: 54px 40px 44px; margin: -0.55in -0.6in 26px; text-align: center; page-break-after: avoid; }' +
+      '.p86-proposal .doc-cover { background: var(--navy); color: #fff; background-size: cover; background-position: center; padding: 54px 40px 44px; margin: -0.55in -0.6in 26px; text-align: center; page-break-after: avoid; }' +
       '.p86-proposal .doc-cover .cover-logo { height: 60px; margin: 0 auto 22px; display: block; filter: brightness(0) invert(1); }' +
       '.p86-proposal .doc-cover .cover-title { font-size: 24pt; font-weight: 700; line-height: 1.2; margin: 0 0 8px; color: #fff; border: 0; padding: 0; }' +
       '.p86-proposal .doc-cover .cover-sub { font-size: 12pt; color: rgba(255,255,255,0.86); margin-bottom: 22px; }' +
       '.p86-proposal .doc-cover .cover-meta { display: flex; justify-content: center; flex-wrap: wrap; gap: 18px; font-size: 9.5pt; color: rgba(255,255,255,0.75); border-top: 1px solid rgba(255,255,255,0.25); padding-top: 14px; }' +
-      '.p86-proposal .doc-rfp-cover { border-bottom: 2px solid #0f2346; padding-bottom: 14px; margin-bottom: 18px; }' +
+      '.p86-proposal .doc-rfp-cover { border-bottom: 1.5px solid var(--navy); padding-bottom: 14px; margin-bottom: 18px; }' +
       '.p86-proposal .doc-rfp-cover .band-logo { height: 52px; margin-bottom: 12px; }' +
 
       // Key/value project block — the "who and what" table every bid carries.
       '.p86-proposal .doc-kv { width: 100%; border-collapse: collapse; margin: 0 0 18px; font-size: 10pt; }' +
-      '.p86-proposal .doc-kv td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }' +
-      '.p86-proposal .doc-kv td:first-child { width: 170px; color: #6b7280; text-transform: uppercase; font-size: 8.5pt; letter-spacing: 0.5px; }' +
+      '.p86-proposal .doc-kv td { padding: 6px 9px; border-bottom: 1px solid var(--hair); vertical-align: top; }' +
+      '.p86-proposal .doc-kv td:first-child { width: 170px; color: var(--navy); font-weight: 700; text-transform: uppercase; font-size: 8pt; letter-spacing: 1px; }' +
       '.p86-proposal .doc-servicemeta { font-size: 10pt; line-height: 1.7; margin-bottom: 14px; }' +
 
       // Shared priced table — SOV, base bid, alternates, unit prices and every
       // takeoff level all render through this one chassis so a client reading
       // two AGX documents side by side sees one table, not two.
       '.p86-proposal .doc-table { width: 100%; border-collapse: collapse; margin: 0 0 16px; font-size: 10pt; }' +
-      '.p86-proposal .doc-table th, .p86-proposal .doc-table td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }' +
-      '.p86-proposal .doc-table th { text-align: left; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.5px; color: #555; background: #fafafa; border-bottom: 1px solid #d1d5db; }' +
-      '.p86-proposal .doc-table .c-no { width: 46px; color: #6b7280; font-family: "SF Mono", Consolas, monospace; }' +
+      '.p86-proposal .doc-table th, .p86-proposal .doc-table td { padding: 6px 9px; border-bottom: 1px solid var(--hair); vertical-align: top; }' +
+      // The header band is the single biggest difference between the reference
+      // document and a plain HTML table: navy fill, white uppercase label.
+      '.p86-proposal .doc-table th { text-align: left; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.9px; color: #fff; background: var(--navy); border-bottom: none; padding: 7px 9px; }' +
+      '.p86-proposal .doc-table .c-no { width: 46px; color: var(--teal); font-weight: 700; }' +
       '.p86-proposal .doc-table .c-desc { width: auto; }' +
-      '.p86-proposal .doc-table .c-sec { width: 130px; color: #555; }' +
-      '.p86-proposal .doc-table .c-qty { width: 74px; text-align: right; font-family: "SF Mono", Consolas, monospace; }' +
-      '.p86-proposal .doc-table .c-unit { width: 74px; color: #555; }' +
-      '.p86-proposal .doc-table .c-money { width: 108px; text-align: right; font-family: "SF Mono", Consolas, monospace; white-space: nowrap; }' +
+      '.p86-proposal .doc-table .c-sec { width: 130px; color: var(--muted); }' +
+      '.p86-proposal .doc-table .c-qty { width: 74px; text-align: right; }' +
+      '.p86-proposal .doc-table .c-unit { width: 74px; color: var(--muted); }' +
+      '.p86-proposal .doc-table .c-money { width: 112px; text-align: right; white-space: nowrap; }' +
       '.p86-proposal .doc-table .c-check { width: 34px; text-align: center; }' +
       // Write-in columns the estimate model cannot fill (spec, notes). A ruled
       // blank cell tells the reader it is theirs to complete; an empty one just
       // looks like missing data.
-      '.p86-proposal .doc-table .c-write { width: 118px; border-bottom: 1px solid #e5e7eb; background: repeating-linear-gradient(180deg, transparent, transparent 90%, #e5e7eb 90%, #e5e7eb 100%); }' +
-      '.p86-proposal .doc-table .grp-row td { background: #0f2346; color: #fff; font-weight: 700; font-size: 9.5pt; letter-spacing: 0.4px; padding: 6px 8px; }' +
-      '.p86-proposal .doc-table .sec-row td { background: #f3f4f6; font-weight: 700; font-size: 9pt; color: #333; border-left: 3px solid #4f8cff; }' +
-      '.p86-proposal .doc-table .sub-row td { font-weight: 700; background: #fafafa; border-top: 1px solid #d1d5db; border-bottom: 1px solid #d1d5db; }' +
-      '.p86-proposal .doc-table .tot-row td { font-weight: 700; font-size: 11pt; border-top: 2px solid #0f2346; border-bottom: none; }' +
-      '.p86-proposal .doc-table .asm-child td { color: #555; font-style: italic; background: #fcfcfd; }' +
+      '.p86-proposal .doc-table .c-write { width: 118px; border-bottom: 1px solid var(--hair); background: repeating-linear-gradient(180deg, transparent, transparent 90%, var(--hair) 90%, var(--hair) 100%); }' +
+      '.p86-proposal .doc-table .grp-row td { background: var(--navy); color: #fff; font-weight: 700; font-size: 9.5pt; letter-spacing: 0.4px; padding: 6px 9px; }' +
+      '.p86-proposal .doc-table .sec-row td { background: var(--panel); font-weight: 700; font-size: 9pt; color: var(--navy); border-left: 3px solid var(--teal); }' +
+      '.p86-proposal .doc-table .sub-row td { font-weight: 700; background: var(--panel); border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair); }' +
+      '.p86-proposal .doc-table .tot-row td { font-weight: 700; font-size: 10.5pt; color: var(--navy); background: var(--panel); border-top: 1.2px solid var(--navy); border-bottom: none; padding: 8px 9px; }' +
+      '.p86-proposal .doc-table .asm-child td { color: var(--muted); font-style: italic; background: #fbfdfd; }' +
       '.p86-proposal .doc-table .asm-parent td { font-weight: 600; }' +
-      '.p86-proposal .doc-table .doc-empty { color: #9ca3af; font-style: italic; text-align: center; padding: 12px 8px; }' +
+      '.p86-proposal .doc-table .doc-empty { color: var(--muted); font-style: italic; text-align: center; padding: 12px 8px; }' +
       '.p86-proposal .matrix-table th { text-align: right; }' +
       '.p86-proposal .matrix-table th:first-child { text-align: left; }' +
-      '.p86-proposal .doc-box { display: inline-block; width: 11px; height: 11px; border: 1px solid #6b7280; border-radius: 2px; vertical-align: middle; }' +
+      '.p86-proposal .doc-box { display: inline-block; width: 11px; height: 11px; border: 1px solid var(--rule); border-radius: 2px; vertical-align: middle; }' +
 
       // Option tiers — three cards across, one flagged as the recommendation.
       // Grid so 2, 3 or 4 options all lay out without a per-count rule.
       '.p86-proposal .tier-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin: 18px 0 22px; }' +
-      '.p86-proposal .tier { border: 1px solid #d1d5db; border-radius: 8px; padding: 16px 14px; page-break-inside: avoid; position: relative; }' +
-      '.p86-proposal .tier-rec { border: 2px solid #0f2346; box-shadow: 0 2px 10px rgba(15,35,70,0.12); }' +
-      '.p86-proposal .tier-badge { position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: #0f2346; color: #fff; font-size: 7.5pt; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; padding: 3px 10px; border-radius: 10px; white-space: nowrap; }' +
-      '.p86-proposal .tier-name { font-size: 12pt; font-weight: 700; color: #0f2346; margin-bottom: 4px; }' +
-      '.p86-proposal .tier-price { font-size: 17pt; font-weight: 700; color: #222; font-family: "SF Mono", Consolas, monospace; margin-bottom: 10px; }' +
-      '.p86-proposal .tier-body { font-size: 9.5pt; line-height: 1.5; color: #444; }' +
+      '.p86-proposal .tier { border: 1px solid var(--hair); border-radius: 4px; padding: 16px 14px; page-break-inside: avoid; position: relative; }' +
+      '.p86-proposal .tier-rec { border: 1.5px solid var(--teal); box-shadow: 0 2px 10px rgba(0,63,81,0.10); }' +
+      '.p86-proposal .tier-badge { position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: var(--teal); color: #fff; font-size: 7.5pt; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; padding: 3px 10px; border-radius: 10px; white-space: nowrap; }' +
+      '.p86-proposal .tier-name { font-size: 11pt; font-weight: 700; color: var(--navy); margin-bottom: 4px; }' +
+      '.p86-proposal .tier-price { font-size: 15pt; font-weight: 700; color: var(--teal); font-variant-numeric: tabular-nums; margin-bottom: 10px; }' +
+      '.p86-proposal .tier-body { font-size: 9pt; line-height: 1.5; color: var(--ink); }' +
       '.p86-proposal .tier-body p { margin: 0 0 6px; }' +
       '.p86-proposal .doc-select { margin: 16px 0 10px; font-size: 10.5pt; }' +
 
       // Shared prose bits used across layouts.
-      '.p86-proposal .doc-para { font-size: 10.5pt; line-height: 1.55; margin: 0 0 12px; }' +
-      '.p86-proposal .doc-lead { font-size: 11.5pt; line-height: 1.6; }' +
-      '.p86-proposal .doc-subhead { font-size: 11pt; font-weight: 700; color: #0f2346; margin: 14px 0 5px; }' +
-      '.p86-proposal .doc-list { padding-left: 20px; margin: 6px 0 16px; font-size: 10pt; line-height: 1.6; }' +
-      '.p86-proposal .doc-muted { color: #9ca3af; font-style: italic; }' +
-      '.p86-proposal .doc-small { font-size: 9pt; }' +
+      '.p86-proposal .doc-para { font-size: 10pt; line-height: 1.5; margin: 0 0 11px; }' +
+      '.p86-proposal .doc-lead { font-size: 10.5pt; line-height: 1.55; }' +
+      '.p86-proposal .doc-subhead { font-size: 10pt; font-weight: 700; color: var(--teal); margin: 13px 0 4px; }' +
+      '.p86-proposal .doc-list { padding-left: 20px; margin: 6px 0 14px; font-size: 10pt; line-height: 1.55; }' +
+      '.p86-proposal .doc-muted { color: var(--muted); font-style: italic; }' +
+      '.p86-proposal .doc-small { font-size: 7.5pt; line-height: 1.5; }' +
       '.p86-proposal .sig-block .sig-row { margin: 12px 0; }' +
 
       // Honest flags. The internal one is deliberately loud: a T4 cost sheet
@@ -1304,6 +1562,50 @@
       '.p86-proposal .doc-flag-internal { background: #fee2e2; border-left: 4px solid #b91c1c; color: #7f1d1d; font-weight: 700; letter-spacing: 0.3px; }' +
       '.p86-proposal .doc-flag-field { background: #e0f2fe; border-left: 4px solid #0369a1; color: #0c4a6e; font-weight: 700; letter-spacing: 0.3px; }' +
       '.p86-proposal .doc-flag-caveat { background: #fff8e1; border-left: 4px solid #d97706; color: #4a3500; }' +
+
+      // ── AGX Standard ───────────────────────────────────────────────
+      '.p86-proposal .agx-letterhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 22px; }' +
+      '.p86-proposal .agx-mark { height: 56px; width: auto; }' +
+      '.p86-proposal .agx-lines { text-align: right; font-size: 8pt; line-height: 1.55; color: var(--muted); }' +
+      '.p86-proposal .agx-lic { margin-top: 5px; letter-spacing: 0.6px; color: var(--navy); font-weight: 700; }' +
+      '.p86-proposal .agx-eyebrow { font-size: 8.5pt; font-weight: 700; letter-spacing: 2.6px; text-transform: uppercase; color: var(--teal); }' +
+      '.p86-proposal .agx-title { font-size: 15pt; font-weight: 700; margin: 5px 0 2px; line-height: 1.22; color: var(--navy); }' +
+      '.p86-proposal .agx-subtitle { font-size: 10.5pt; color: var(--muted); margin-bottom: 2px; }' +
+      // The rule under the title is what separates the letterhead from the
+      // document on the reference, and it is the navy, not a grey hairline.
+      '.p86-proposal .agx-parties { display: flex; gap: 34px; margin: 18px 0; padding-top: 14px; border-top: 1.5px solid var(--navy); font-size: 9.5pt; line-height: 1.5; }' +
+      '.p86-proposal .agx-party { flex: 1 1 0; }' +
+      '.p86-proposal .agx-party-label { font-size: 8pt; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--navy); border-bottom: 1px solid var(--hair); padding-bottom: 3px; margin-bottom: 6px; }' +
+      '.p86-proposal .agx-party-name { font-weight: 700; color: var(--ink); }' +
+      '.p86-proposal .agx-party-date { margin-top: 4px; color: var(--muted); }' +
+      '.p86-proposal .agx-sec-head { font-size: 10.5pt; font-weight: 700; color: var(--navy); margin: 18px 0 5px; page-break-after: avoid; break-after: avoid; }' +
+      '.p86-proposal .agx-sec-no { color: var(--teal); }' +
+      '.p86-proposal .agx-sec-amt { font-weight: 700; color: var(--teal); white-space: nowrap; font-variant-numeric: tabular-nums; }' +
+      '.p86-proposal .agx-sec-plain { margin-top: 20px; }' +
+      '.p86-proposal .agx-sec-list { margin: 4px 0 12px; }' +
+      '.p86-proposal .agx-sec-body { margin-bottom: 12px; }' +
+      '.p86-proposal .agx-sec-body p { margin: 3px 0; font-size: 10pt; line-height: 1.5; }' +
+      // The opening line of a section is its summary on the reference — set
+      // muted and italic, which is also what tells a reader where each section
+      // starts when the body runs long.
+      '.p86-proposal .agx-sec-body > p:first-child { font-size: 8.5pt; font-style: italic; color: var(--muted); margin-bottom: 6px; }' +
+      '.p86-proposal .agx-sec-body ol, .p86-proposal .agx-sec-body ul { padding-left: 20px; margin: 4px 0 8px; }' +
+      '.p86-proposal .agx-sec-body li { margin: 3px 0; line-height: 1.5; }' +
+      '.p86-proposal .agx-sec-ref { color: var(--muted); font-weight: 400; }' +
+      '.p86-proposal .agx-sum { margin: 8px 0 10px; }' +
+      '.p86-proposal .agx-note { color: var(--muted); font-style: normal; line-height: 1.5; margin: 6px 0 16px; }' +
+      '.p86-proposal .agx-terms { width: 100%; border-collapse: collapse; margin: 6px 0 10px; font-size: 10pt; }' +
+      '.p86-proposal .agx-terms td { padding: 7px 10px 7px 0; vertical-align: top; border-bottom: 1px solid var(--hair); }' +
+      '.p86-proposal .agx-terms .agx-term { font-weight: 700; color: var(--navy); white-space: nowrap; width: 90px; }' +
+      // Both signatures sit in the reference's panels, not on bare lines.
+      '.p86-proposal .agx-sigs { display: flex; gap: 22px; margin-top: 16px; page-break-inside: avoid; break-inside: avoid; }' +
+      '.p86-proposal .agx-sig-col { flex: 1 1 0; background: var(--panel); padding: 14px 16px 16px; }' +
+      '.p86-proposal .agx-sig-line { border-bottom: 1px solid var(--rule); height: 24px; }' +
+      '.p86-proposal .agx-sig-cap { font-size: 8pt; color: var(--muted); margin: 2px 0 10px; }' +
+      '.p86-proposal .agx-sig-who { font-weight: 700; font-size: 9.5pt; margin-top: 6px; color: var(--navy); }' +
+      '.p86-proposal .agx-sig-sub { font-size: 8.5pt; color: var(--muted); }' +
+      // On screen the running foot is just a last line; print pins it to every page.
+      '.p86-proposal .agx-runfoot { margin-top: 24px; padding-top: 8px; border-top: 1px solid var(--hair); font-size: 7.5pt; color: var(--foot); text-align: center; letter-spacing: 0.3px; }' +
       ''
     );
   }
@@ -1311,10 +1613,17 @@
   // Print stylesheet — page setup + chrome hide. Used by the popup window.
   function getPrintCSS() {
     return (
-      '@page { size: letter; margin: 0.6in; }' +
+      '@page { size: letter; margin: 0.6in 0.6in 0.85in; }' +
       'body { margin: 0; padding: 0; background: #fff; }' +
       '.p86-proposal { box-shadow: none; padding: 0; max-width: 100%; }' +
-      '.no-print { display: none !important; }'
+      '.no-print { display: none !important; }' +
+      // A fixed element repeats on every printed page in Chrome, which is how
+      // the AGX document gets its running foot. Page NUMBERS are not available
+      // to it — CSS counter(page) only works in @page margin boxes, which
+      // Chrome does not implement — so the foot carries the company, the
+      // project and the word Proposal, and Chrome's own print header/footer
+      // option can add numbering when somebody wants it.
+      '.p86-proposal .agx-runfoot { position: fixed; bottom: -0.55in; left: 0; right: 0; margin: 0; border-top: none; }'
     );
   }
 
@@ -1352,8 +1661,10 @@
   // through the registry, which clamps an unknown id (a retired layout still in
   // someone's localStorage) to the safe default rather than rendering nothing.
   var _docLayoutId = (function () {
-    try { return localStorage.getItem('p86-preview-doc-layout') || 'letterhead'; }
-    catch (e) { return 'letterhead'; }
+    // 'agx' is the house document. A stored id still wins — somebody who
+    // deliberately picked another skeleton keeps it.
+    try { return localStorage.getItem('p86-preview-doc-layout') || 'agx'; }
+    catch (e) { return 'agx'; }
   })();
   var _takeoffLevelId = (function () {
     try { return localStorage.getItem('p86-preview-takeoff-level') || 't4'; }

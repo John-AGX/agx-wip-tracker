@@ -1,0 +1,15 @@
+{
+  "preview": true,
+  "attachments": [
+    { "id": "a1", "filename": "Certificate of Insurance.pdf", "mime_type": "application/pdf",
+      "size_bytes": 184320, "thumb_url": null, "web_url": null, "original_url": "/x.pdf",
+      "entity_type": "job", "entity_id": "j1", "folder": "compliance",
+      "grant_entity_type": "job", "grant_entity_id": "j1", "grant_folder": "compliance",
+      "grant_entity_label": "1042 River Landing" },
+    { "id": "a2", "filename": "Scope of Work.pdf", "mime_type": "application/pdf",
+      "size_bytes": 20481, "thumb_url": null, "web_url": null, "original_url": "/y.pdf",
+      "entity_type": "job", "entity_id": "j1", "folder": "scope",
+      "grant_entity_type": "job", "grant_entity_id": "j1", "grant_folder": "scope",
+      "grant_entity_label": "1042 River Landing" }
+  ]
+}

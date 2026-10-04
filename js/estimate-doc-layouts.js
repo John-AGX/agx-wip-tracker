@@ -29,6 +29,31 @@
 
   var PROPOSAL_LAYOUTS = [
     {
+      // THE HOUSE DOCUMENT. First in the list, which makes it the clamp
+      // default, and the skeleton of the AGX proposal John signs: letterhead
+      // with the licence numbers, a Submitted To / Project block, numbered
+      // scope sections that carry their own price, an investment summary with
+      // a Not-Included table beside it, payment schedule, the standard
+      // assumptions, and an acceptance block both parties sign.
+      //
+      // Two conventions earn their keep here, and neither needed a new field:
+      //   * a scope group with NO line items renders as a numbered NARRATIVE
+      //     section with no price — that is how "Project Approach" or "Water
+      //     Management" is authored, in the same place every other scope is,
+      //     and section order follows group order.
+      //   * an EXCLUDED group lands under "Not included in total": with its
+      //     amount if it has lines, as TBD if it does not. A recommended
+      //     contingency is just such a group, named so.
+      id: 'agx',
+      label: 'AGX Standard',
+      desc: 'The house proposal. Letterhead with licences, submitted-to / project block, numbered scope sections priced in their own headings, investment summary, payment schedule, acceptance signatures.',
+      sections: ['agxLetterhead', 'agxTitle', 'agxParties', 'agxIntro',
+                 'agxScopeHeading', 'agxScopeSections', 'agxInvestmentSummary',
+                 'agxPaymentSchedule', 'exclusions', 'attachments',
+                 'agxAcceptance', 'agxRunningFoot'],
+      pricing: { lines: 'none', subtotals: true, total: true }
+    },
+    {
       id: 'letterhead',
       label: 'Letterhead',
       desc: 'The classic AGX proposal — logo, prose, scope, one total. Small single-scope repairs.',
@@ -159,7 +184,8 @@
     listProposals: function () { return PROPOSAL_LAYOUTS.slice(); },
     listTakeoffs: function () { return TAKEOFF_LEVELS.slice(); },
     // Unknown ids clamp to the safe default rather than rendering nothing —
-    // 'letterhead' is to proposals what 'clean' is to report style packs.
+    // PROPOSAL_LAYOUTS[0] ('agx', the house document) is to proposals what
+    // 'clean' is to report style packs.
     getProposal: function (id) { return byId(PROPOSAL_LAYOUTS, id) || PROPOSAL_LAYOUTS[0]; },
     getTakeoff: function (id) { return byId(TAKEOFF_LEVELS, id) || TAKEOFF_LEVELS[0]; }
   };

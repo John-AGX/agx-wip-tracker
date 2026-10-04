@@ -13,6 +13,10 @@
 // runs are exactly ['Work orders', 'Money', 'Deadlines']. Note that
 // job_assignment sits UNGROUPED between the first two groups, so a new group
 // goes at the end rather than being tucked beside a related row.
+// Arrivals is deliberately NOT part of Deadlines: a deadline is something
+// you are late for, an arrival is something that turned up. Somebody who
+// wants to hear about a cost landing does not necessarily want a list of
+// overdue invoices every morning, and one switch for both would force it.
 //
 // This is deliberately LIGHTER than server/email-events.js — push bodies are
 // one-liners composed at the call site; no templates, no org overrides. If a
@@ -61,6 +65,8 @@ const NOTIFY_EVENTS = [
   { key: 'invoice_past_due',   group: 'Deadlines',   label: 'Invoices owed to you',       desc: 'In your morning message: an invoice you own that is due today or past due and still has a balance. Sent and part-paid invoices only — a draft has no deadline and a paid one has no balance.', channels: { email: true, push: true } },
   { key: 'bill_payment_due',   group: 'Deadlines',   label: 'Bills to pay',               desc: 'In your morning message: a vendor bill whose payment date has arrived and which is still open or approved. Goes to whoever entered it, or the job\u2019s PM if nobody did. A bill with no due date is never guessed at from its invoice date.', channels: { email: true, push: true } },
   { key: 'workflow_overdue',   group: 'Deadlines',   label: 'RFIs and submittals waiting', desc: 'In your morning message: an RFI, submittal or transmittal past its due date that still needs an answer. Goes to the person responsible, or whoever raised it. An RFI somebody has already answered does not count as waiting.', channels: { email: true, push: true } },
+  { key: 'sub_document_uploaded', group: 'Arrivals',    label: 'Subcontractor uploads',      desc: 'When a subcontractor puts a document in a folder you shared with them. Goes to whoever runs the job (or sells the lead) it hangs on, and to whoever opened the folder. A folder shared against a client or a subcontractor record has no owner, so only the person who shared it is told.', channels: { email: true, push: true } },
+  { key: 'receipt_logged',        group: 'Arrivals',    label: 'Costs logged on your jobs',   desc: 'When somebody logs a cost in the Cost Inbox against a job you run or a lead you sell. A capture that is not linked to anything yet has nobody to tell, so it is not notified. The amount is shown as captured \u2014 it may not have been checked.', channels: { email: true, push: true } },
   { key: 'password_reset',      label: 'Password resets',        desc: 'When an admin resets your password. Recommended to leave on.',              channels: { email: true, push: false } }
 ];
 

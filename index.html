@@ -251,7 +251,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=335">
+    <link rel="stylesheet" href="css/styles.css?v=336">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=70">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -797,6 +797,7 @@
                                 <!-- Metrics tab retired 2026-08-09 → company metrics live in Insights -->
                                 <div class="app-nav-subhead" style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.09em;color:rgba(255,255,255,0.3);padding:10px 12px 3px 14px;">Operations</div>
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="ocr-inbox" data-p86-icon="chart-bar" title="OCR"><span class="app-nav-label">OCR</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="preview" data-p86-icon="eye" title="See what they see"><span class="app-nav-label">Their view</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="compliance" data-virtual-tab="admin-compliance" data-p86-icon="id-card" title="Compliance — COI / license / lien-waiver / WC-cert tracking"><span class="app-nav-label">Compliance</span></button>
                                 <!-- ⚙ System retired → top-level ⚙ Command Center -->
                             </div>
@@ -825,6 +826,11 @@
                         <!-- My Day merged into the Summary dashboard (2026-07); its tab redirects to Summary. -->
                         <button class="tab-btn" data-tab="my-tasks" data-p86-icon="check-circle" title="My Tasks"><span class="app-nav-label">My Tasks</span></button>
                         <button class="tab-btn" data-tab="messages" data-p86-icon="envelope" title="Messages"><span class="app-nav-label">Messages</span><span id="navMessagesBadge" style="display:none;margin-left:auto;background:#f87171;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;line-height:1.5;"></span></button>
+                        <!-- Queue — what something is waiting on YOU for. The badge
+                             counts items still waiting, not unseen ones: a question
+                             you have looked at and not answered is still blocking
+                             the thing that asked it. -->
+                        <button class="tab-btn" data-tab="queue" data-p86-icon="conversations" title="Queue — decisions waiting on you"><span class="app-nav-label">Queue</span><span id="navQueueBadge" style="display:none;margin-left:auto;background:#f87171;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;line-height:1.5;"></span></button>
                         <button class="tab-btn" data-tab="email-hub" data-p86-icon="at-symbol" title="Email — your forwarded inbox, readable by the assistant"><span class="app-nav-label">Email</span></button>
                         <!-- Cowork — watch what 86 / the Scribe write, approve
                              drafts, and read the history of what they did.
@@ -1564,6 +1570,11 @@
                     <div id="costInboxHost"></div>
                 </div>
 
+                <!-- QUEUE TAB — js/queue.js renders into this host. -->
+                <div id="queue" class="tab-content">
+                    <div id="queueHost"></div>
+                </div>
+
                 <!-- Invoices / AR — switchTab('invoices') mounts js/invoices.js
                      window.p86Invoices.render() here. -->
                 <div id="invoices" class="tab-content">
@@ -2054,6 +2065,7 @@
                         <!-- Metrics retired → Insights -->
                         <!-- Cost Inbox OCR accuracy stats -->
                         <button class="ws-right-tab" data-admin-subtab="ocr-inbox" data-p86-icon="chart-bar" onclick="switchAdminSubTab('ocr-inbox')">OCR</button>
+                        <button class="ws-right-tab" data-admin-subtab="preview" data-p86-icon="eye" onclick="switchAdminSubTab('preview')">Their view</button>
                         <!-- Compliance — COI / license / lien-waiver / WC-cert full list -->
                         <button class="ws-right-tab" data-admin-subtab="compliance" data-p86-icon="id-card" onclick="switchAdminSubTab('compliance')">Compliance</button>
 
@@ -2149,6 +2161,10 @@
                     </div>
 
                     <!-- Cost Inbox · OCR accuracy sub-tab -->
+                    <!-- See what they see: a read-only window onto each
+                         external surface. Rendered by window.renderAdminPreview
+                         in js/admin-preview.js. -->
+                    <div id="admin-subtab-preview" class="admin-subtab-content" style="display:none;"></div>
                     <div id="admin-subtab-ocr-inbox" class="admin-subtab-content" style="display:none;">
                         <p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">
                             How accurately the AI reads field receipts in the <strong>Cost Inbox</strong>. Each sample is one captured receipt where the AI made a guess; the rate is how often that guess matched what was actually saved. <strong>Amount</strong> is the error-prone field worth watching.
@@ -3581,9 +3597,10 @@
     <script src="js/dash-shell.js?v=2"></script>
     <script src="js/settings-registry.js?v=3"></script>
     <script src="js/admin-dashboard.js?v=4"></script>
-    <script src="js/admin.js?v=149"></script>
+    <script src="js/admin-preview.js?v=1"></script>
+    <script src="js/admin.js?v=151"></script>
     <!-- Read-only Buildertrend -> P86 sync preview (Admin -> Organization). -->
-    <script src="js/bt-sync-preview.js?v=25"></script>
+    <script src="js/bt-sync-preview.js?v=26"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
@@ -3633,7 +3650,7 @@
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
     <script src="js/save-merge.js?v=5"></script>
-    <script src="js/app.js?v=167"></script>
+    <script src="js/app.js?v=168"></script>
     <!-- The visible signal for a write that has not reached the server.
          Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
     <script src="js/save-banner.js?v=3"></script>
@@ -3647,7 +3664,9 @@
     <script src="js/compliance-review-ui.js?v=6"></script>
     <script src="js/messaging.js?v=8"></script>
     <script src="js/email-hub.js?v=27"></script>
-    <script src="js/agent-tasks.js?v=14"></script>
+    <!-- The Queue — decisions parked by a producer that resumes on your answer. -->
+    <script src="js/queue.js?v=1"></script>
+    <script src="js/agent-tasks.js?v=15"></script>
     <script src="js/crew-chip.js?v=3"></script>
     <script src="js/file-explorer.js?v=18"></script>
     <script src="js/my-files.js?v=28"></script>
@@ -3707,7 +3726,7 @@
     <script src="js/cost-inbox.js?v=28"></script>
     <script src="js/invoices.js?v=8"></script>
     <script src="js/console-docs.js?v=4"></script>
-    <script src="js/console.js?v=20"></script>
+    <script src="js/console.js?v=21"></script>
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
@@ -3790,15 +3809,15 @@
     <script src="js/rich-text.js?v=1"></script>
     <script src="js/estimates.js?v=72"></script>
     <script src="js/proposal.js?v=27"></script>
-    <script src="js/estimate-editor.js?v=117"></script>
+    <script src="js/estimate-editor.js?v=118"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
          carries the window.p86Api.changeOrders wrapper). -->
     <script src="js/change-order-editor.js?v=39"></script>
     <script src="js/materials-drawer.js?v=15"></script>
-    <script src="js/estimate-doc-layouts.js?v=1"></script>
-    <script src="js/estimate-preview.js?v=19"></script>
+    <script src="js/estimate-doc-layouts.js?v=2"></script>
+    <script src="js/estimate-preview.js?v=21"></script>
     <script src="js/bt-export.js?v=7"></script>
     <!-- Payload inline approval card (used by ai-panel.js). Must load
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
@@ -3843,7 +3862,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=38"></script>
+    <script src="js/router.js?v=40"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /

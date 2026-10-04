@@ -104,8 +104,6 @@
       '.p86-bgt-q{margin-top:7px;color:var(--yellow,#fbbf24);font:600 12px/1.5 system-ui,sans-serif}',
       '.p86-bgt-empty{color:var(--text-dim,#8b90a5);text-align:center;padding:30px 14px;font:400 13px/1.6 system-ui,sans-serif}',
       '.p86-bgt-answer{display:flex;gap:6px;margin-top:8px}',
-      '.p86-bgt-answer-in{flex:1;min-width:0;background:var(--input-bg,#0f1320);border:1px solid var(--border,rgba(255,255,255,.16));border-radius:8px;padding:7px 10px;color:var(--text,#e6e9f0);font:400 12px/1.3 system-ui,sans-serif;outline:none}',
-      '.p86-bgt-answer-in:focus{border-color:#4f8cff}',
       '.p86-bgt-answer-btn{background:#4f8cff;color:#fff;border:none;border-radius:8px;padding:0 14px;font:600 12px/1 system-ui,sans-serif;cursor:pointer}',
       '.p86-bgt-answer-btn:hover{background:#3d7aef}'
     ].join('');
@@ -126,12 +124,10 @@
     var listEl = ov.querySelector('.p86-bgt-list');
     listEl.addEventListener('click', function (e) {
       var btn = e.target.closest && e.target.closest('.p86-bgt-answer-btn');
-      if (btn) submitAnswerFor(btn.getAttribute('data-jid'), listEl);
-    });
-    listEl.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('p86-bgt-answer-in')) {
-        e.preventDefault(); submitAnswerFor(e.target.getAttribute('data-jid'), listEl);
-      }
+      if (!btn) return;
+      // Answering belongs to the Queue page now; this row only walks you there.
+      var go = btn.getAttribute('data-q-go');
+      if (go) goToQueue(go);
     });
   }
 
@@ -191,8 +187,13 @@
       var pill = '<span class="p86-bgt-pill" style="background:' + m.color + '22;color:' + m.color + '">' + esc(m.label) + '</span>';
       var body = '';
       if (j.status === 'needs_input' && j.pause_question) {
+        // The answer box moved to the Queue page (js/queue.js). Two live boxes
+        // for one question let two surfaces write pause_answer inside the
+        // worker's 10s tick, last writer winning silently — the server now
+        // refuses the second (pause_answer IS NULL), and there is no longer a
+        // second to refuse. This stays a glance: the question, and the way to it.
         body = '<div class="p86-bgt-q">❓ ' + esc(j.pause_question) + '</div>' +
-          '<div class="p86-bgt-answer"><input class="p86-bgt-answer-in" type="text" placeholder="Your answer…" autocomplete="off" data-jid="' + esc(j.id) + '"><button class="p86-bgt-answer-btn" data-jid="' + esc(j.id) + '">Send</button></div>';
+          '<div class="p86-bgt-answer"><button class="p86-bgt-answer-btn" data-q-go="' + esc(j.id) + '">Answer in the Queue</button></div>';
       } else if (j.status === 'done' && j.result) {
         body = '<div class="p86-bgt-body">' + esc(j.result) + '</div>';
       } else if (j.status === 'failed' && j.error) {
@@ -508,15 +509,11 @@
     }).catch(function (e) { pushLog('error', 'notification permission request failed', e); });
   }
 
-  function submitAnswerFor(jid, listEl) {
-    var input = listEl.querySelector('.p86-bgt-answer-in[data-jid="' + jid + '"]');
-    if (!input) return;
-    var val = String(input.value || '').trim();
-    if (!val) { input.focus(); return; }
-    input.disabled = true;
-    apiPost('/' + encodeURIComponent(jid) + '/answer', { answer: val })
-      .then(function () { refresh(); })
-      .catch(function () { input.disabled = false; });
+  // "Answer in the Queue" — the panel hands the decision to the page that owns
+  // it, and closes, so there is never a stale copy of the question behind it.
+  function goToQueue(jid) {
+    try { if (window.p86Queue && typeof window.p86Queue.openItem === 'function') window.p86Queue.openItem(jid); } catch (e) { /* page may not be loaded */ }
+    try { close(); } catch (e) { /* already closed */ }
   }
 
   function refresh() {

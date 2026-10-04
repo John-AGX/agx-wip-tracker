@@ -526,9 +526,98 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.89';
+const APP_VERSION = '1.96';
 
 const releases = [
+  {
+    version: '1.96',
+    date: '2026-10-04',
+    name: 'The AI usage numbers tell the truth',
+    summary: 'Before tuning how 86 works, the gauges had to be trusted — and four of them were wrong, in different directions. A turn now reports what the whole turn cost instead of one slice of it, the tools 86 actually runs are counted, and the dollar figures use the real price of the model that is running. Where the numbers still cannot see something, they now say so by name instead of quietly leaving it out.',
+    changes: [
+      { type: 'fixed', text: 'A conversation’s cost was reported about a hundred times too low. The number left out every token served from cache — which on a long thread is almost all of them — so a thread that had really moved around 900,000 tokens showed up as under three cents. Cost now counts what was actually billed, cache included, in the list and in the per-thread total.' },
+      { type: 'fixed', text: 'Every dollar figure was priced as if 86 ran on Opus. The price table had no entry for the model that is actually running, so it fell back to the most expensive tier and overstated spend by about two and a half times. The real rate is in, Opus 4.5’s rate was corrected too (it was carrying a retired model’s price), and an unknown model is now labelled as an estimate rather than quietly guessing.' },
+      { type: 'fixed', text: 'A turn recorded the cost of one step, not the turn. Any turn where 86 used a tool takes several steps, and only the last was being saved — so busy turns, the expensive ones, under-reported themselves. The full turn is now recorded alongside the old per-step number, with a count of how many steps it took.' },
+      { type: 'fixed', text: 'Every conversation claimed zero tool uses. The counter only counted changes waiting for your approval, so all the reading 86 does — most of its work — left no trace. Reads are now counted, with the size of what each one handed back, which is what shows a long conversation getting heavy.' },
+      { type: 'improved', text: 'The usage page had a figure called “Everything”. It covered five of roughly fifteen places this app calls the AI, and the background-jobs total was added up from only the twenty largest jobs on screen. It is now called what it is — recorded — covers every background job, and lists by name what it still cannot see (per-email triage, receipt and document scanning, caption and materials passes, session labels) plus the per-hour session charge that is not tokens at all.' },
+      { type: 'fixed', text: 'The runaway-spend stop on background jobs could not trigger. It compared its limit against two of the four token figures it was holding, and those two are a fraction of a percent of what a job really uses. It now counts all four, with the ceiling raised to match so a legitimate long job still finishes.' },
+    ],
+  },
+  {
+    version: '1.95',
+    date: '2026-10-04',
+    name: 'See what they see',
+    summary: 'A read-only window onto the surfaces outside your company, starting with the subcontractor portal.',
+    changes: [
+      { type: 'new', text: 'Admin → Their view. See what the people outside your company actually see — starting with a subcontractor’s portal. Pick a sub and their portal opens exactly as they get it: the same files, the same folders, the same wording.' },
+      { type: 'improved', text: 'It is a window, not a sign-in. You stay yourself, nothing on the page can be changed, and nobody is told you looked. The upload box a sub would use is not there at all rather than greyed out, because a button that looks live and is not is its own kind of lie.' },
+      { type: 'improved', text: 'It shows the REAL portal page, not a drawing of one. It reads the same list a sub reads, so it cannot quietly disagree with what they are actually looking at — which is the only reason a preview is worth having.' },
+      { type: 'improved', text: 'It tells you when a sub has never been invited, which is usually the answer to “why can’t they see the file I shared?”' },
+      { type: 'improved', text: 'And it is honest about who has no login at all. A client never signs in to Project 86 — they get links: a proposal to sign, a report to read. A crew member opens a link with a code in it. Those are listed as what they are, with previews coming next, rather than pretending there is a portal behind them.' },
+    ],
+  },
+  {
+    version: '1.94',
+    date: '2026-10-04',
+    name: 'The Queue \u2014 what is waiting on you, in one place',
+    summary: 'A new Queue page: when a background task stops to ask you something, it waits here, and your answer sends it straight back to work.',
+    changes: [
+      { type: 'new', text: 'Queue, in the Workspace group of the sidebar. When a background task needs a decision \u2014 which client a receipt belongs to, which cluster you meant \u2014 it stops and waits here instead of guessing. Answer it and the task picks up exactly where it left off, with everything it had already worked out still in hand. The sidebar carries a count of what is waiting.' },
+      { type: 'improved', text: 'The count is of decisions still WAITING, not ones you have not looked at. A question you read this morning and did not answer is still holding something up, so it keeps showing until you answer it.' },
+      { type: 'improved', text: 'Answering now happens in one place. The Crew activity panel still shows you the question at a glance, and hands you to the Queue to answer it \u2014 two answer boxes for one question meant two answers could race, and the later one quietly won.' },
+      { type: 'fixed', text: 'A task that asked you a SECOND question never showed up on the count. The badge only counted questions you had not seen, and answering the first one marked the whole task seen.' },
+      { type: 'fixed', text: 'Turning off \u201cBackground tasks\u201d in My Account stopped the phone notifications but left the emails coming. Both now follow the switch.' },
+      { type: 'fixed', text: 'The email and phone notification for a waiting task opened the app at the dashboard. They open the Queue now.' },
+      { type: 'fixed', text: 'An answer that failed to send looked exactly like one that worked \u2014 the box simply cleared. It now tells you, and leaves the question there to answer again.' },
+    ],
+  },
+  {
+    version: '1.93',
+    date: '2026-10-03',
+    name: 'Purchase orders get the same gate as bills',
+    summary: 'The permission that edits a purchase order was also the permission that issued and approved it — on any job, with no check that you run it.',
+    changes: [
+      { type: 'fixed', text: 'Issuing or approving a purchase order now takes the same authority approving a bill does. It was gated on the permission that edits the PO’s own lines — so anybody who could change what a purchase order says could also send it to the subcontractor and approve it, on any job. It now takes an administrator, or somebody who runs that job.' },
+      { type: 'improved', text: 'Issuing a PO is treated as seriously as approving one, because it is the moment the price locks. Moving a PO out of draft freezes its figure and commits the company to it, so every step is held to the same rule rather than only the one called “approve”.' },
+      { type: 'improved', text: 'When a bulk status change fails, the message says why. Setting the status on a batch from the Jobs hub used to report only “N failed”, which could mean the step was not available for those rows or that they are not your jobs. It now says so — the same way the bulk delete already did.' },
+      { type: 'improved', text: 'Bills and purchase orders now answer to ONE rule rather than two copies of it. Two copies drift silently: nothing breaks, one door just quietly becomes the lenient one.' },
+    ],
+  },
+  {
+    version: '1.92',
+    date: '2026-10-03',
+    name: 'Approving a bill takes the authority it should',
+    summary: 'Anybody who could edit an estimate could approve a vendor bill for payment, on any job, with no check that they run it — including a role whose description says it sees no financials at all.',
+    changes: [
+      { type: 'fixed', text: 'Approving a vendor bill for payment now takes the authority it should. Until today anybody who could edit an estimate could also approve a bill, mark it paid, or void it — on ANY job, with no check that they run it. That included the Field Crew role, whose own description in Project 86 reads "Estimates and Cost Inbox only. No jobs, no financials." It now takes an administrator, or the manager of that job.' },
+      { type: 'fixed', text: 'Entering a bill no longer entitles you to approve it. The same permission opened all three doors — create it, change the amount, approve it — so one person could key in a payable and sign it off without anybody else seeing it. Recording a bill is still open to the same people as before; deciding its fate is not.' },
+      { type: 'improved', text: 'The rule covers every status move, not just "approve". Voiding a bill is how a real payable gets written off as well as how a duplicate gets thrown away, and un-marking one paid is no smaller a claim than marking it. One rule, so there is no list of exceptions to keep straight.' },
+      { type: 'improved', text: 'If you cannot change a bill’s status, the message says who can — the job’s manager or an administrator — rather than failing with something generic. Nothing else about bills changed: the same people can still raise them, edit them and attach to them.' },
+    ],
+  },
+  {
+    version: '1.91',
+    date: '2026-10-02',
+    name: 'The Buildertrend dates can be filled on their own',
+    summary: 'The Safe button on the Buildertrend page now counts the records still missing Buildertrend\u2019s creation date \u2014 so you can fill just those, without creating anything or touching money.',
+    changes: [
+      { type: 'fixed', text: 'The Safe button could not be pressed on a tab where everything was already linked and up to date \u2014 it read (0) and greyed out. That is exactly the state a record imported before the Created column existed is in, so the one thing the press had left to do, filling in the day Buildertrend created the record, could not be done from this page at all. The only way to get those dates was \u201cRun sync now\u201d, which also creates records and applies money corrections. The button now counts them, says how many, and fills only blanks \u2014 a date already recorded is never rewritten.' },
+      { type: 'fixed', text: 'A press whose only work was filling those dates used to report \u201cN already up to date\u201d \u2014 over the very records it had just written. It now says how many dates it recorded.' },
+    ],
+  },
+  {
+    version: '1.90',
+    date: '2026-10-02',
+    name: 'You hear when something lands on your job',
+    summary: 'A subcontractor uploading a document, and a cost logged in the Cost Inbox — two things that happened silently until now.',
+    changes: [
+      { type: 'new', text: 'When a subcontractor uploads a document into a folder you shared with them, you hear about it. It goes to whoever runs the job — or sells the lead — that the folder hangs on, and to whoever shared it. Until now a sub could send a file through the portal and the only way to find out was to go and look.' },
+      { type: 'new', text: 'When somebody logs a cost in the Cost Inbox against a job you run, you hear about that too. Both switches live under Arrivals in My Account → Notifications, separately, because wanting to know about subcontractor paperwork is not the same as wanting to know about every receipt.' },
+      { type: 'improved', text: 'The cost message tells you the truth about what it knows. It shows the amount as captured and says plainly that it may not have been checked — the figure is read off the photo by the AI and the Cost Inbox labels it unconfirmed on screen for the same reason. It does not mention a photo either, because at the moment the cost is saved the picture has not finished uploading.' },
+      { type: 'improved', text: 'A stack of receipts does not become a stack of emails. Capture a dozen in one go and the person who runs that job gets a handful, not a dozen — and quieting one person’s run never quiets anybody else’s.' },
+      { type: 'fixed', text: 'A subcontractor’s upload used to be able to reach nobody at all. The obvious person to tell is whoever shared the folder, but most folders are shared automatically when a purchase order goes out — and an automatic share records no person, so there was nobody for the message to find. It now goes to the job’s manager first, which is a person every job has.' },
+    ],
+  },
   {
     version: '1.89',
     date: '2026-10-02',

@@ -87,7 +87,9 @@
   // ORG_REDIRECTS folds them into the Organization tab on replay.
   var KNOWN_ADMIN_SUBS = [
     'users', 'roles', 'organization', 'agents', 'context', 'metrics', 'system',
-    'email', 'templates', 'jobs', 'materials', 'sms', 'ocr-inbox', 'compliance'
+    'email', 'templates', 'jobs', 'materials', 'sms', 'ocr-inbox', 'compliance',
+    // 'See what they see' — the external surfaces, previewed read-only.
+    'preview'
   ];
   // 'my-files' is the internal tab id (matches the pane element id and
   // TAB_TITLES key); the URL slug for it is '/files' — friendlier and
@@ -108,7 +110,7 @@
   // Schedule's two sub-pages. An allow-list, so /schedule/<anything-else>
   // falls back to the bare Schedule tab rather than inventing a sub-view.
   var KNOWN_SCHEDULE_SUBS = ['calendar', 'planning'];
-  var KNOWN_TOP_TABS = ['summary', 'my-files', 'field-tools', 'jobs', 'jobshub', 'estimates', 'schedule', 'plans', 'assembly-studio', 'insights', 'admin', 'projects', 'orgmap', 'orgleadsmap', 'console', 'cost-inbox', 'invoices', 'service-tickets', 'my-day', 'my-tasks', 'messages', 'email-hub'];
+  var KNOWN_TOP_TABS = ['summary', 'my-files', 'field-tools', 'jobs', 'jobshub', 'estimates', 'schedule', 'plans', 'assembly-studio', 'insights', 'admin', 'projects', 'orgmap', 'orgleadsmap', 'console', 'cost-inbox', 'invoices', 'service-tickets', 'my-day', 'my-tasks', 'messages', 'email-hub', 'queue'];
 
   // ── URL <-> route object ──────────────────────────────────────
   function parsePath(pathname) {
@@ -636,6 +638,7 @@
           organization: 'admin-organization', agents: 'admin-agents',
           context: 'admin-context', metrics: 'admin-metrics',
           system: 'admin-system', 'ocr-inbox': 'admin-ocr-inbox', compliance: 'admin-compliance',
+          preview: 'admin-preview',
           templates: 'admin-organization', materials: 'admin-organization',
           jobs: 'admin-organization', sms: 'admin-organization',
           email: 'admin-organization', 'email-templates': 'admin-organization'

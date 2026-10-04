@@ -192,7 +192,49 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**590** occurrences of `organization_id IS NULL` across `server/`.
+**597** occurrences of `organization_id IS NULL` across `server/`.
+
+595 → 597: the “see what they see” preview. Two arms, both in the one function
+that moved out of `routes/sub-portal-routes.js` into `services/sub-portal-view.js`
+so the live portal and the admin preview could share it — `subIdentity`, the
+sub’s own identity card, read once per caller.
+
+The arm is not new behaviour. The portal’s own identity read carried no org
+predicate AT ALL before this, because it did not need one: the sub id came from
+the JWT and could not be chosen. The preview takes that id off the URL, so the
+read now has to answer the tenancy question the portal got for free — and the
+arm is the tolerance every other `subs` read in this repo already carries.
+
+So this entry is a predicate ADDED where there was none, which is the opposite
+of the usual direction. The count went up because the read got stricter.
+
+When this item closes, both retire with the reads they copied.
+
+590 → 595: the arrival notices. Five arms, all in
+`services/arrival-notices.js`, all READS, and all five in one function —
+`parentOwner`, which answers "who is responsible for the record this thing
+landed on" for each of the five entity types a folder grant may name
+(`attachment_folder_grants.entity_type` CHECKs job | lead | estimate | client
+| sub).
+
+Each arm is the one its own table already carries everywhere else — the job
+read copies `assertJobInOrg`, the lead read copies the one in
+`services/money-notices.js`, and so on. No arm is looser than its neighbours,
+and the test for this file asserts exactly that: every occurrence sits beside
+an `organization_id = $2`, so a future edit cannot quietly turn one of them
+into a bare tolerance.
+
+Worth recording WHY the count went up two slices after it went down. The
+deadline digest could avoid these entirely because it had a users row to join
+against — `<record>.organization_id = u.organization_id` needs no tolerance,
+because it compares two stamps rather than testing one. `parentOwner` has no
+such join: it is handed an id by a subcontractor’s upload and must resolve it
+against one tenant, which is the shape every arm in this document exists for.
+The two notices are also the first to reach records a SUB touched, and the
+sub-portal upload path has landed `attachments.organization_id` NULL since it
+shipped — so the rows these reads walk are exactly the unbackfilled ones.
+
+When this item closes, all five retire with the reads they copied.
 
 595 → 590: the deadline digest. **THE FIRST SLICE TO MOVE THIS NUMBER
 DOWN**, and it did so without a migration, a backfill or a judgement call —

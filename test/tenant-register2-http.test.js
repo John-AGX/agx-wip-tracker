@@ -181,7 +181,7 @@ describe('REGISTER 2 — the route population', () => {
     //   80 -> 81  production-planning-routes    twelve routes, the service
     //             manager's Thursday checklist under Schedule. Mounted at
     //             /api/production-planning, which no other mount can swallow.
-    expect(R.mounts + R.unresolved.length).toBe(81);
+    expect(R.mounts + R.unresolved.length).toBe(82);
   });
 
   test('the ROUTE count is committed (615 across 79 routers)', () => {
@@ -535,8 +535,8 @@ describe('REGISTER 2 — the route population', () => {
     //      share row the token resolves to and then predicates every
     //      subsequent statement. Both take a path parameter, so both are
     //      waived here and driven by test/production-planning-share.test.js.
-    expect(R.routes).toBe(646);
-    expect(R.routers).toBe(80);
+    expect(R.routes).toBe(650);
+    expect(R.routers).toBe(81);
   });
 
   test('the DRIVEN / COUNTED-WAIVED split is committed (142 driven, 492 counted)', () => {
@@ -559,7 +559,14 @@ describe('REGISTER 2 — the route population', () => {
     // sheets — so it joins the driven set by construction and is proved
     // against the synthetic second org here. The other eleven are writes or
     // take a path parameter, including both guest doors.
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 143, waived: 503 });
+    // 143 -> 145 / 503 -> 505: the 'see what they see' preview. Four read-only
+    // doors. TWO are param-less GETs — the audience catalogue and the sub list —
+    // so they join the driven set by construction and are proved against the
+    // synthetic second org here. The other two take :subId and are waived as
+    // param-taking reads; their tenancy is proved instead in
+    // test/preview-routes.test.js, which drives a foreign sub id through both
+    // and asserts it answers exactly as a missing one does.
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 145, waived: 505 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

@@ -1689,6 +1689,102 @@ describe('the date Buildertrend made it', () => {
     expect(new Date(dates('jobs', 'j-1').bt_created_at).toISOString()).toBe('2025-01-02T15:00:00.000Z');
   });
 
+  /* THE DATES-ONLY PASS: the safe button has to be PRESSABLE, and has to say
+   * what it did.
+   *
+   * The backfill is the one thing a safe press does for a record that is
+   * already linked and already in step — which is every record imported before
+   * the columns existed, i.e. the whole reason it exists. But the page counts
+   * what a press would do (js/bt-sync-preview.js safeCount) and DISABLES the
+   * button at 0, and nothing in that count knew about dates. So on the org that
+   * needs the backfill most, the button read (0), and the dates could not be
+   * filled from this page at all — only by the whole three-pass "Run sync now",
+   * which also creates records and moves money.
+   *
+   * And a press that only backfilled used to return `unchanged`, so it reported
+   * "N already up to date" over N rows it had just written. Both halves below.
+   */
+  test('the preview says a record is DUE a date, and stops saying it once filled', async () => {
+    const row = async () => {
+      preview.forgetFetch(AGX);
+      const p86 = await preview.readP86(engine.pool, AGX);
+      const rows = preview.matchRows('jobs', BT_JOBS.map((x) => readRecord('jobs', x)), p86);
+      preview.markCreatedDue('jobs', rows, p86);
+      return rows.find((r) => String(r.bt.btId) === '111');
+    };
+    expect((await row()).btCreatedDue).toBe(true);
+    await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+    expect((await row()).btCreatedDue).toBe(false);
+  });
+
+  test('a press whose ONLY work was the date says so, instead of "already up to date"', async () => {
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+    expect(r.json.counts.createdDate).toBe(1);
+    expect(r.json.counts.unchanged).toBe(0);
+    expect(r.json.results[0].btCreated).toBe(true);
+    // …and the second press, which really has nothing to do, says nothing.
+    preview.forgetFetch(AGX);
+    const again = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+    expect(again.json.counts.createdDate || 0).toBe(0);
+    expect(again.json.counts.unchanged).toBe(1);
+  });
+
+  test('every dataset the preview returns is marked — not just the one a test calls', () => {
+    // The marking was proved by calling markCreatedDue directly, so deleting
+    // its call inside buildDataset left every test green and the flag never
+    // reached the page. Order matters too: marked after `out.rows = rows` is
+    // marked after the rows have gone out.
+    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'server', 'services', 'clickr', 'sync-preview.js'), 'utf8');
+    const call = src.indexOf('markCreatedDue(kind, rows, p86);');
+    const out = src.indexOf('out.rows = rows;', call);
+    expect(call).toBeGreaterThan(-1);
+    expect(out).toBeGreaterThan(call);
+    // and it is reached for every healed kind, by one table rather than six ifs
+    for (const k of ['jobs', 'leads', 'changeOrders', 'purchaseOrders', 'bills', 'estimates']) {
+      expect(src).toMatch(new RegExp('HEALED_COLLECTION[\\s\\S]{0,260}\\b' + k + ':'));
+    }
+  });
+
+  test('the count the page shows is the count the press writes', () => {
+    // safeCount and the server's own rule must not drift: a button that says 3
+    // and writes 7 is worse than a button with no number on it.
+    const { extractFunction } = require('./helpers/browser-fn');
+    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'js', 'bt-sync-preview.js'), 'utf8');
+    // eslint-disable-next-line no-new-func
+    const safeCount = new Function('return ' + extractFunction(src, 'safeCount'))();
+    const linked = (due) => ({ class: 'matched', rung: 'Buildertrend ID', bt: { btId: '111' }, btStatusDue: false, btCreatedDue: due, corrections: [] });
+    expect(safeCount({ key: 'jobs', rows: [linked(true), linked(false), linked(true)] })).toBe(2);
+    // the state this exists for: all linked, all current, dates still owed
+    expect(safeCount({ key: 'jobs', rows: [linked(true)] })).toBe(1);
+    // and nothing owed is still 0, so the button still disables when it should
+    expect(safeCount({ key: 'jobs', rows: [linked(false), linked(false)] })).toBe(0);
+    // A row a safe press does not reach is not counted, however due it looks:
+    // apply() targets confident rows only, and a record with no Buildertrend id
+    // cannot be written at all. Counting either would put a number on the
+    // button that does not come down when it is pressed.
+    // The SENTENCE under the button counts separately from the button, and it
+    // has to agree with it: 'Records the day Buildertrend created N jobs' is a
+    // promise about what this press writes.
+    // eslint-disable-next-line no-new-func
+    const createdDateCount = new Function('return ' + extractFunction(src, 'createdDateCount'))();
+    expect(createdDateCount({ key: 'jobs', rows: [linked(true), linked(false), linked(true)] })).toBe(2);
+    expect(createdDateCount({ key: 'jobs', rows: [Object.assign(linked(true), { class: 'ambiguous' })] })).toBe(0);
+    expect(createdDateCount({ key: 'jobs', rows: [Object.assign(linked(true), { bt: { btId: '' } })] })).toBe(0);
+
+    const ambiguous = Object.assign(linked(true), { class: 'ambiguous' });
+    const noBtId = Object.assign(linked(true), { bt: { btId: '' } });
+    expect(safeCount({ key: 'jobs', rows: [ambiguous, noBtId] })).toBe(0);
+  });
+
+  test('only a CONFIDENT row is ever marked due — a press does not reach the others', () => {
+    const { btCreatedDue } = match;
+    expect(btCreatedDue({ createdDate: '2025-01-02T15:00:00.000Z' }, null)).toBe(true);
+    expect(btCreatedDue({ createdDate: '2025-01-02T15:00:00.000Z' }, '2024-01-01T00:00:00.000Z')).toBe(false);
+    expect(btCreatedDue({ createdDate: '0001-01-01T00:00:00' }, null)).toBe(false);
+    expect(btCreatedDue({ dateAdded: '2026-03-01T10:00:00.00' }, null)).toBe(true);
+    expect(btCreatedDue({}, null)).toBe(false);
+  });
+
   test('a second pass writes nothing: the date is only ever FILLED', async () => {
     await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
     const first = dates('jobs', 'j-1');
