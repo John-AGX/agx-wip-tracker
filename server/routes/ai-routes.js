@@ -22,6 +22,12 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { toFile } = require('@anthropic-ai/sdk');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, hasCapability, requireOrg, resolveOrgId } = require('../auth');
+// "Are you inside this company at all?" — the ANY-of list this file's own
+// AI_TOOL_CAPABILITY map uses as a floor for the Cost Inbox, RFI and compliance
+// reads. It lives in services/ because routes/receipt-routes.js applies the
+// SAME floor to the REST twin, and two copies would let a caller refused on one
+// surface in through the other.
+const { INTERNAL_VIEW_FLOOR } = require('../services/internal-floor');
 const { storage } = require('../storage');
 const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
 // Wave 1.B context registry — fire-and-forget event logger for
@@ -14412,11 +14418,18 @@ const AI_TOOL_CAPABILITY = new Map([
   // (whose role description is literally "Estimates and Cost Inbox only") —
   // passes exactly as before. It refuses only a caller holding none of them:
   // the sub portal and a custom zero-capability role. The REST twins are NOT
-  // changed here; whether they should carry the same floor is John's call and
+  // changed here; whether they should carry the same floor is John’s call and
   // is recorded as open. test/turn-context-money-gate-deal.test.js drives it.
-  ['read_receipts',            ['ESTIMATES_VIEW', 'JOBS_VIEW_ALL', 'JOBS_VIEW_ASSIGNED', 'FINANCIALS_VIEW', 'LEADS_VIEW']],
-  ['list_workflow_items',      ['ESTIMATES_VIEW', 'JOBS_VIEW_ALL', 'JOBS_VIEW_ASSIGNED', 'FINANCIALS_VIEW', 'LEADS_VIEW']],
-  ['list_compliance_expiring', ['ESTIMATES_VIEW', 'JOBS_VIEW_ALL', 'JOBS_VIEW_ASSIGNED', 'FINANCIALS_VIEW', 'LEADS_VIEW']],
+  //
+  // ANSWERED, 2026-10-04: "fix the receipts capability check". The REST twin
+  // for receipts now carries this same floor, and the list moved to
+  // services/internal-floor.js so the two surfaces cannot drift — 86
+  // dispatches through this map and the app through the routes, and a caller
+  // refused one way must not be admitted the other. The RFI and compliance
+  // REST twins are still open; they are the same one-line change.
+  ['read_receipts',            INTERNAL_VIEW_FLOOR],
+  ['list_workflow_items',      INTERNAL_VIEW_FLOOR],
+  ['list_compliance_expiring', INTERNAL_VIEW_FLOOR],
 ]);
 
 // Effective capability for the consolidated read front door, derived

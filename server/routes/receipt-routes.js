@@ -1,7 +1,8 @@
 // Cost Inbox — receipt CRUD. A receipt is a field-captured cost (photo +
 // amount + cost code) attached to a JOB or a LEAD (lead = pre-sale cost).
 //
-// SECURITY POSTURE — ORG-scoped (NOT per-user): receipts are shared org data
+// SECURITY POSTURE — ORG-scoped (NOT per-user), ON A FLOOR: receipts are
+// shared org data
 // (the whole team sees the org's cost inbox, filtered by job). Every query
 // filters organization_id = <caller org> from the authenticated req.user —
 // never the body/params. entered_by records who captured it but does not gate
@@ -9,12 +10,35 @@
 // for v1 any authenticated org user can capture + view, matching how PO/tasks
 // started.)
 //
+// THAT "ANY AUTHENTICATED USER" WAS TOO WIDE, and not by a little: requireAuth
+// admits the builtin `sub` role, an EXTERNAL subcontractor whose whole
+// capability set is SUB_PORTAL_VIEW/UPLOAD. A sub-portal session could read
+// the org's Cost Inbox — vendor names and dollar totals — and capture into
+// it. The agent surface found this first and fixed its own doors
+// (routes/ai-routes.js, "A FLOOR, NOT A POLICY"), recording the REST twins as
+// John's call; he made it on 2026-10-04.
+//
+// Every door below now carries that floor. It is still NOT a per-role policy:
+// the list admits every VIEW capability a builtin internal role holds, so
+// system_admin, admin, corporate, pm and field_crew — "Estimates and Cost
+// Inbox only" — all pass exactly as before. It refuses a caller holding none
+// of them: the sub portal, and a custom zero-capability role.
+//
+// WHICH internal role may capture a cost, as opposed to read one, is still an
+// open question and deliberately not answered here. Answering it would mean
+// guessing at the custom roles an organisation actually uses, which this
+// repository cannot see.
+//
 // Mounted at /api/receipts (see server/index.js).
 'use strict';
 
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, getAttributedUserId } = require('../auth');
+// "Are you inside this company at all?" — the floor the agent surface already
+// applies to the same data. See that file for why it is a floor and not a
+// policy, and why it locks out no internal role.
+const { INTERNAL_FLOOR_CAPS } = require('../services/internal-floor');
 const inflight = require('../services/inflight');
 
 // This route opens no transaction, so the receipt is committed by the time the
@@ -301,7 +325,7 @@ async function logOcrFeedback(orgId, receiptId, ocr, finals, isPresale) {
 //   entity_type, entity_id (one job/lead) · status · cost_code · is_presale=1
 //   from / to (purchased_at range) · q (vendor / ref / notes / amount text)
 //   limit (default 200, max 500)
-router.get('/', requireAuth, async (req, res) => {
+router.get('/', requireAuth, requireCapability(INTERNAL_FLOOR_CAPS), async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     if (!orgId) return res.json({ receipts: [] });
@@ -348,7 +372,7 @@ router.get('/', requireAuth, async (req, res) => {
 // for one job/lead, grouped by cost code, split COGS (non-presale) vs pre-sale.
 // Counts only 'processed' receipts (complete + counting). MUST be declared
 // before '/:id' or Express routes "rollup" into that param handler.
-router.get('/rollup', requireAuth, async (req, res) => {
+router.get('/rollup', requireAuth, requireCapability(INTERNAL_FLOOR_CAPS), async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     const et = String(req.query.entity_type || '');
@@ -692,7 +716,7 @@ const CAT_COLS = 'id, name, position, archived, created_at';
 // GET /api/receipts/categories — the org's active cost categories (Tools, etc.).
 // Lazily seeds a default "Tools" category the first time an org has none, so the
 // feature works out of the box. ?all=1 includes archived (for the Admin pane).
-router.get('/categories', requireAuth, async (req, res) => {
+router.get('/categories', requireAuth, requireCapability(INTERNAL_FLOOR_CAPS), async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     if (!orgId) return res.json({ categories: [] });
@@ -776,7 +800,7 @@ router.patch('/categories/:id', requireAuth, requireCapability('ROLES_MANAGE'), 
 });
 
 // GET /api/receipts/:id — one receipt (org-scoped).
-router.get('/:id', requireAuth, async (req, res) => {
+router.get('/:id', requireAuth, requireCapability(INTERNAL_FLOOR_CAPS), async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     const { rows } = await pool.query(
@@ -812,7 +836,7 @@ async function knownVendors(orgId) {
       .map((v) => String(v).replace(/[\r\n\t]+/g, ' ').slice(0, 60));
   } catch (_) { return []; }
 }
-router.post('/ocr', requireAuth, aiChatLimiter, aiChatHourlyLimiter, async (req, res) => {
+router.post('/ocr', requireAuth, requireCapability(INTERNAL_FLOOR_CAPS), aiChatLimiter, aiChatHourlyLimiter, async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     if (!orgId) return res.json({ ok: false }); // fail closed like the sibling routes
@@ -928,7 +952,7 @@ router.post('/ocr', requireAuth, aiChatLimiter, aiChatHourlyLimiter, async (req,
 
 // GET /api/receipts/ocr/stats — the model's per-field OCR hit-rate for this org
 // (from receipt_ocr_feedback). Powers the "OCR accuracy" line in the Cost Inbox.
-router.get('/ocr/stats', requireAuth, async (req, res) => {
+router.get('/ocr/stats', requireAuth, requireCapability(INTERNAL_FLOOR_CAPS), async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     if (!orgId) return res.json({ stats: null });
@@ -976,7 +1000,7 @@ router.delete('/ocr/feedback/reset', requireAuth, requireCapability('ROLES_MANAG
 // POST /api/receipts — create. Body: { entity_type?, entity_id?, amount?,
 // vendor?, cost_code?, notes?, attachment_id?, purchased_at? }. A lead-linked
 // receipt is auto-flagged is_presale. status derives from completeness.
-router.post('/', requireAuth, async (req, res) => {
+router.post('/', requireAuth, requireCapability(INTERNAL_FLOOR_CAPS), async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     if (!orgId) return res.status(400).json({ error: 'Organization required' });
@@ -1054,7 +1078,7 @@ router.post('/', requireAuth, async (req, res) => {
 
 // PATCH /api/receipts/:id — update any subset of fields. Re-derives is_presale
 // (from the linked entity) + status (from completeness) on every save.
-router.patch('/:id', requireAuth, async (req, res) => {
+router.patch('/:id', requireAuth, requireCapability(INTERNAL_FLOOR_CAPS), async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     const cur = await pool.query(
@@ -1141,7 +1165,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
 
 // DELETE /api/receipts/:id — soft-void by default (keeps the photo + audit
 // trail); ?hard=1 removes the row entirely.
-router.delete('/:id', requireAuth, async (req, res) => {
+router.delete('/:id', requireAuth, requireCapability(INTERNAL_FLOOR_CAPS), async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     if (String(req.query.hard || '') === '1') {

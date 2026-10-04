@@ -526,9 +526,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.97';
+const APP_VERSION = '1.98';
 
 const releases = [
+  {
+    version: '1.98',
+    date: '2026-10-04',
+    name: 'The Cost Inbox is for people inside the company',
+    summary: 'Every door on the Cost Inbox asked only that you were signed in — and a subcontractor signing in to their portal is signed in.',
+    changes: [
+      { type: 'fixed', text: 'A subcontractor could reach your Cost Inbox. Every door on it asked only that you were signed in — and a sub signing in to their portal is signed in. From their session the org’s receipts were readable, vendor names and dollar totals included, and new ones could be captured. They are now refused, on every door, read and write.' },
+      { type: 'improved', text: 'Nobody inside the company is affected. The check asks one question — are you internal at all — and every built-in role answers yes, including Field Crew, whose job description is literally “Estimates and Cost Inbox only”, and Corporate, which is read-only. Nothing about who may capture a cost has changed.' },
+      { type: 'improved', text: 'The app and 86 now answer to the same list. 86 had already been fixed when it was found handing the same figures to a subcontractor who asked it; the app had not. One list now, so a person refused on one side cannot get in through the other.' },
+    ],
+  },
   {
     version: '1.97',
     date: '2026-10-04',
