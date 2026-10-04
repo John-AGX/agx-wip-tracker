@@ -26,14 +26,39 @@
   // fails (offline mode, network glitch). Mirrors the seed in server/db.js so
   // an admin who hasn't yet edited templates still gets the canonical text.
   var FALLBACK_TEMPLATE = {
-    company_header: '13191 56th Court, Ste 102 · Clearwater, FL 33760-4030 · Phone: 813-725-5233',
-    intro_template: 'AG Exteriors is pleased to provide you with this proposal to complete the work outlined below.',
+    company_name: 'AG Exteriors',
+    company_header: '13191 56th Court, Suite 102 · Clearwater, FL 33760',
+    contact_line: '813-725-5233 · agxco.com',
+    // The licence numbers belong on the letterhead of every proposal a Florida
+    // contractor sends. The renderer has read template.license_line since the
+    // band layouts landed; nothing ever SET it, so it silently fell back to
+    // printing the address line twice.
+    license_line: 'CCC1336582 · CGC1538588',
+    intro_template: 'AG Exteriors is pleased to provide this proposal to furnish all materials, equipment and labor — subject to the exclusions listed below — required to complete the work described.',
     about_paragraph: 'We proudly specialize in a wide range of exterior services, including roofing, siding, painting, deck rebuilding, and more—delivering each with care and attention to detail. Backed by our leadership team with extensive experience in construction, development, and property management. AG Exteriors is committed to bringing a thoughtful, professional approach to every project. With this foundation, we’re committed to providing high-quality work and dependable service on every project.',
     exclusions: [
       'This proposal may be withdrawn by AG Exteriors if not accepted within 30 days.',
       'Pricing assumes unfettered access to the property during the project.'
     ],
-    signature_text: 'I confirm that my action here represents my electronic signature and is binding.'
+    signature_text: 'This proposal may be withdrawn by AG Exteriors if not accepted within 30 days. I confirm that my action here represents my electronic signature and is binding.',
+    acceptance_text: 'The above prices, scope, specifications and conditions are satisfactory and are hereby accepted. You are authorized to do the work specified.',
+    signer_name: 'Noah Pillsbury',
+    signer_title: 'President & Founder',
+    // Terms, as rows, because the document prints them as a two-column table
+    // and a single paragraph cannot be read at a glance by a board.
+    payment_schedule: [
+      { term: '35%', detail: 'Deposit upon acceptance of proposal' },
+      { term: 'Balance', detail: 'Progress billing as work is completed' }
+    ],
+    payment_note: 'Any prepayment of materials will be in addition to the 35% deposit. Material costs are guaranteed if materials are paid for at the time the proposal is accepted. Late payments may be subject to interest of 1.5% per month or the maximum allowed by law. Owner agrees to pay reasonable collection costs, including attorney fees, if collection becomes necessary.',
+    pricing_note: 'Permit fees and engineering fees are not included; if required, AG Exteriors will charge the client the cost of these fees plus an additional 10%. Excludes hidden or concealed conditions including structural deficiencies, mold, asbestos or lead paint, and existing code violations — any corrective work is handled by written change order. Material pricing is subject to escalation between contract signing and material purchase.',
+    // The sections that read the same on every proposal. Project-specific
+    // narrative is a scope group with no lines; THIS is the boilerplate that
+    // would otherwise be retyped every time. One line of body per numbered item.
+    standard_sections: [
+      { title: 'Jobsite Management', body: 'Temporary fencing around the work zone; a portable toilet for the crew and a roll-off dumpster for debris.\nScaffold as required for second-floor work.\nEquipment and materials stored on site in a location designated by the client.\nWork proceeds on consecutive days, weather permitting; cleanup is performed daily and upon completion.\nManagement provides daily on-site oversight for quality assurance and progress reviews.' },
+      { title: 'Resident / Construction Schedule', body: 'AG Exteriors will provide advance notice to management prior to beginning work so residents can be notified.' }
+    ]
   };
 
   function getTemplate() {
@@ -74,6 +99,16 @@
     if (!d) d = new Date();
     if (typeof d === 'string') d = new Date(d);
     return (d.getMonth() + 1) + '-' + d.getDate() + '-' + d.getFullYear();
+  }
+
+  // "October 3, 2026" — what the AGX document prints in its project block. The
+  // same instant fmtDateShort reads, so the same local accessors are right.
+  function fmtDateLong(d) {
+    if (!d) d = new Date();
+    if (typeof d === 'string') d = new Date(d);
+    var months = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+                  'August', 'September', 'October', 'November', 'December'];
+    return months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
   }
 
   function escapeHTMLLocal(s) {
@@ -190,7 +225,11 @@
       community: community,
       issue: issue,
       total: fmtCurrency(computeTotal(estimate)),
+      // Same number, to the cent: the AGX investment summary totals a column
+      // of cents, so it cannot print a dollar-rounded total under it.
+      totalExact: fmtProposalCurrency(computeTotal(estimate)),
       date: fmtDateShort(new Date()),
+      dateLong: fmtDateLong(new Date()),
       client: client
     };
   }
@@ -678,6 +717,156 @@
             '<li>References from comparable HOA and property-management projects, on request</li>' +
           '</ul>';
       },
+      // ── The AGX house document ────────────────────────────────────────
+      // Letterhead: mark on the left, the company's own lines on the right,
+      // licences last. license_line is NOT defaulted to company_header here
+      // (the band layouts do that): on this document an org with no licence
+      // numbers prints none rather than printing its address a second time.
+      agxLetterhead: function () {
+        var lines = [template.company_header, template.contact_line, template.license_line]
+          .filter(function (x) { return x && String(x).trim(); })
+          .map(function (x, i) {
+            return '<div class="' + (i === 2 ? 'agx-lic' : 'agx-addr') + '">' + escapeHTMLLocal(x) + '</div>';
+          }).join('');
+        return '<div class="agx-letterhead">' +
+          '<img class="agx-mark" src="' + escapeAttrLocal(docLogoSrc()) + '" alt="' +
+            escapeAttrLocal(template.company_name || 'Logo') + '" />' +
+          '<div class="agx-lines">' + lines + '</div>' +
+        '</div>';
+      },
+      agxTitle: function () {
+        var head = estimate.issue || estimate.title || 'Proposal';
+        var sub = (estimate.title && estimate.title !== head) ? estimate.title : '';
+        return '<div class="agx-eyebrow">Proposal</div>' +
+          '<h1 class="agx-title">' + escapeHTMLLocal(head) + '</h1>' +
+          (sub ? '<div class="agx-subtitle">' + escapeHTMLLocal(sub) + '</div>' : '');
+      },
+      // Submitted to / Project, side by side. Two addresses that are not the
+      // same address: who signs and gets billed, and where the work happens.
+      agxParties: function () {
+        function addrLines(a) {
+          return String(a || '').split(/,\s*/).filter(Boolean)
+            .map(function (l) { return '<div>' + escapeHTMLLocal(l) + '</div>'; }).join('');
+        }
+        var toName = estimate.client || estimate.community || ctx.community;
+        var toSub = (estimate.community && estimate.community !== estimate.client)
+          ? '<div>' + escapeHTMLLocal(estimate.community) + '</div>' : '';
+        var attn = estimate.managerName || (ctx.salutation !== 'Client' ? ctx.salutation : '');
+        return '<div class="agx-parties">' +
+          '<div class="agx-party">' +
+            '<div class="agx-party-label">Submitted to</div>' +
+            '<div class="agx-party-name">' + escapeHTMLLocal(toName) + '</div>' + toSub +
+            (attn ? '<div>Attn: ' + escapeHTMLLocal(attn) + '</div>' : '') +
+            addrLines(estimate.billingAddr || estimate.propertyAddr) +
+          '</div>' +
+          '<div class="agx-party">' +
+            '<div class="agx-party-label">Project</div>' +
+            '<div class="agx-party-name">' + escapeHTMLLocal(estimate.community || estimate.title || '—') + '</div>' +
+            addrLines(estimate.propertyAddr) +
+            '<div class="agx-party-date">Date: ' + escapeHTMLLocal(ctx.dateLong || ctx.date) + '</div>' +
+          '</div>' +
+        '</div>';
+      },
+      agxIntro: function () {
+        return '<p class="intro">' + prep.introHTML + '</p>' +
+          (template.about_paragraph ? '<p class="about">' + escapeHTMLLocal(template.about_paragraph) + '</p>' : '');
+      },
+      agxScopeHeading: function () { return heading('Scope of Work'); },
+      // Numbered sections, continuous across narrative and priced ones, each
+      // priced section carrying its own amount in its heading. prep.agxScope
+      // is the ONE numbering — the investment summary cites the same numbers,
+      // so "(Section 3)" in the summary always points at the right section.
+      agxScopeSections: function () {
+        var out = '';
+        prep.agxScope.forEach(function (sec) {
+          out += '<h3 class="agx-sec-head"><span class="agx-sec-no">' + sec.no + '.</span> ' +
+            escapeHTMLLocal(sec.name) +
+            (sec.amount != null && cfg.subtotals
+              ? ' <span class="agx-sec-amt">— ' + escapeHTMLLocal(fmtProposalCurrency(sec.amount)) + '</span>'
+              : '') +
+            '</h3>';
+          out += sec.bodyHTML || '<p class="doc-muted">Scope not entered for this section.</p>';
+        });
+        return out || '<p class="doc-muted">Scope of work not yet entered.</p>';
+      },
+      // Investment summary + what is deliberately NOT in the total. The second
+      // table is the one that keeps a proposal honest: an excluded group is
+      // either a priced option or a TBD, and either way it is named here
+      // instead of being quietly dropped from the document.
+      agxInvestmentSummary: function () {
+        var rows = '';
+        prep.agxScope.forEach(function (sec) {
+          if (sec.amount == null) return;
+          rows += '<tr><td class="c-desc">' + escapeHTMLLocal(sec.name) +
+            ' <span class="agx-sec-ref">(Section ' + sec.no + ')</span></td>' +
+            '<td class="c-money">' + moneyCell(sec.amount) + '</td></tr>';
+        });
+        var html = heading('Investment Summary') +
+          '<table class="doc-table agx-sum"><thead><tr><th class="c-desc">Scope component</th>' +
+          '<th class="c-money">Amount</th></tr></thead><tbody>' +
+          (rows || '<tr><td class="c-desc doc-muted">No priced scope yet.</td><td class="c-money"></td></tr>') +
+          '<tr class="tot-row"><td class="c-desc">Total project investment</td>' +
+          '<td class="c-money">' + escapeHTMLLocal(ctx.totalExact || ctx.total) + '</td></tr></tbody></table>';
+
+        if (excluded.length) {
+          var notRows = '';
+          excluded.forEach(function (alt) {
+            var t = computeGroupTotal(estimate, alt.id);
+            notRows += '<tr><td class="c-desc">' + escapeHTMLLocal(alt.name || 'Item') + '</td>' +
+              '<td class="c-money">' + (t ? moneyCell(t) : 'TBD') + '</td></tr>';
+          });
+          html += '<h3 class="agx-sec-head agx-sec-plain">Not included in total</h3>' +
+            '<table class="doc-table agx-sum"><thead><tr><th class="c-desc">Item</th>' +
+            '<th class="c-money">Amount</th></tr></thead><tbody>' + notRows + '</tbody></table>';
+        }
+        if (template.pricing_note) {
+          html += '<p class="doc-small agx-note">' + escapeHTMLLocal(template.pricing_note) + '</p>';
+        }
+        return html;
+      },
+      agxPaymentSchedule: function () {
+        var rows = (template.payment_schedule || []).filter(function (r) { return r && (r.term || r.detail); });
+        if (!rows.length && !template.payment_note) return '';
+        var body = rows.map(function (r) {
+          return '<tr><td class="agx-term">' + escapeHTMLLocal(r.term || '') + '</td>' +
+            '<td>' + escapeHTMLLocal(r.detail || '') + '</td></tr>';
+        }).join('');
+        return heading('Payment Schedule') +
+          (body ? '<table class="agx-terms"><tbody>' + body + '</tbody></table>' : '') +
+          (template.payment_note ? '<p class="doc-small agx-note">' + escapeHTMLLocal(template.payment_note) + '</p>' : '');
+      },
+      // Both parties sign, side by side, and the contractor's signer is named:
+      // a signature block with no name under it is a document that comes back.
+      agxAcceptance: function () {
+        function col(label, who, sub) {
+          return '<div class="agx-sig-col">' +
+            '<div class="agx-party-label">' + escapeHTMLLocal(label) + '</div>' +
+            '<div class="agx-sig-line"></div><div class="agx-sig-cap">Signature</div>' +
+            '<div class="agx-sig-line"></div><div class="agx-sig-cap">Print name</div>' +
+            '<div class="agx-sig-line"></div><div class="agx-sig-cap">Date</div>' +
+            '<div class="agx-sig-who">' + escapeHTMLLocal(who) + '</div>' +
+            '<div class="agx-sig-sub">' + escapeHTMLLocal(sub) + '</div>' +
+          '</div>';
+        }
+        var owner = estimate.client || estimate.community || ctx.community;
+        var signer = [template.signer_name, template.signer_title].filter(Boolean).join(', ');
+        return heading('Acceptance of Proposal') +
+          (template.acceptance_text ? '<p class="doc-para">' + escapeHTMLLocal(template.acceptance_text) + '</p>' : '') +
+          (template.signature_text ? '<p class="doc-small agx-note">' + escapeHTMLLocal(template.signature_text) + '</p>' : '') +
+          '<div class="agx-sigs">' +
+            col('Accepted by — owner', owner, 'Authorized representative') +
+            col('Submitted by — contractor', template.company_name || 'Contractor', signer) +
+          '</div>';
+      },
+      // Repeats at the foot of every printed page (position: fixed). No page
+      // numbers: a browser cannot count pages from HTML, and Chrome's own
+      // print footer can add them if the operator wants them.
+      agxRunningFoot: function () {
+        var bits = [template.company_name || 'AG Exteriors',
+                    estimate.community || estimate.title || '', 'Proposal']
+          .filter(function (x) { return x && String(x).trim(); });
+        return '<div class="agx-runfoot">' + escapeHTMLLocal(bits.join(' · ')) + '</div>';
+      },
       exclusions: function () {
         if (!prep.exclusionsHTML) return '';
         return '<h2 class="section-heading italic-heading">Assumptions, Clarifications and Exclusions:</h2>' +
@@ -735,7 +924,12 @@
     // Escape the template body first so an admin can't inject markup; the
     // placeholder substitution then injects already-safe HTML built above.
     // {name} survives HTML escaping since the brace chars aren't escaped.
-    var safeIntroTemplate = escapeHTMLLocal(template.intro_template || '');
+    // A per-estimate intro WINS over the org paragraph when it is filled in:
+    // the opening of a real proposal names the RFP it answers and what is
+    // priced separately, and that sentence cannot live in an org-wide default.
+    // Empty (the usual case) falls back to the standard text.
+    var introSource = String(estimate.proposalIntro || '').trim() || template.intro_template || '';
+    var safeIntroTemplate = escapeHTMLLocal(introSource);
     var introHTML = fillPlaceholders(safeIntroTemplate, {
       issue: '<strong>' + escapeHTMLLocal(ctx.issue) + '</strong>',
       community: '<strong>' + escapeHTMLLocal(ctx.community) + '</strong>',
@@ -801,6 +995,44 @@
       exclusionsHTML += '<li>' + escapeHTMLLocal(item) + '</li>';
     });
 
+    // The AGX document's scope sections, numbered once: every included group in
+    // the operator's own order, then the org's standard closing sections. A
+    // group with no priced line is NARRATIVE — amount null, no price in its
+    // heading and no row in the investment summary — which is how a project
+    // approach or a water-management section is written without a second
+    // authoring surface to keep in sync.
+    var agxScope = (function () {
+      var allLines = (window.appData && window.appData.estimateLines) || [];
+      var out = [];
+      includedAlts.forEach(function (alt) {
+        var priced = allLines.some(function (l) {
+          return l.estimateId === estimate.id && l.alternateId === alt.id &&
+                 l.section !== '__section_header__';
+        });
+        out.push({
+          name: alt.name || 'Scope',
+          amount: priced ? computeGroupTotal(estimate, alt.id) : null,
+          bodyHTML: scopeBody((alt.scope || '').trim())
+        });
+      });
+      (template.standard_sections || []).forEach(function (sec) {
+        if (!sec || !sec.title) return;
+        var items = String(sec.body || '').split(/\r?\n/)
+          .map(function (l) { return l.trim(); }).filter(Boolean);
+        out.push({
+          name: sec.title,
+          amount: null,
+          bodyHTML: items.length
+            ? '<ol class="doc-list agx-sec-list">' + items.map(function (l) {
+                return '<li>' + escapeHTMLLocal(l) + '</li>';
+              }).join('') + '</ol>'
+            : ''
+        });
+      });
+      out.forEach(function (sec, i) { sec.no = i + 1; });
+      return out;
+    })();
+
     // Everything above is PREP — the same data the original single-layout
     // proposal computed. What follows is the layout WALK: the chosen layout
     // names its sections in order, and each one is drawn by the matching
@@ -814,6 +1046,7 @@
       introHTML: introHTML,
       scopeHTML: scopeHTML,
       exclusionsHTML: exclusionsHTML,
+      agxScope: agxScope,
       includedAlts: includedAlts
     };
     var sections = buildSections(estimate, template, ctx, cfg, prep);
@@ -1304,6 +1537,39 @@
       '.p86-proposal .doc-flag-internal { background: #fee2e2; border-left: 4px solid #b91c1c; color: #7f1d1d; font-weight: 700; letter-spacing: 0.3px; }' +
       '.p86-proposal .doc-flag-field { background: #e0f2fe; border-left: 4px solid #0369a1; color: #0c4a6e; font-weight: 700; letter-spacing: 0.3px; }' +
       '.p86-proposal .doc-flag-caveat { background: #fff8e1; border-left: 4px solid #d97706; color: #4a3500; }' +
+
+      // ── AGX Standard ───────────────────────────────────────────────
+      '.p86-proposal .agx-letterhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 26px; }' +
+      '.p86-proposal .agx-mark { height: 58px; width: auto; }' +
+      '.p86-proposal .agx-lines { text-align: right; font-size: 9.5pt; line-height: 1.5; color: #333; }' +
+      '.p86-proposal .agx-lic { margin-top: 6px; letter-spacing: 0.4px; }' +
+      '.p86-proposal .agx-eyebrow { font-size: 10pt; font-weight: 700; letter-spacing: 2.4px; text-transform: uppercase; color: #0f2346; }' +
+      '.p86-proposal .agx-title { font-size: 17pt; font-weight: 700; margin: 6px 0 2px; line-height: 1.25; color: #222; }' +
+      '.p86-proposal .agx-subtitle { font-size: 11pt; color: #444; margin-bottom: 4px; }' +
+      '.p86-proposal .agx-parties { display: flex; gap: 34px; margin: 22px 0 18px; font-size: 10pt; line-height: 1.5; }' +
+      '.p86-proposal .agx-party { flex: 1 1 0; }' +
+      '.p86-proposal .agx-party-label { font-size: 8.5pt; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; color: #6b7280; border-bottom: 1px solid #d4d4d4; padding-bottom: 3px; margin-bottom: 6px; }' +
+      '.p86-proposal .agx-party-name { font-weight: 700; color: #222; }' +
+      '.p86-proposal .agx-party-date { margin-top: 4px; }' +
+      '.p86-proposal .agx-sec-head { font-size: 11.5pt; font-weight: 700; color: #0f2346; margin: 20px 0 6px; page-break-after: avoid; break-after: avoid; }' +
+      '.p86-proposal .agx-sec-no { color: #0f2346; }' +
+      '.p86-proposal .agx-sec-amt { font-weight: 700; color: #222; white-space: nowrap; }' +
+      '.p86-proposal .agx-sec-plain { margin-top: 22px; }' +
+      '.p86-proposal .agx-sec-list { margin: 4px 0 12px; }' +
+      '.p86-proposal .agx-sec-ref { color: #6b7280; font-weight: 400; }' +
+      '.p86-proposal .agx-sum { margin: 8px 0 10px; }' +
+      '.p86-proposal .agx-note { color: #555; font-style: normal; line-height: 1.5; margin: 6px 0 16px; }' +
+      '.p86-proposal .agx-terms { width: 100%; border-collapse: collapse; margin: 6px 0 10px; font-size: 10.5pt; }' +
+      '.p86-proposal .agx-terms td { padding: 6px 10px 6px 0; vertical-align: top; border-bottom: 1px solid #ececec; }' +
+      '.p86-proposal .agx-terms .agx-term { font-weight: 700; white-space: nowrap; width: 90px; }' +
+      '.p86-proposal .agx-sigs { display: flex; gap: 40px; margin-top: 18px; page-break-inside: avoid; break-inside: avoid; }' +
+      '.p86-proposal .agx-sig-col { flex: 1 1 0; }' +
+      '.p86-proposal .agx-sig-line { border-bottom: 1.2px solid #333; height: 26px; }' +
+      '.p86-proposal .agx-sig-cap { font-size: 8.5pt; color: #6b7280; margin: 2px 0 10px; }' +
+      '.p86-proposal .agx-sig-who { font-weight: 700; font-size: 10pt; margin-top: 6px; }' +
+      '.p86-proposal .agx-sig-sub { font-size: 9.5pt; color: #555; }' +
+      // On screen the running foot is just a last line; print pins it to every page.
+      '.p86-proposal .agx-runfoot { margin-top: 26px; padding-top: 8px; border-top: 1px solid #e2e2e2; font-size: 8.5pt; color: #6b7280; text-align: center; }' +
       ''
     );
   }
@@ -1311,10 +1577,17 @@
   // Print stylesheet — page setup + chrome hide. Used by the popup window.
   function getPrintCSS() {
     return (
-      '@page { size: letter; margin: 0.6in; }' +
+      '@page { size: letter; margin: 0.6in 0.6in 0.85in; }' +
       'body { margin: 0; padding: 0; background: #fff; }' +
       '.p86-proposal { box-shadow: none; padding: 0; max-width: 100%; }' +
-      '.no-print { display: none !important; }'
+      '.no-print { display: none !important; }' +
+      // A fixed element repeats on every printed page in Chrome, which is how
+      // the AGX document gets its running foot. Page NUMBERS are not available
+      // to it — CSS counter(page) only works in @page margin boxes, which
+      // Chrome does not implement — so the foot carries the company, the
+      // project and the word Proposal, and Chrome's own print header/footer
+      // option can add numbering when somebody wants it.
+      '.p86-proposal .agx-runfoot { position: fixed; bottom: -0.55in; left: 0; right: 0; margin: 0; border-top: none; }'
     );
   }
 
@@ -1352,8 +1625,10 @@
   // through the registry, which clamps an unknown id (a retired layout still in
   // someone's localStorage) to the safe default rather than rendering nothing.
   var _docLayoutId = (function () {
-    try { return localStorage.getItem('p86-preview-doc-layout') || 'letterhead'; }
-    catch (e) { return 'letterhead'; }
+    // 'agx' is the house document. A stored id still wins — somebody who
+    // deliberately picked another skeleton keeps it.
+    try { return localStorage.getItem('p86-preview-doc-layout') || 'agx'; }
+    catch (e) { return 'agx'; }
   })();
   var _takeoffLevelId = (function () {
     try { return localStorage.getItem('p86-preview-takeoff-level') || 't4'; }

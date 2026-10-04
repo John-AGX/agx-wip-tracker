@@ -4373,6 +4373,11 @@
         '</div>' +
         '<div>' +
           field('Issue / Repair (proposal headline)', 'ee-issue', est.issue, { placeholder: 'e.g. Metal Stair Repairs' }) +
+          // Overrides the standard opening paragraph on the proposal when
+          // filled in — the sentence that names the RFP being answered, or what
+          // is priced separately. Blank keeps the org-wide text.
+          field('Proposal intro (optional — overrides the standard paragraph)', 'ee-proposalIntro', est.proposalIntro,
+                { textarea: true, rows: 4 }) +
           field('Manager Name', 'ee-managerName', est.managerName) +
           field('Manager Email', 'ee-managerEmail', est.managerEmail, { type: 'email' }) +
           field('Manager Phone', 'ee-managerPhone', est.managerPhone, { type: 'tel' }) +
@@ -4468,7 +4473,8 @@
       'ee-issue': 'issue',
       'ee-managerName': 'managerName',
       'ee-managerEmail': 'managerEmail',
-      'ee-managerPhone': 'managerPhone'
+      'ee-managerPhone': 'managerPhone',
+      'ee-proposalIntro': 'proposalIntro'
     };
     Object.keys(fieldMap).forEach(function(elId) {
       var el = document.getElementById(elId);

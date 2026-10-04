@@ -3,7 +3,7 @@
 // js/estimate-doc-layouts.js declares WHAT each document contains (an ordered
 // list of section keys); js/estimate-preview.js owns one builder per key and
 // walks the list. This test loads both in a vm sandbox with a synthetic
-// estimate and renders all 6 proposal layouts and all 5 takeoff levels through
+// estimate and renders every proposal layout and all 5 takeoff levels through
 // the real print path.
 //
 // The point is the DECLARATIVE split: a layout that names a section key with no
@@ -133,15 +133,18 @@ let S;
 beforeAll(() => { S = makeSandbox(); });
 
 describe('document registry', () => {
-  test('exposes 6 proposal layouts and 5 takeoff levels', () => {
-    expect(S.registry.listProposals()).toHaveLength(6);
+  test('exposes 7 proposal layouts and 5 takeoff levels', () => {
+    // 6 -> 7: 'agx', the AGX Standard house document, which is also now the
+    // first entry and therefore the clamp default. Its own document-level
+    // assertions live in test/agx-proposal-standard.test.js.
+    expect(S.registry.listProposals()).toHaveLength(7);
     expect(S.registry.listTakeoffs()).toHaveLength(5);
   });
 
   test('clamps an unknown id to the safe default instead of returning null', () => {
     // A retired layout id can outlive its registry entry in someone's
     // localStorage; that must degrade, not blank the preview.
-    expect(S.registry.getProposal('retired-in-2027').id).toBe('letterhead');
+    expect(S.registry.getProposal('retired-in-2027').id).toBe('agx');
     expect(S.registry.getTakeoff('nope').id).toBe('t1');
   });
 
@@ -156,7 +159,7 @@ describe('document registry', () => {
 });
 
 describe('proposal layouts', () => {
-  test('all six render substantial output with no leaked undefined/NaN', async () => {
+  test('every layout renders substantial output with no leaked undefined/NaN', async () => {
     for (const layout of S.registry.listProposals()) {
       const html = await S.proposal(layout.id);
       expect(html.length).toBeGreaterThan(500);
@@ -164,7 +167,7 @@ describe('proposal layouts', () => {
     }
   });
 
-  test('letterhead still emits the original AGX document', async () => {
+  test('letterhead still emits the original pre-layout document', async () => {
     const html = await S.proposal('letterhead');
     expect(html).toMatch(/Proposal for /);
     expect(html).toMatch(/Assumptions, Clarifications and Exclusions/);

@@ -7072,23 +7072,60 @@ async function initSchema() {
   // ({salutation}, {issue}, {community}, {date}, {total}) are filled in by the
   // preview renderer on the client.
   const DEFAULT_PROPOSAL_TEMPLATE = {
-    company_header: '13191 56th Court, Ste 102 · Clearwater, FL 33760-4030 · Phone: 813-725-5233',
+    company_name: 'AG Exteriors',
+    company_header: '13191 56th Court, Suite 102 · Clearwater, FL 33760',
+    contact_line: '813-725-5233 · agxco.com',
+    license_line: 'CCC1336582 · CGC1538588',
     intro_template:
-      'AG Exteriors is pleased to provide you with this proposal to complete the work outlined below.',
+      'AG Exteriors is pleased to provide this proposal to furnish all materials, equipment and labor — subject to the exclusions listed below — required to complete the work described.',
     about_paragraph:
-      'We proudly specialize in a wide range of exterior services, including roofing, siding, painting, deck rebuilding, and more—delivering each with care and attention to detail. Backed by our leadership team with extensive experience in construction, development, and property management. AG Exteriors is committed to bringing a thoughtful, professional approach to every project. With this foundation, we’re committed to providing high-quality work and dependable service on every project.',
+      'We proudly specialize in a wide range of exterior services, including roofing, siding, painting, deck rebuilding and structural repairs — delivering each with care and attention to detail. Backed by a leadership team with extensive experience in construction, development and property management, AG Exteriors is committed to bringing a thoughtful, professional approach to every project.',
+    acceptance_text:
+      'The above prices, scope, specifications and conditions are satisfactory and are hereby accepted. You are authorized to do the work specified.',
+    signer_name: 'Noah Pillsbury',
+    signer_title: 'President & Founder',
+    payment_schedule: [
+      { term: '35%', detail: 'Deposit upon acceptance of proposal' },
+      { term: 'Balance', detail: 'Progress billing as work is completed' }
+    ],
+    payment_note:
+      'Any prepayment of materials will be in addition to the 35% deposit. Material costs are guaranteed if materials are paid for at the time the proposal is accepted. Late payments may be subject to interest of 1.5% per month or the maximum allowed by law. Owner agrees to pay reasonable collection costs, including attorney fees, if collection becomes necessary.',
+    pricing_note:
+      'Permit fees and engineering fees are not included; if required, AG Exteriors will charge the client the cost of these fees plus an additional 10%. Excludes hidden or concealed conditions including structural deficiencies, mold, asbestos or lead paint, and existing code violations — any corrective work is handled by written change order. Material pricing is subject to escalation between contract signing and material purchase.',
+    // Sections that read the same on every proposal, appended after the scope
+    // groups. Project-specific narrative is authored as a scope group with no
+    // line items, which keeps one authoring surface for scope.
+    standard_sections: [
+      {
+        title: 'Jobsite Management',
+        body: [
+          'Temporary fencing around the work zone; a portable toilet for the crew and a roll-off dumpster for debris.',
+          'Scaffold as required for second-floor work.',
+          'Equipment and materials stored on site in a location designated by the client.',
+          'Work proceeds on consecutive days, weather permitting; cleanup is performed daily and upon completion.',
+          'Management provides daily on-site oversight for quality assurance and progress reviews.'
+        ].join('\n')
+      },
+      {
+        title: 'Resident / Construction Schedule',
+        body: 'AG Exteriors will provide advance notice to management prior to beginning work so residents can be notified.'
+      }
+    ],
     exclusions: [
       'This proposal may be withdrawn by AG Exteriors if not accepted within 30 days.',
-      'Pricing assumes unfettered access to the property during the project.',
+      'Pricing is for the building(s) named in this proposal. General conditions reflect this building\'s share of a multi-building program; if it is contracted as a standalone building, mobilization is adjusted accordingly.',
+      'Quantities are from AG Exteriors\' field takeoff and are field verified before work begins.',
+      'Pricing assumes unfettered and uninterrupted access to the property during the project, including on-site water and electrical power at no charge.',
+      'The client must trim or remove any landscaping obstructing the designated work zones prior to mobilization.',
+      'Existing windows and doors remain in place unless named in the scope of work.',
       'If AG Exteriors encounters unforeseen conditions that differ from those anticipated or ordinarily found to exist in the construction activities being provided, AG Exteriors retains the right to make an equitable adjustment to the pricing.',
-      'Client will provide electrical power and water at no charge.',
       'Client will provide a location for dumpsters on site for trash and material disposal. AG Exteriors will provide the dumpsters for the entire job. However, if we are required to switch out dumpsters due to residents’ use, AG Exteriors reserves the right to charge the Client accordingly.',
       'Mold/Asbestos/Lead Paint: Any detection or remediation of mold, asbestos, and lead paint is specifically excluded from this proposal. Any costs associated with the detection and/or removal of mold, mold spores, asbestos, and lead paint are the responsibility of others.',
       'Damage to the physical property that occurred prior to AG Exteriors’ work not specifically called out in the scope of work is excluded.',
       'Proposal excludes any engineering and/or permit fees. If any of these are required to complete the project, AG Exteriors will charge the client the cost of these fees plus an additional 10%.',
       'Client acknowledges that markets are experiencing significant, industry-wide economic fluctuations, impacting the price of materials to be supplied in conjunction with the agreement. Client acknowledges that materials pricing has the potential to significantly increase between the time of the issuance of the underlying bid and the date of materials purchase for the Project. If the cost of any given material increases above the amount shown in the bid proposal for such material, this quote shall be adjusted upwards, and the Client will be responsible for the increased cost of the materials. In order to mitigate the potential for material-based price increases, the Client has the option to pay for materials in advance of the job. Material costs are guaranteed if materials are paid for at the time the proposal is accepted. Any prepayment of materials will be in addition to the normal deposit of 35%.'
     ],
-    signature_text: 'I confirm that my action here represents my electronic signature and is binding.'
+    signature_text: 'This proposal may be withdrawn by AG Exteriors if not accepted within 30 days. I confirm that my action here represents my electronic signature and is binding.'
   };
   await pool.query(
     `INSERT INTO app_settings (key, value)
@@ -7096,6 +7133,27 @@ async function initSchema() {
      ON CONFLICT (key) DO NOTHING`,
     [JSON.stringify(DEFAULT_PROPOSAL_TEMPLATE)]
   );
+
+  // FILL-MISSING, never overwrite. The AGX Standard layout prints fields the
+  // template did not have before it existed (licence line, payment schedule,
+  // signer, acceptance text, standard sections). An install that already has a
+  // template row would otherwise print the layout with those parts blank.
+  //
+  // `$1::jsonb || value` merges with the STORED value on the right, so a key
+  // the admin has edited keeps its text and only absent keys are added. The
+  // operand order is the whole guard: reversed, it would silently replace every
+  // customised paragraph in the document with the seed.
+  try {
+    await pool.query(
+      `UPDATE app_settings
+          SET value = $1::jsonb || value,
+              updated_at = NOW()
+        WHERE key = 'proposal_template'`,
+      [JSON.stringify(DEFAULT_PROPOSAL_TEMPLATE)]
+    );
+  } catch (e) {
+    console.warn('[db] proposal_template fill-missing skipped:', e.message);
+  }
 
   // Auto-upgrade: if a deployment still carries the OLD intro_template
   // (with {issue} / {community} placeholders), swap it for the new
