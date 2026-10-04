@@ -1044,3 +1044,60 @@ describe('the per-turn <available_tools> hint names tools 86 actually holds', ()
     expect(all).not.toContain('emit_payload_file');
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// AN INSTRUCTION THAT SAYS "CALL `x(…)`" MUST NAME A TOOL THE AGENT HOLDS.
+//
+// The same class as the <available_tools> hint above, one level out: not a
+// hint this time but the BASELINE, telling 86 in plain English to call a tool
+// that was registered to nobody.
+//
+//   :2587  "To pull a full sheet call `read_workspace_sheet_full({sheet_name})`"
+//   :2587  "use read_qb_cost_lines for QuickBooks data"
+//   :2610  "READ the data you need first (read_entity / read_workspace_sheet_full)"
+//
+// Both tools had a schema AND an executor in ai-routes.js, and both were
+// absent from ROUTER_TOOL_NAMES and ASSISTANT_TOOL_NAMES — so they worked and
+// nothing could call them. Registered 2026-10-04.
+//
+// The guard reads the CALL FORM only — a backticked name followed by "(" —
+// because that is how an instruction tells an agent to invoke something.
+// Names that merely appear in prose are dispatch internals as often as they
+// are tools (read_wip_summary and read_subs are reached THROUGH
+// search_entities and read_entity, not registered separately), and a guard
+// that failed on those would be noise nobody keeps.
+// ══════════════════════════════════════════════════════════════════════════
+describe('every tool an instruction says to CALL is one the agent holds', () => {
+  const callFormsIn = (text) => {
+    const out = new Set();
+    for (const m of String(text).matchAll(/`([a-z][a-z0-9_]{3,40})\(/g)) out.add(m[1]);
+    return [...out];
+  };
+
+  test('the extractor finds the call forms that were wrong, or it proves nothing', () => {
+    const B = adminAgents.AGENT_SYSTEM_BASELINE || {};
+    const job = Array.isArray(B.job) ? B.job.join('\n') : String(B.job || '');
+    const forms = callFormsIn(job);
+    expect(forms).toContain('read_workspace_sheet_full');
+    expect(forms).toContain('search_entities');
+    // PINNED, not a floor: these three are every call form in the job
+    // baseline today. A new one appearing is exactly what this guard is for,
+    // and one DISAPPEARING means an instruction was dropped — both should be
+    // deliberate, so both show up here.
+    expect(forms.slice().sort()).toEqual(['read_entity', 'read_workspace_sheet_full', 'search_entities']);
+  });
+
+  test.each(['job', 'assistant'])('%s: every call form in its baseline is registered to it', (agentKey) => {
+    const B = adminAgents.AGENT_SYSTEM_BASELINE || {};
+    const text = Array.isArray(B[agentKey]) ? B[agentKey].join('\n') : String(B[agentKey] || '');
+    if (!text) return;   // no baseline for this key is a different test
+    const held = new Set((adminAgents.customToolsFor(agentKey) || []).map((t) => t && t.name).filter(Boolean));
+    expect(held.size).toBeGreaterThan(15);
+
+    // Names the baseline tells this agent to CALL. Anything the agent is not
+    // registered with is a phantom: the turn it is spent on is wasted and the
+    // model then reports the tool as broken.
+    const phantoms = callFormsIn(text).filter((n) => !held.has(n));
+    expect({ agent: agentKey, phantoms }).toEqual({ agent: agentKey, phantoms: [] });
+  });
+});

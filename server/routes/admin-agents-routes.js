@@ -3143,6 +3143,20 @@ function customToolsFor(agentKey, opts) {
       'read_outlook_message',  // one of the caller's own messages in full (read-only, to summarize/draft)
       'read_email_inbox',      // the caller's Email Dropbox — forwarded/redirected mail (Azure-free lane)
       'search_reference_sheet',// live SharePoint reference data
+      // ── Instructed, and now registered ──────────────────────────────────
+      // These two had a schema and an executor in ai-routes and were in
+      // NEITHER agent's name list, so nothing could call them — while the
+      // baseline told 86 to call both BY NAME: "To pull a full sheet call
+      // `read_workspace_sheet_full({sheet_name})`" (:2587, and again at :2610
+      // for the sandbox) and "use read_qb_cost_lines for QuickBooks data"
+      // (:2587). An instruction to use a tool the agent does not hold is a
+      // wasted turn and then a model telling John the tool is broken.
+      //
+      // John's call, 2026-10-04: register both. 2,448 chars of schema
+      // (~1.5% of the measured 30,126-token prefix) against an agent that can
+      // finally do what it is told.
+      'read_workspace_sheet_full', // one workbook sheet in full: cells, formulas, formats, notes
+      'read_qb_cost_lines',        // QuickBooks cost lines for a job (the "QB Costs" sheets' real source)
       // ── Attachments (2) ──
       'read_attachment_text',  // read PDFs/Word the user uploads
       'view_attachment_image', // look at photos
