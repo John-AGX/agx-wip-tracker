@@ -831,3 +831,56 @@ describe('add_photo_comment — the write twin of read_photo_comments', () => {
     expect(after).toBe(before + 1);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// A CAP THAT CANNOT BE SEEN IS A WRONG TOTAL.
+//
+// read_qb_cost_lines prints r.rows.length as its row count AND sums those
+// rows into a dollar total, under a LIMIT that defaults to 200. On a job with
+// 900 cost lines it announced "200 rows, $X total" — and $X was the cost of
+// 200 rows, presented as the cost of the job, with nothing saying so.
+//
+// This tool was registered to 86 on 2026-10-04 (it had a schema and an
+// executor and was on no agent's list, while the baseline told 86 to use it).
+// Registering it made the defect reachable, so it is closed in the same pass.
+// ══════════════════════════════════════════════════════════════════════════
+describe.each(DOORS)('read_qb_cost_lines — the cap is visible — $path', ({ call }) => {
+  const seedMany = (n) => {
+    const q = engine.db.prepare(
+      `INSERT INTO qb_cost_lines (id, organization_id, job_id, amount, account, account_type, vendor, memo)
+       VALUES (?,?,?,?,?,?,?,?)`);
+    for (let i = 0; i < n; i++) q.run('q-many-' + i, ORG_A, 'j-a1', 100, 'Materials', 'Expense', 'Alpha Supply', 'bulk ' + i);
+  };
+
+  test('under the limit: no notice, and the total is the whole truth', async () => {
+    seedMany(3);
+    const r = await call(USERS.A, 'read_qb_cost_lines', { jobId: 'j-a1', limit: 50 });
+    expect(r.text).toContain('4 rows');
+    expect(r.text).not.toContain('THERE ARE MORE');
+  });
+
+  test('at the limit: it says there are more, and not to quote the total', async () => {
+    // MUTANT: the shipped `params.push(limit)` with no sentinel row. The
+    // answer is identical except for the one sentence that stops a model
+    // reporting a third of a job's cost as the job's cost.
+    seedMany(12);
+    const r = await call(USERS.A, 'read_qb_cost_lines', { jobId: 'j-a1', limit: 5 });
+    expect(r.text).toContain('5 rows');
+    expect(r.text).toContain('THERE ARE MORE');
+    expect(r.text).toContain('newest 5');
+    expect(r.text).toContain('before quoting a total');
+    // The sentinel row is DROPPED, not printed: exactly `limit` rows.
+    // Counted by the per-row vendor rather than a newline pattern: every
+    // printed row carries it and the header does not.
+    expect(r.text.split('Alpha Supply').length - 1).toBe(5);
+  });
+
+  test('exactly at the limit with nothing beyond it stays quiet', async () => {
+    // The off-by-one that a sentinel invites: 5 rows and a limit of 5 is NOT
+    // truncation, and claiming it is would teach 86 to distrust every total.
+    seedMany(4);
+    const r = await call(USERS.A, 'read_qb_cost_lines', { jobId: 'j-a1', limit: 5 });
+    expect(r.text).toContain('5 rows');
+    expect(r.text).not.toContain('THERE ARE MORE');
+  });
+});

@@ -12579,7 +12579,16 @@ async function execStaffTool(name, input, ctx) {
         p++;
       }
       const limit = Math.max(1, Math.min(1000, parseInt(input.limit, 10) || 200));
-      params.push(limit);
+      // ONE MORE THAN ASKED FOR, so the cap can be SEEN. This tool prints
+      // r.rows.length as its count: at the 200-row default it would announce
+      // "200 rows, $X total" for a job with 900 cost lines, and the total
+      // would be wrong by two thirds with nothing saying so. That is the
+      // silent-truncation defect read_jobs was just repaired for, and it
+      // became reachable the moment this tool was registered to 86.
+      //
+      // A sentinel row rather than a COUNT(*) query: one round trip, and all
+      // this answer has to know is whether there IS more, not how much.
+      params.push(limit + 1);
       const r = await pool.query(
         'SELECT id, vendor, txn_date, txn_type, num, account, account_type, klass, memo, amount, ' +
         '       linked_node_id IS NOT NULL AS linked ' +
@@ -12590,8 +12599,16 @@ async function execStaffTool(name, input, ctx) {
         params
       );
       if (!r.rows.length) return 'No QB cost lines matched for job ' + jobId + '.';
+      const capped = r.rows.length > limit;
+      if (capped) r.rows.length = limit;   // drop the sentinel
       const total = r.rows.reduce((s, row) => s + Number(row.amount || 0), 0);
-      const out = ['QB cost lines for job ' + jobId + ' (' + r.rows.length + ' rows, ' + fmtMoney(total) + ' total):'];
+      const out = ['QB cost lines for job ' + jobId + ' (' + r.rows.length + ' rows, ' +
+        fmtMoney(total) + ' total)' +
+        (capped
+          ? ' — THERE ARE MORE. This is the newest ' + limit + ', so the total above is ' +
+            'only these rows and NOT the job\'s QuickBooks cost. Re-call with a higher ' +
+            'limit (max 1000), or narrow by cost_code / vendor / date, before quoting a total.'
+          : '') + ':'];
       r.rows.forEach(row => {
         const date = row.txn_date ? String(row.txn_date).slice(0, 10) : '?';
         const linkMark = row.linked ? '✓ linked' : '⊘ unlinked';
