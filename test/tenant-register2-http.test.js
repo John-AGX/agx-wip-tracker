@@ -560,7 +560,15 @@ describe('REGISTER 2 — the route population', () => {
     //      OWN handler with recording suppressed, the client report-share
     //      list, and one stored report snapshot. None of them writes, and
     //      none mints a token.
-    expect(R.routes).toBe(656);
+    //      656 -> 657, +1 WAIVED: PUT /api/payloads/:id, the correction door
+    //      (services/correction-ledger.js). It writes and it takes a path
+    //      parameter, so the waiver predicate below holds with no exception.
+    //      Its tenancy is the same organization_id + user_id predicate the
+    //      reject and apply doors carry, and its capability gate is
+    //      denyPayloadApply CALLED rather than copied — twice, once on the
+    //      proposed targets and once on the edited ones, so a correction
+    //      cannot add an entity type the caller may not write.
+    expect(R.routes).toBe(657);
     expect(R.routers).toBe(81);
   });
 
@@ -602,7 +610,10 @@ describe('REGISTER 2 — the route population', () => {
     // joins the driven set by construction. The other three take a path
     // parameter and are waived here; their tenancy is driven instead in
     // test/preview-routes.test.js, which pushes a foreign id through each.
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 147, waived: 509 });
+    // 509 -> 510: PUT /api/payloads/:id, the correction door (see the note on
+    // the count above). A write that takes a path parameter, so only the
+    // waived side moves.
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 147, waived: 510 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

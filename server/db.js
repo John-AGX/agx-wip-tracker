@@ -4235,6 +4235,44 @@ async function initSchema() {
     -- if it came AFTER this (services/pending-write-approval.js).
     ALTER TABLE payloads ADD COLUMN IF NOT EXISTS draft_shown_at TIMESTAMPTZ;
 
+    -- THE CORRECTION, STORED BESIDE THE CLAIM — never over it.
+    --
+    -- A LINE IS A CLAIM, NOT A FACT. Lifted verbatim from
+    -- services/service-ticket-field-capture.js, which is one of only two places
+    -- in this schema that already works this way: "the claimed number is never
+    -- overwritten, so 'the tech said 8, it was 6' stays readable."
+    --
+    -- Why it matters here specifically: the targets column is the MODEL's
+    -- proposal, and ai_training_examples recorded human_final as the model's own
+    -- output on an approve and NULL on a reject -- so every captured example was
+    -- either self-distillation or nothing, and the feature vector was a
+    -- constant. There was also no way to SAY "almost right": the only mutating
+    -- routes were /shown, /reject and /apply, so a near-miss had to be
+    -- rejected, which destroyed the information and recorded no reason.
+    --
+    -- (No backticks and no dollar-brace in this block, deliberately: this SQL
+    -- lives inside a JS template literal, so one backtick in a comment ends the
+    -- literal and the syntax error surfaces ~800 lines EARLIER, on an unrelated
+    -- interpolation. Both halves of that sentence were learned here, in order.)
+    --
+    -- human_targets holds what the human actually wanted. targets keeps what was
+    -- proposed. Nothing has to stay in step with anything, which is why this
+    -- cannot rot: the pair is one row, and the row is already durable (there is
+    -- no DELETE FROM payloads anywhere in server/, and expires_at is only
+    -- CHECKED at apply time, never used to purge).
+    ALTER TABLE payloads ADD COLUMN IF NOT EXISTS human_targets JSONB;
+    ALTER TABLE payloads ADD COLUMN IF NOT EXISTS corrected_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+    ALTER TABLE payloads ADD COLUMN IF NOT EXISTS corrected_at TIMESTAMPTZ;
+    -- Why it was turned down, when it was turned down rather than corrected.
+    -- A reject with no reason is the one verdict that teaches nothing.
+    ALTER TABLE payloads ADD COLUMN IF NOT EXISTS reject_reason TEXT;
+
+    -- Partial: the corrected rows are the rare ones and the only ones any
+    -- harvest reads, so the index stays small enough to be free.
+    CREATE INDEX IF NOT EXISTS idx_payloads_corrected
+      ON payloads (organization_id, corrected_at DESC)
+      WHERE human_targets IS NOT NULL;
+
     CREATE INDEX IF NOT EXISTS idx_payloads_targets_gin
       ON payloads USING gin (targets jsonb_path_ops);
     CREATE INDEX IF NOT EXISTS idx_payloads_source

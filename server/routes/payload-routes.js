@@ -36,12 +36,33 @@ const ticketAccess = require('../services/service-ticket-access');
 // 'tex_pl_<payloadId>' + terminal statuses (applied XOR rejected) = at
 // most one example per payload, however many times a route re-fires.
 const { captureExample, TASKS } = require('../services/training-capture');
+const correctionLedger = require('../services/correction-ledger');
 
 // Capture the human verdict on a payload as a training example. Never
 // throws (captureExample swallows). `payload` needs targets/title/summary/
 // rationale/emitting_agent_key; pass what the route already fetched.
+// The verdict, as a training example.
+//
+// WHAT WAS WRONG. humanFinal was `accepted ? { targets, apply_summary } : null`
+// and `targets` IS the model's own output — so an approve recorded the model's
+// answer as the human's (self-distillation: the feature vector is a constant)
+// and a reject recorded nothing, which the JSONL export then dropped outright
+// (`human_final IS NOT NULL`). Four of the six capture tasks would have stayed
+// untrainable at ten thousand rows for that reason alone, and it is why the
+// honest answer to "can we train a model" was no on SHAPE before it was no on
+// volume.
+//
+// WHAT IT IS NOW. If the row carries human_targets — i.e. somebody corrected the
+// proposal rather than taking it or binning it — THAT is the human's answer, and
+// the example finally has a target that differs from the input. An approve with
+// no correction still records the model's targets, because that is the truth of
+// what happened; it is just correctly labelled `accepted` rather than presented
+// as a correction. isCorrection re-derives the difference instead of trusting a
+// flag, so an edit that changed nothing cannot masquerade as a label.
 function capturePayloadVerdict(orgId, payload, accepted, applySummary) {
   const targets = Array.isArray(payload.targets) ? payload.targets : [];
+  const humanTargets = payload.human_targets;
+  const corrected = correctionLedger.isCorrection(targets, humanTargets);
   const entityTypes = Array.from(new Set(
     targets.map((t) => t && t.entity_type).filter(Boolean)
   ));
@@ -59,8 +80,11 @@ function capturePayloadVerdict(orgId, payload, accepted, applySummary) {
       emitting_agent_key: payload.emitting_agent_key || null
     },
     modelOutput: { targets },
-    humanFinal: accepted ? { targets, apply_summary: applySummary || null } : null,
-    accepted,
+    humanFinal: corrected
+      ? { targets: humanTargets, apply_summary: applySummary || null, corrected: true }
+      : (accepted ? { targets, apply_summary: applySummary || null } : null),
+    // A corrected row was not accepted as proposed, whatever happened next.
+    accepted: corrected ? false : accepted,
     model: payload.emitting_agent_key === 'scribe' ? 'claude-sonnet-4-6' : null
   });
 }
@@ -291,13 +315,118 @@ router.post('/:id/shown', requireAuth, requireOrg, async (req, res) => {
   }
 });
 
+// ──────────────────────────────────────────────────────────────────
+// PUT /api/payloads/:id
+//   "Almost right." The door that did not exist.
+//
+//   Until now the only mutating routes were /shown, /reject and /apply, so a
+//   near-miss had to be REJECTED — which destroys the one piece of information
+//   worth keeping. The correction is the only genuine (wrong structured output,
+//   right structured output) pair this business produces, and it is the single
+//   asset that gets MORE valuable when a stronger model ships rather than less.
+//
+//   human_targets is written BESIDE targets and never over it:
+//   service-ticket-field-capture.js's rule, which this schema already follows
+//   in exactly one other place — "the claimed number is never overwritten, so
+//   'the tech said 8, it was 6' stays readable."
+//
+//   GATED ON denyPayloadApply, the same gate as apply, deliberately. An
+//   edit-then-approve is an apply in two steps; a weaker gate here would let a
+//   caller who may not write an entity type author the change that someone
+//   else then applies. The gate is CALLED, not copied — a copied gate is how
+//   /86/chat/continue came to run writes with no capability check at all.
+//
+//   Editing does not apply. The row stays 'ready' and the ordinary approve
+//   path runs next, so this adds a verdict and no new write surface.
+// ──────────────────────────────────────────────────────────────────
+router.put('/:id', requireAuth, requireOrg, async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const userId = req.user.id;
+
+    const shape = correctionLedger.validateEdit(req.body && req.body.targets);
+    if (shape.error) return res.status(400).json({ error: shape.error });
+    const humanTargets = req.body.targets;
+
+    const r0 = await pool.query(
+      `SELECT * FROM payloads
+        WHERE id = $1 AND organization_id = $2 AND (user_id = $3 OR user_id IS NULL)`,
+      [req.params.id, orgId, userId]
+    );
+    if (!r0.rows.length) return res.status(404).json({ error: 'Not found' });
+    const payload = r0.rows[0];
+
+    // Same ordering as apply: state, then expiry, then capability. An applied
+    // row is history and must not acquire a correction after the fact.
+    if (!claimable(payload)) {
+      return res.status(409).json({
+        error: payload.status === 'applying'
+          ? 'This payload is already being applied.'
+          : 'Only a ready payload can be corrected.',
+        status: payload.status,
+      });
+    }
+    if (payload.expires_at && new Date(payload.expires_at) < new Date()) {
+      return res.status(410).json({ error: 'Payload expired' });
+    }
+    const denial = await denyPayloadApply(req.user, payload);
+    if (denial) return res.status(403).json({ error: denial });
+
+    // The caller's edit is also checked against what they may WRITE, not only
+    // against what the model proposed: a correction that adds a target of an
+    // entity type the caller cannot write would otherwise pass the gate above
+    // on the strength of the ORIGINAL targets.
+    const denialAfter = await denyPayloadApply(
+      req.user, Object.assign({}, payload, { targets: humanTargets }));
+    if (denialAfter) return res.status(403).json({ error: denialAfter });
+
+    const upd = await pool.query(
+      `UPDATE payloads
+          SET human_targets = $4::jsonb,
+              corrected_by = $3,
+              corrected_at = NOW()
+        WHERE id = $1 AND organization_id = $2 AND status = 'ready'
+        RETURNING id, status, targets, human_targets, reject_reason,
+                  title, summary, rationale, emitting_agent_key`,
+      [req.params.id, orgId, userId, JSON.stringify(humanTargets)]
+    );
+    if (!upd.rows.length) {
+      // Lost a race with an apply or a reject between the read and the write.
+      return res.status(409).json({ error: 'Payload changed state — reload the card.' });
+    }
+
+    const row = upd.rows[0];
+    const corrected = correctionLedger.isCorrection(row.targets, row.human_targets);
+    // Recorded either way: an edit that changed nothing is still a verdict. It
+    // is just never counted as a training label, which isCorrection decides.
+    capturePayloadVerdict(orgId, row, false, null);
+
+    res.json({
+      ok: true,
+      corrected,
+      payload: { id: row.id, status: row.status, human_targets: row.human_targets },
+    });
+  } catch (e) {
+    console.error('[payloads] PUT /:id error:', e && e.stack || e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.post('/:id/reject', requireAuth, requireOrg, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const userId = req.user.id;
+    // A reason, when one is given. A reject with no reason is the one verdict
+    // that teaches nothing: the row says a human said no and cannot say to
+    // what. COALESCE so a second, bare reject never erases a reason the first
+    // one carried — this route is deliberately idempotent over 'rejected'.
+    const reason = req.body && typeof req.body.reason === 'string'
+      ? req.body.reason.trim().slice(0, 2000)
+      : null;
     const r = await pool.query(
       `UPDATE payloads
-          SET status = 'rejected'
+          SET status = 'rejected',
+              reject_reason = COALESCE(NULLIF($4, ''), reject_reason)
         WHERE id = $1
           AND organization_id = $2
           AND (user_id = $3 OR user_id IS NULL)
@@ -310,8 +439,9 @@ router.post('/:id/reject', requireAuth, requireOrg, async (req, res) => {
           AND (status IN ('ready', 'rejected')
                OR (status = 'applying'
                    AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')))
-        RETURNING id, status, targets, title, summary, rationale, emitting_agent_key`,
-      [req.params.id, orgId, userId]
+        RETURNING id, status, targets, human_targets, reject_reason,
+                  title, summary, rationale, emitting_agent_key`,
+      [req.params.id, orgId, userId, reason]
     );
     if (!r.rows.length) {
       return res.status(404).json({ error: 'Not found or wrong status' });
