@@ -2175,13 +2175,17 @@ function p86Ask(message, opts) {
     var facts = [];
     if (rev != null) facts.push({ icon: '', text: sm(rev), tone: 'money' });
     if (dc.due) facts.push({ icon: 'calendar', text: dc.due });
+    // THE PROPERTY'S OWN ADDRESS, not the city it is in — the same change the
+    // job strip made. "Oldsmar, FL" is true of every lead in Oldsmar; the
+    // street line is the one somebody drives to. It opens Maps too (the card
+    // already had a maps ICON doing that; the address itself is what a thumb
+    // aims at). Zip left off: it never disambiguates a line that already has
+    // a street, a city and a state.
     var place = [l.city, l.state].filter(Boolean).join(', ');
-    // The place opens Maps, like the job card's — the card already had a maps
-    // ICON doing this; the address itself now does it too, which is the thing
-    // a thumb aims at.
-    if (place) {
-      facts.push({ icon: 'map-pin', text: place, map: {
-        address: [l.street_address, l.city, l.state].filter(Boolean).join(', ') || place,
+    var addr = [l.street_address, l.city, l.state].filter(Boolean).join(', ');
+    if (addr || place) {
+      facts.push({ icon: 'map-pin', text: (addr || place), map: {
+        address: addr || place,
         lat: Number(l.latitude), lng: Number(l.longitude)
       } });
     }

@@ -94,10 +94,20 @@ describe('the three layers that were dropping the job’s date', () => {
   test('layer 2: the matcher’s enumerated job view carries it', () => {
     // That view is built by naming fields one at a time; a key missing from it
     // is read and thrown away again, which is what happened here.
+    //
+    // Scoped to the OBJECT LITERAL, not to 600 characters after a sibling
+    // key. It was the byte count, and the count broke the first time the view
+    // legitimately grew (actualStart/actualCompletion/ownerBalance) — a test
+    // that fails when the thing it guards is still true teaches people to
+    // edit the test, which is the opposite of what it is for.
     const src = read('server/services/clickr/bt-match.js').replace(/\r\n/g, '\n');
-    const at = src.indexOf('projectedStart: str(v.projectedStart)');
-    expect(at).toBeGreaterThan(-1);
-    expect(liveLines(src.slice(at, at + 600), 'createdDate: str(v.createdDate)').length).toBe(1);
+    const open = src.indexOf('const bt = {');
+    expect(open).toBeGreaterThan(-1);
+    const close = src.indexOf('\n    };', open);
+    expect(close).toBeGreaterThan(open);
+    const view = src.slice(open, close);
+    expect(liveLines(view, 'projectedStart: str(v.projectedStart)').length).toBe(1);
+    expect(liveLines(view, 'createdDate: str(v.createdDate)').length).toBe(1);
   });
 
   test('layer 3: the applier writes it to a column', () => {

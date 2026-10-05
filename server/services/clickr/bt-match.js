@@ -950,6 +950,11 @@ function matchJobs(btValues, p86Rows, ctx) {
       status: str(v.jobStatus), scope: btScope(v.jobStatus),
       street: str(v.street), city: str(v.city), state: str(v.state), zip: str(v.zip),
       projectedStart: str(v.projectedStart), contractPrice: v.contractPrice, approvedCOPrice: v.approvedCOPrice,
+      // WHAT ACTUALLY HAPPENED, beside what was planned. Named here because
+      // the comment below is literal: a key read in field-map.js and missing
+      // from this view is fetched, permitted, and dropped again.
+      actualStart: str(v.actualStart), actualCompletion: str(v.actualCompletion),
+      ownerBalance: v.ownerBalance,
       // The SECOND layer. The comment three lines down says a key missing
       // from this view is read and thrown away again, and that is exactly
       // what happened to the job’s creation date.
@@ -966,6 +971,13 @@ function matchJobs(btValues, p86Rows, ctx) {
     const contractView = parseMoney(v.contractPrice);
     bt.contractText = contractView.kind === 'unparsed' ? 'unparsed' : moneyText(contractView);
     bt.contractValue = contractView.kind === 'value' ? contractView.value : null;
+    // OWNER BALANCE, parsed the same way and NEVER compared: P86 holds no
+    // receivable to compare it against, so it is carried as a figure to
+    // record, not as a correction to offer. An unreadable one becomes null
+    // and is simply not recorded, exactly as a blank is.
+    const balanceView = parseMoney(v.ownerBalance);
+    bt.ownerBalanceValue = balanceView.kind === 'value' ? balanceView.value : null;
+    delete bt.ownerBalance;
     delete bt.contractPrice;
     delete bt.approvedCOPrice;
     const moneyIn = { contractPrice: v.contractPrice, approvedCOPrice: v.approvedCOPrice };

@@ -37,7 +37,16 @@ const DATASETS = {
     keys: [
       'jobId', 'jobName', 'jobStatus', 'street', 'city', 'state', 'zip',
       'projectedStart', 'projectedCompletion',
+      // WHEN THE WORK ACTUALLY HAPPENED, which P86 has never held: its own
+      // startDate/endDate are the PLAN. Buildertrend fills actualStart on 61
+      // of 745 jobs and actualCompletion on 166 (scouted 2026-10-04), so most
+      // jobs carry neither and read exactly as they did before.
+      'actualStart', 'actualCompletion',
       'contractPrice', 'approvedCOPrice', 'jobRunningTotal',
+      // WHAT THE CLIENT STILL OWES. On all 745 jobs, 482 distinct values.
+      // P86 has no accounts-receivable of its own, so this is the only
+      // number in either system that answers the question.
+      'ownerBalance',
       'projectManager', 'contacts', 'customFields', 'latitude', 'longitude',
       'jobType', 'groups', 'createdDate', 'isDeleted',
     ],
@@ -456,10 +465,18 @@ function readJob(rec) {
     zip: scalarText(r.zip),
     projectedStart: scalarText(r.projectedStart),
     projectedCompletion: scalarText(r.projectedCompletion),
+    // The PLAN above, what happened below. Same text shape as the projected
+    // pair, so dateKey() reads them and a blank stays blank.
+    actualStart: scalarText(r.actualStart),
+    actualCompletion: scalarText(r.actualCompletion),
     // Money keeps its native shape ({value, scale} or a string); bt-match
     // parses it and never proposes it.
     contractPrice: r.contractPrice === undefined ? null : r.contractPrice,
     approvedCOPrice: r.approvedCOPrice === undefined ? null : r.approvedCOPrice,
+    // Owner balance keeps the same native shape as the other two and is
+    // parsed by parseMoney, never proposed as a correction: P86 has nothing
+    // to correct it against.
+    ownerBalance: r.ownerBalance === undefined ? null : r.ownerBalance,
     projectManager: names(r.projectManager),
     contacts: names(r.contacts),
     contactIds: Array.isArray(r.contacts) ? r.contacts.map((x) => (isPlainObject(x) ? scalarText(x.id) : null)).filter((x) => x != null && String(x).trim() !== '') : [],

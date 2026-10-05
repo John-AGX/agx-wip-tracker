@@ -121,7 +121,9 @@ describe('the lead head: actions behind the button, Delete gated', () => {
 
   test('the lead place is a Maps target too — one card, one behaviour', () => {
     const card = LEADS.slice(LEADS.indexOf('function mountLeadCard'), LEADS.indexOf('function onAct'));
-    expect(card).toMatch(/icon: 'map-pin', text: place, map: \{/);
+    // The LABEL moved on — it is the property's street line now, proved in
+    // test/head-strip-facts.test.js. What this guards is the map TARGET.
+    expect(card).toMatch(/icon: 'map-pin', text: \(addr \|\| place\), map: \{/);
     expect(card).toMatch(/lat: Number\(l\.latitude\)\, lng: Number\(l\.longitude\)/);
   });
 

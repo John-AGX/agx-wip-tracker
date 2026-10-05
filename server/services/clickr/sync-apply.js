@@ -122,6 +122,48 @@ function withBtStatus(data, text) {
   return Object.assign({}, data, { btStatus: text });
 }
 
+// THE SAME IDEA, FOR THREE MORE FACTS BUILDERTREND HOLDS AND P86 DOES NOT.
+//
+//   btActualStart / btActualCompletion  when the work actually began and
+//     finished. P86's own startDate/endDate are the PLAN — jobProposals()
+//     says so where it refuses to overwrite a start date somebody typed,
+//     'that is usually the actual start'. Now there is somewhere for the
+//     real one to live, so neither has to stand in for the other.
+//   btOwnerBalance  what the client still owes. P86 has no accounts
+//     receivable at all, so there is nothing to compare it against and
+//     nothing to correct: it is recorded, like the status word.
+//
+// LEARNED, NOT PROPOSED — none of the three is ever offered as a correction,
+// so none can overwrite a P86 figure. Each is refreshed on every apply and
+// every link, the mistake btStatus made once (stamped at create, never
+// again) already paid for. Mutates `data` in place and returns the keys it
+// moved, so the caller's 'nothing changed' early return stays honest.
+function learnBtJobFacts(data, bt) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+  const moved = [];
+  // Dates as CALENDAR DAYS (dateKey), never instants: a completion date is
+  // the day the work ended, and a timezone must not move it.
+  const days = { btActualStart: bt.actualStart, btActualCompletion: bt.actualCompletion };
+  for (const key of Object.keys(days)) {
+    const day = match.isBtBlank(days[key]) ? '' : (match.dateKey(days[key]) || '');
+    // An unreadable date is left exactly as a blank is: nothing recorded,
+    // nothing erased. Only a readable day, or a day Buildertrend cleared,
+    // moves the record.
+    if (!day && !match.isBtBlank(days[key])) continue;
+    if (norm(data[key]) === day) continue;
+    if (day) data[key] = day; else delete data[key];
+    moved.push(key);
+  }
+  // Money as a NUMBER (bt-match parsed it); null means unreadable, which is
+  // not the same as zero and must not be written as one.
+  const bal = bt.ownerBalanceValue;
+  if (bal === null || bal === undefined) return moved;
+  if (data.btOwnerBalance != null && moneyEq(data.btOwnerBalance, bal)) return moved;
+  data.btOwnerBalance = bal;
+  moved.push('btOwnerBalance');
+  return moved;
+}
+
 // P86 may hold 0, '' or null for "no figure": compared as numbers.
 const moneyEq = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) < 0.005;
 const LEAD_REVENUE_COLUMNS = { estimatedRevenueMin: 'estimated_revenue_low', estimatedRevenueMax: 'estimated_revenue_high' };
@@ -419,8 +461,12 @@ async function applyJob(db, orgId, row, mode, fields) {
   // Warranty or Closed job reads correctly where P86 has no matching status.
   const nextBtStatus = withBtStatus(data, btStatusText(row.bt.status));
   if (nextBtStatus) data.btStatus = nextBtStatus.btStatus;
+  // The other three facts Buildertrend holds alone, refreshed on the same
+  // beat and counted the same way: a job whose only movement is a completion
+  // date landing over there is NOT 'unchanged'.
+  const learned = learnBtJobFacts(data, row.bt);
   const wasLinked = linkedTo === btId;
-  if (!applied.length && wasLinked && !nextBtStatus && !healedDate) return { unchanged: true, stale };
+  if (!applied.length && wasLinked && !nextBtStatus && !learned.length && !healedDate) return { unchanged: true, stale };
   if (point) data.geocodeSource = 'buildertrend';
   await db.query('UPDATE jobs SET data = $1::jsonb, bt_job_id = $2, updated_at = NOW() WHERE id = $3 AND organization_id = $4',
     [JSON.stringify(data), btId, job.id, orgId]);
@@ -437,7 +483,7 @@ async function applyJob(db, orgId, row, mode, fields) {
       + 'WHERE id = $4 AND organization_id = $5',
       [point.lat, point.lng, data.address || [data.street_address, data.city, data.state, data.zip].filter((x) => norm(x)).join(', '), job.id, orgId]);
   }
-  return { applied, linked: !wasLinked, stale, btStatus: !!nextBtStatus, btCreated: healedDate };
+  return { applied, linked: !wasLinked, stale, btStatus: !!nextBtStatus, btLearned: learned, btCreated: healedDate };
 }
 
 // ── change orders ────────────────────────────────────────────────────────
@@ -1835,6 +1881,8 @@ async function createJob(db, orgId, row, user) {
     if (t) data[f.key] = t;
   }
   data.address = [data.street_address, data.city, data.state, data.zip].filter(Boolean).join(', ');
+  // Born knowing them, rather than waiting for the first apply to teach it.
+  learnBtJobFacts(data, bt);
   const id = genId('job');
   data.id = id;
   const mkt = bt.market ? await btMarket.ownMarket(db, orgId, bt.market.id) : null;
@@ -1964,9 +2012,23 @@ async function linkRecord(org, kind, rows, input, deps) {
     const taken = await client.query('SELECT id FROM ' + table + ' WHERE organization_id = $1 AND ' + col + ' = $2 AND id <> $3', [org.id, base.btId, input.p86Id]);
     if (taken.rows.length) { await client.query('ROLLBACK'); return skip('Another P86 record is already linked to this Buildertrend record.'); }
     await client.query('UPDATE ' + table + ' SET ' + col + ' = $1 WHERE id = $2 AND organization_id = $3', [base.btId, input.p86Id, org.id]);
-    // A linked job learns Buildertrend's current word for it too (J2), on the
-    // same key and nothing else: data.status is not touched here.
-    const nextJobBt = kind === 'jobs' ? withBtStatus(cur.rows[0].data, btStatusText(row.bt.status)) : null;
+    // A linked job learns Buildertrend's current word for it too (J2), AND
+    // the three facts only Buildertrend holds — on those keys and nothing
+    // else: data.status is not touched here. Linking used to teach the word
+    // alone, so a job linked by hand carried no actual dates and no owner
+    // balance until somebody happened to press Apply on it afterwards.
+    let nextJobBt = null;
+    if (kind === 'jobs') {
+      const d0 = cur.rows[0].data;
+      if (d0 && typeof d0 === 'object' && !Array.isArray(d0)) {
+        const next = Object.assign({}, d0);
+        const word = btStatusText(row.bt.status);
+        const wordMoved = norm(next.btStatus) !== word;
+        if (wordMoved) next.btStatus = word;
+        const learned = learnBtJobFacts(next, row.bt);
+        if (wordMoved || learned.length) nextJobBt = next;
+      }
+    }
     if (nextJobBt) {
       await client.query('UPDATE jobs SET data = $1::jsonb, updated_at = NOW() WHERE id = $2 AND organization_id = $3',
         [JSON.stringify(nextJobBt), input.p86Id, org.id]);

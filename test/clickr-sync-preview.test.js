@@ -77,6 +77,11 @@ function jobRec(jobName, o) {
     latitude: null, longitude: null,
     jobType: 'Handyman Services', groups: ['Service & Repair'],
     createdDate: '2025-01-02T15:00:00.000Z', isDeleted: false,
+    // What actually happened, and what the client still owes: Buildertrend
+    // holds all three and P86 has nowhere else to get them.
+    actualStart: o.actualStart === undefined ? null : o.actualStart,
+    actualCompletion: o.actualCompletion === undefined ? null : o.actualCompletion,
+    ownerBalance: o.ownerBalance === undefined ? null : o.ownerBalance,
   };
   rec.raw = Object.assign({}, rec);
   return rec;

@@ -1314,6 +1314,37 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
    the behaviour at every width: the head is one line — the job's card across
    it and this at the end — and the three are capability-gated in
    js/workspace-layout.js, which they never were while they sat in the page. */
+/* THE BACK CONTROL on all three full-page drill-ins (job, lead, estimate).
+   One square, one arrow, 28px. It sits immediately left of a head card that
+   spans the rest of the row, so every pixel it does not take is a pixel of
+   job name. Not deleted, because the installed PWA has no browser back. */
+.p86-head-back {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    font-size: 16px;
+    line-height: 1;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-dim, #b4b4bf);
+    cursor: pointer;
+    transition: background .12s, color .12s, border-color .12s;
+}
+.p86-head-back:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--border, #2a2f3e);
+    color: var(--text, #fff);
+}
+.p86-head-back:focus-visible {
+    outline: 2px solid var(--accent, #4f8cff);
+    outline-offset: 1px;
+}
+
 .jh-job-more,
 .p86-head-more {
   display: inline-flex;

@@ -489,27 +489,10 @@
             border-color: rgba(248, 113, 113, 0.35);
             color: #f87171;
         }
-        /* Estimate header "← Back" — text-only, transparent at rest,
-           subtle hover lift. Matches the overlay-close pattern used by
-           the report editor / CO editor close buttons. Drops the
-           .ee-btn.secondary chrome that was making the back button
-           visually compete with the title. */
-        .ee-header-back {
-            background: transparent;
-            border: 0;
-            color: var(--text-dim, #b4b4bf);
-            font-size: 12px;
-            font-weight: 500;
-            padding: 6px 8px;
-            border-radius: 5px;
-            cursor: pointer;
-            flex: 0 0 auto;
-            transition: background 0.12s, color 0.12s;
-        }
-        .ee-header-back:hover {
-            background: rgba(255, 255, 255, 0.06);
-            color: var(--text, #fff);
-        }
+        /* The estimate and job heads' "← Back" wore .ee-header-back here.
+           Both now wear .p86-head-back (css/workspace-layout.css), the one
+           back control the three drill-ins share, so this rule had no
+           element left to style. */
         /* Icon decorator slot inside the header buttons — overrides
            the default tab-btn 1.4em sizing (which applies via the
            global rule even though we don't have .tab-btn here, but

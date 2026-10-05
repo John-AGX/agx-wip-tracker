@@ -3118,17 +3118,32 @@ function renderSidebarJobCard(jobIdOverride){
   // One date fact, as a span when the job has both ends — "Sep 24 → Nov 3"
   // is the schedule; two separate chips are two numbers to reconcile.
   if(_sd||_ed) _facts.push({icon:'calendar', text:(_sd&&_ed)?(_sd+' → '+_ed):(_sd||_ed)});
-  // THE PLACE IS A LINK. Coordinates when the job has them, the full address
-  // otherwise — window.p86MapLink, the same target the map pins and 86 use.
-  // The crew reads this on a phone; retyping it into Maps was the gap.
+  // WHAT ACTUALLY HAPPENED, which the plan above does not say. Buildertrend
+  // is the only place either date exists (data.btActualStart /
+  // data.btActualCompletion, learned by the sync, never typed in P86), so
+  // this is absent on most jobs and that is correct — 61 of 745 have a real
+  // start and 166 a real completion. Worded so it can never be read as the
+  // plan: "Started", "Completed", or both ends with the word in front.
+  var _as=_fmtDay(job.btActualStart), _ac=_fmtDay(job.btActualCompletion);
+  if(_as&&_ac) _facts.push({icon:'check-circle', text:'Actual '+_as+' → '+_ac});
+  else if(_ac) _facts.push({icon:'check-circle', text:'Completed '+_ac});
+  else if(_as) _facts.push({icon:'check-circle', text:'Started '+_as});
+  // THE PLACE IS A LINK, AND IT IS THE PROPERTY'S OWN ADDRESS. It used to
+  // say "Tampa, FL" — true of a hundred jobs and no use to anyone standing
+  // in a truck. The street line is what a crew needs and what the link
+  // opens; coordinates still win as the map target when the job has them.
   var _place=[job.city,job.state].filter(Boolean).join(', ');
   // Built the way every other job surface builds it (jobs.js:4158) — the
   // structured columns first, job.address only as the legacy fallback.
   var _addr=[job.street_address,job.city,job.state,job.zip].filter(Boolean).join(', ')
     ||job.address||job.geocode_address||'';
-  if(_place||_addr){
+  // Shown WITHOUT the zip: the zip never disambiguates a line that already
+  // carries a street, a city and a state, and on a strip it costs six
+  // characters the job title could have had.
+  var _addrShort=[job.street_address,job.city,job.state].filter(Boolean).join(', ')||_addr;
+  if(_addrShort||_place){
     var _mapTarget={ address:(_addr||_place), lat:Number(job.geocode_lat), lng:Number(job.geocode_lng) };
-    _facts.push({icon:'map-pin', text:(_place||_addr), map:_mapTarget});
+    _facts.push({icon:'map-pin', text:(_addrShort||_place), map:_mapTarget});
   }
   // The job's TYPE as the job carries it (Renovation / Service / Work Order).
   if(job.jobType) _facts.push({icon:'briefcase', text:String(job.jobType)});
@@ -3157,6 +3172,18 @@ function renderSidebarJobCard(jobIdOverride){
   // Information.
   var _cpo=(job.clientPoNumber||job.clientWoNumber||'');
   if(_cpo) _facts.push({icon:'hash', text:String(_cpo)});
+  // WHAT THE CLIENT STILL OWES — the one exception to this strip's no-money
+  // rule, because it is the one figure the metrics strip above cannot carry:
+  // P86 has no accounts receivable, and this comes from Buildertrend
+  // (data.btOwnerBalance). Exact dollars, not $12k — a balance is a number
+  // someone reads out loud on a phone call. Zero is not shown: on a closed
+  // job it is the common case and says nothing a chip needs to say.
+  var _bal=Number(job.btOwnerBalance);
+  if(Number.isFinite(_bal)&&Math.abs(_bal)>=0.005){
+    var _absBal=Math.abs(_bal);
+    var _balText=(_bal<0?'-$':'$')+_absBal.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    _facts.push({icon:'banknotes', text:'Owed '+_balText, tone:'money'});
+  }
 
   // The head slot wants the strip; the sidebar rail wants the column.
   function buildCard(taskVm, asStrip){

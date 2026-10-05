@@ -53,6 +53,10 @@ function jobRec(jobName, o) {
     contractPrice: o.contractPrice === undefined ? { value: 0, scale: 2 } : o.contractPrice,
     approvedCOPrice: o.approvedCOPrice === undefined ? { value: 0, scale: 2 } : o.approvedCOPrice, projectManager: [], contacts: o.contacts || [], customFields: [],
     jobType: 'Handyman Services', groups: ['Service & Repair'], createdDate: '2025-01-02T15:00:00.000Z', isDeleted: false,
+    // The three Buildertrend holds and P86 has nowhere else to get.
+    actualStart: o.actualStart === undefined ? null : o.actualStart,
+    actualCompletion: o.actualCompletion === undefined ? null : o.actualCompletion,
+    ownerBalance: o.ownerBalance === undefined ? null : o.ownerBalance,
   };
 }
 function leadRec(title, o) {
@@ -370,6 +374,143 @@ describe('what Buildertrend calls the job NOW (data.btStatus)', () => {
     await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create', btIds: ['446'] });
     const made = engine.db.prepare('SELECT * FROM jobs WHERE bt_job_id = ?').get('446');
     expect(JSON.parse(made.data)).toMatchObject({ btStatus: 'Warranty', status: 'Warranty' });
+  });
+});
+
+// ── WHAT BUILDERTREND HOLDS AND P86 HAS NOWHERE ELSE TO GET ───────────────
+// The same contract as data.btStatus: learned on every apply and every link,
+// never offered as a correction, so none of the three can overwrite anything
+// a person typed in P86.
+describe('the three facts only Buildertrend has (actual dates, owner balance)', () => {
+  const rec111 = () => BT_JOBS.find((j) => String(j.jobId) === '111');
+  // Restores whatever the test moved, so the file's other 40 tests still see
+  // the fixtures they were written against.
+  async function withBt(patch, body) {
+    const rec = rec111();
+    const was = { actualStart: rec.actualStart, actualCompletion: rec.actualCompletion, ownerBalance: rec.ownerBalance };
+    Object.assign(rec, patch);
+    preview.forgetFetch(AGX);
+    try { await body(); } finally { Object.assign(rec, was); preview.forgetFetch(AGX); }
+  }
+
+  test('an apply records all three; P86 startDate is NOT touched', async () => {
+    // {value, scale}: `value` is already in dollars and `scale` is its display
+    // precision, not a divisor — parseMoney says so, measured against a real pull.
+    await withBt({ actualStart: '2026-03-02T00:00:00', actualCompletion: '2026-04-18T00:00:00', ownerBalance: { value: 12480.75, scale: 2 } }, async () => {
+      // Safe mode first, so data.startDate holds Buildertrend's PROJECTED
+      // start (2026-02-25) and the assertion below is about a real value
+      // rather than two undefineds agreeing.
+      await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+      expect(jobData('j-1').startDate).toBe('2026-02-25');
+      preview.forgetFetch(AGX);
+      await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+      const d = jobData('j-1');
+      expect(d.btActualStart).toBe('2026-03-02');
+      expect(d.btActualCompletion).toBe('2026-04-18');
+      expect(d.btOwnerBalance).toBeCloseTo(12480.75, 2);
+      // THE PLAN IS NOT THE ACTUAL. The job planned to start on the 25th of
+      // February and actually started on the 2nd of March; both are true and
+      // the second must not overwrite the first.
+      expect(d.startDate).toBe('2026-02-25');
+    });
+  });
+
+  test('a calendar day, not an instant — the date cannot shift by a timezone', async () => {
+    // A completion on the 1st must not read as the 31st anywhere on earth.
+    await withBt({ actualCompletion: '2026-04-01T00:00:00' }, async () => {
+      await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+      expect(jobData('j-1').btActualCompletion).toBe('2026-04-01');
+    });
+  });
+
+  test('a job with none of them grows no keys at all', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['222'], fields: [] });
+    const d = jobData('j-2');
+    expect(d.btActualStart).toBeUndefined();
+    expect(d.btActualCompletion).toBeUndefined();
+    // NOT zero. P86 has no receivable of its own, so 'we were told nothing'
+    // and 'the client owes nothing' are different answers and only one of
+    // them is true here.
+    expect(d.btOwnerBalance).toBeUndefined();
+  });
+
+  test('an unreadable date is left alone; a Buildertrend blank clears it', async () => {
+    await withBt({ actualCompletion: '2026-04-18T00:00:00' }, async () => {
+      await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+      expect(jobData('j-1').btActualCompletion).toBe('2026-04-18');
+    });
+    // Garbage in that slot keeps the date already recorded rather than
+    // erasing a true one over a value nobody can read.
+    await withBt({ actualCompletion: 'sometime in the spring' }, async () => {
+      await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+      expect(jobData('j-1').btActualCompletion).toBe('2026-04-18');
+    });
+    // '--' is Buildertrend for 'nothing here' — the date is gone over there,
+    // so it goes here too.
+    await withBt({ actualCompletion: '--' }, async () => {
+      await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+      expect(jobData('j-1').btActualCompletion).toBeUndefined();
+    });
+  });
+
+  test('a balance landing is a CHANGE, not an "unchanged" row', async () => {
+    // The early return that reports 'nothing moved' has to count these, or a
+    // payment arriving in Buildertrend would be silently skipped on re-sync.
+    await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+    await withBt({ ownerBalance: { value: 500, scale: 2 } }, async () => {
+      const r = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+      expect(r.json.results[0].outcome).not.toBe('unchanged');
+      expect(jobData('j-1').btOwnerBalance).toBeCloseTo(500, 2);
+    });
+  });
+
+  test('and the same balance twice IS unchanged', async () => {
+    await withBt({ ownerBalance: { value: 500, scale: 2 } }, async () => {
+      await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+      preview.forgetFetch(AGX);
+      const again = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+      expect(again.json.results[0].outcome).toBe('unchanged');
+    });
+  });
+
+  test('a linked row learns them too, not only an applied one', async () => {
+    const rec = BT_JOBS.find((j) => String(j.jobId) === '333');
+    const was = rec.actualStart;
+    rec.actualStart = '2026-01-09T00:00:00';
+    preview.forgetFetch(AGX);
+    try {
+      const r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'link', btId: '333', p86Id: 'j-3' });
+      expect(r.json.results[0].outcome).toBe('linked');
+      expect(jobData('j-3').btActualStart).toBe('2026-01-09');
+    } finally { rec.actualStart = was; preview.forgetFetch(AGX); }
+  });
+
+  test('a job CREATED from Buildertrend carries them from its first row', async () => {
+    const rec = BT_JOBS.find((j) => String(j.jobId) === '446');
+    const was = { a: rec.actualCompletion, b: rec.ownerBalance };
+    rec.actualCompletion = '2026-02-14T00:00:00';
+    rec.ownerBalance = { value: 775.5, scale: 2 };
+    preview.forgetFetch(AGX);
+    try {
+      await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create', btIds: ['446'] });
+      const made = JSON.parse(engine.db.prepare('SELECT * FROM jobs WHERE bt_job_id = ?').get('446').data);
+      expect(made.btActualCompletion).toBe('2026-02-14');
+      expect(made.btOwnerBalance).toBeCloseTo(775.5, 2);
+    } finally { rec.actualCompletion = was.a; rec.ownerBalance = was.b; preview.forgetFetch(AGX); }
+  });
+
+  test('none of the three is ever offered as a correction to tick', async () => {
+    // There is nothing in P86 to correct them against, so a proposal would be
+    // a field a person could 'apply' onto a value that does not exist.
+    await withBt({ actualStart: '2026-03-02T00:00:00', ownerBalance: { value: 1248075, scale: 2 } }, async () => {
+      const r = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: ['actualStart', 'actualCompletion', 'ownerBalance'] });
+      const applied = (r.json.results[0].fields || []).map((x) => x.field);
+      expect(applied).not.toContain('actualStart');
+      expect(applied).not.toContain('actualCompletion');
+      expect(applied).not.toContain('ownerBalance');
+      // recorded all the same
+      expect(jobData('j-1').btActualStart).toBe('2026-03-02');
+    });
   });
 });
 

@@ -261,7 +261,8 @@ describe('THE FIRST REFRESH — nothing is marked, and the page says why', () =>
     expect(marker(10)).toBe(body.generatedAt);
     // Buildertrend values only, normalized.
     expect(snapRows('jobs').find((r) => r.bt_id === '111').snapshot).toEqual({ name: 'S1050 Harbor Club Railings', status: 'Open', street: '1 Harbor Dr', city: 'Tampa',
-      state: 'FL', zip: '33602', projectedStart: null, projectedCompletion: null, contractPrice: 15000, approvedCOPrice: 0 });
+      state: 'FL', zip: '33602', projectedStart: null, projectedCompletion: null, contractPrice: 15000, approvedCOPrice: 0,
+      actualStart: null, actualCompletion: null, ownerBalance: null });
     expect(snapRows('purchaseOrders').find((r) => r.bt_id === '8001').snapshot).toMatchObject({ poNumber: '0001', status: 'Sub/Vendor Approved', cost: 5500, sub: 'Catica International Inc', estCompleteDate: '2026-10-01' });
   });
 

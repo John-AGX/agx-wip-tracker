@@ -91,6 +91,7 @@
       '.p86-ecard-fact{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;' +
         'color:var(--text-dim,#9aa0b4);min-width:0;}' +
       '.p86-ecard-fact i{font-size:13px;flex:0 0 auto;opacity:.85;}' +
+      '.p86-ecard-facticon{width:13px;height:13px;flex:0 0 auto;opacity:.7;}' +
       '.p86-ecard-fact span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
       '.p86-ecard-fact.money{color:var(--green,#34d399);font-weight:650;font-size:13.5px;}' +
       // Follow-up rows. The whole point of the card: what is owed on this
@@ -150,7 +151,12 @@
         'grid-template-columns:auto minmax(0,1fr) auto;' +
         'grid-template-areas:\'head name tasks\' \'head facts tasks\' \'head stats tasks\';' +
         'gap:2px 16px;padding:9px 14px 9px 16px;}' +
-      '.p86-ecard.strip .p86-ecard-head{grid-area:head;width:auto;align-items:center;gap:8px;}' +
+      // STACKED, not side by side: the pill is ~120px and the ring is 34, so
+      // in a row they cost the width of both and leave the taller of the two
+      // short. In a column the head costs the pill's width alone and uses the
+      // height the three fact rows beside it already take.
+      '.p86-ecard.strip .p86-ecard-head{grid-area:head;width:auto;flex-direction:column;' +
+        'align-items:center;justify-content:center;gap:5px;}' +
       '.p86-ecard.strip .p86-ecard-main{grid-area:name;}' +
       '.p86-ecard.strip .p86-ecard-facts{grid-area:facts;}' +
       '.p86-ecard.strip .p86-ecard-stats{grid-area:stats;}' +
@@ -167,7 +173,12 @@
       '.p86-ecard.strip .p86-ecard-sub{margin-top:0;font-size:12px;white-space:nowrap;' +
         'overflow:hidden;text-overflow:ellipsis;}' +
       '.p86-ecard.strip .p86-ecard-facts{margin-top:2px;gap:2px 14px;}' +
-      '.p86-ecard.strip .p86-ecard-stats{margin-top:2px;gap:18px;}' +
+      '.p86-ecard.strip .p86-ecard-stats{margin-top:2px;gap:8px;justify-content:flex-start;}' +
+      // A stat tile is flex:1 so two or three of them share a 520px sidebar
+      // column evenly. On a strip there is no column to share: one tile took
+      // the whole 1,100px middle and the lead head grew a long empty box with
+      // "AGE 31d" alone at the left end of it. Here they size to content.
+      '.p86-ecard.strip .p86-ecard-stat{flex:0 0 auto;min-width:64px;}' +
       // Follow-ups and reminders stay on the RIGHT, spanning the lines beside
       // them, divided off vertically: on a row a vertical rule reads as "and
       // also", where a horizontal one reads as "below".
@@ -179,6 +190,13 @@
       // lines is just a card with the spacing of a strip.
       '@media (max-width:820px){' +
         '.p86-ecard.strip .p86-ecard-body{display:block;padding:11px 13px 12px 16px;}' +
+        // UNSTACKED on the fold. Stacking buys width, and once the body is a
+        // block the head is a full-width row with width to spare and height
+        // to save — so the pill and the ring go back to opposite ends of it,
+        // which is what the ordinary card has always done. Stacked here it
+        // cost 61px of a phone screen to say what 34 says.
+        '.p86-ecard.strip .p86-ecard-head{flex-direction:row;align-items:center;' +
+          'justify-content:space-between;}' +
         '.p86-ecard.strip .p86-ecard-title{font-size:14.5px;white-space:normal;}' +
         '.p86-ecard.strip .p86-ecard-facts{margin-top:7px;}' +
         '.p86-ecard.strip .p86-ecard-tasks{margin-top:9px;padding-top:8px;padding-left:0;' +
@@ -188,6 +206,32 @@
     el.id = STYLE_ID;
     el.textContent = css;
     (document.head || document.documentElement).appendChild(el);
+  }
+
+  // A FACT'S ICON HAS NEVER DRAWN ANYTHING.
+  //
+  // Facts asked for Tabler glyphs — <i class="ti ti-map-pin"> — and no
+  // Tabler font is loaded anywhere in this app. Every fact on every card has
+  // been rendering an empty inline box and the 5px gap that follows it, on
+  // the map popups, the inspector, the estimate rail and both page heads.
+  //
+  // The app has its own icon set (js/agx-icons.js, window.p86Icon -> inline
+  // SVG), so the names are mapped onto it. Mapped ONLY — p86Icon warns to
+  // the console for a name it does not hold, and a card that renders eight
+  // facts would warn eight times per paint, so an unmapped name draws
+  // nothing at all rather than a warning and an empty box.
+  var FACT_ICONS = {
+    calendar: 'schedule', schedule: 'schedule', 'map-pin': 'map-pin',
+    briefcase: 'briefcase', 'building-community': 'buildings', buildings: 'buildings',
+    user: 'users', users: 'users', 'external-link': 'link', link: 'link',
+    hash: 'hashtag', hashtag: 'hashtag', 'check-circle': 'check-circle',
+    banknotes: 'banknotes', wrench: 'wrench', tag: 'tag', target: 'target',
+  };
+  function factIcon(name) {
+    var key = FACT_ICONS[name];
+    if (!key || typeof window.p86Icon !== 'function') return '';
+    var svg = window.p86Icon(key, { class: 'p86-ecard-facticon' });
+    return svg || '';
   }
 
   function ringSVG(pct, color) {
@@ -303,7 +347,7 @@
           ? window.p86MapLink.linkHTML(ft.text, ft.map, { noIcon: true })
           : esc(ft.text);
         facts += '<span class="p86-ecard-fact' + (ft.tone === 'money' ? ' money' : '') + '">' +
-          (ft.icon ? '<i class="ti ti-' + esc(ft.icon) + '" aria-hidden="true"></i>' : '') +
+          factIcon(ft.icon) +
           '<span>' + factBody + '</span></span>';
       }
       facts += '</div>';

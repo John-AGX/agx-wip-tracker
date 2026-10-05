@@ -47,8 +47,13 @@ const SNAPSHOT_FIELDS = {
     ['zip', 'Zip', 'zip', 'text'],
     ['projectedStart', 'Projected start', 'projectedStart', 'day'],
     ['projectedCompletion', 'Projected completion', 'projectedCompletion', 'day'],
+    // A job STARTING or FINISHING is exactly what a person means by 'something
+    // changed in Buildertrend', and a balance moving is a payment landing.
+    ['actualStart', 'Actual start', 'actualStart', 'day'],
+    ['actualCompletion', 'Actual completion', 'actualCompletion', 'day'],
     ['contractPrice', 'Contract price', 'contractPrice', 'money'],
     ['approvedCOPrice', 'Approved change orders', 'approvedCOPrice', 'money'],
+    ['ownerBalance', 'Owner balance', 'ownerBalance', 'money'],
   ],
   leads: [
     ['title', 'Title', 'title', 'text'],
