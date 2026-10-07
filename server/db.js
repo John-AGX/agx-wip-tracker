@@ -30,15 +30,22 @@ const useSsl = process.env.NODE_ENV === 'production' && !url.includes('.railway.
 // cost import, and org-reset, all of which are legitimately slow and all of
 // which would start dying halfway through. A query deadline belongs on the
 // routes that want one, not on the pool every route shares.
+//
+// ROLLED BACK 2026-10-07, SAME DAY, AFTER A 502. The timeout below was set to
+// 5000ms and that is load-bearing in a place it was not written for: index.js
+// boots with init().then(startServer).catch(() => process.exit(1)), so the
+// FIRST connection of the process is the migration's, and a connect slower
+// than the timeout no longer waits — it rejects, init() fails, the process
+// exits, nothing ever listens, and the platform answers every request with
+// 502 Bad Gateway. A timeout meant to stop requests hanging took the whole
+// site down instead, which is a strictly worse failure than the one it fixed.
+//
+// The limits come back only with a boot path that retries its first connection
+// instead of dying on it. Until then these stay at the library defaults, which
+// is what ran here for months.
 const pool = new Pool({
   connectionString: url,
-  ssl: useSsl ? { rejectUnauthorized: false } : false,
-  max: Number(process.env.PG_POOL_MAX) || 15,
-  // The fix: a request that cannot get a connection fails, and says why.
-  connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS) || 5000,
-  // Pinned at the library's current default rather than left implicit, so a pg
-  // upgrade cannot change reconnect churn underneath us without showing in a diff.
-  idleTimeoutMillis: 10000
+  ssl: useSsl ? { rejectUnauthorized: false } : false
 });
 
 // An idle client's error arrives on the POOL, not on any request — pg's docs
