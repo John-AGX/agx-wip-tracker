@@ -39,9 +39,42 @@
 
   function handleResponse(r) {
     if (r.status === 401) {
-      // Token expired or invalid — bounce to login
+      // Token expired or invalid — bounce to login.
+      //
+      // THE COOKIE HAS TO GO TOO, AND ONLY THE SERVER CAN DO IT.
+      // server/auth.js reads `req.cookies?.token || <Authorization header>`
+      // — the COOKIE FIRST — and that cookie is httpOnly, so clearing
+      // localStorage leaves the credential the server actually reads fully
+      // intact. The reload below then sends it again, gets another 401, and
+      // reloads again: an infinite refresh the user cannot escape without
+      // clearing site data by hand, on a login screen that never appears.
+      //
+      // That is not hypothetical. Rotating JWT_SECRET on 2026-10-07 put every
+      // open session into exactly this loop — every cookie in every browser
+      // was signed with the old secret at once.
+      //
+      // POST /api/auth/logout carries no auth middleware, deliberately (see
+      // the comment above it in server/routes/auth-routes.js), so it can be
+      // called with a dead credential. That is the only way to clear this.
+      //
+      // This is the same trap the sub-portal logout already had to learn:
+      // killing p86-auth-token without killing the cookie is a half-logout.
       localStorage.removeItem('p86-auth-token');
-      if (typeof location !== 'undefined') location.reload();
+
+      // RELOAD AT MOST ONCE PER TAB. If the cookie somehow does not clear —
+      // the request fails, a proxy eats it, the route moves — the page must
+      // stop rather than spin. The second 401 falls through to the caller,
+      // which surfaces an error the user can read instead of a blank page
+      // that reloads forever. doLogin() clears the flag on success.
+      var RELOADED = 'p86-401-reloaded';
+      var already = false;
+      try { already = sessionStorage.getItem(RELOADED) === '1'; } catch (_) {}
+      if (!already && typeof location !== 'undefined') {
+        try { sessionStorage.setItem(RELOADED, '1'); } catch (_) {}
+        fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
+          .catch(function () { /* clearing is best effort; reload regardless */ })
+          .then(function () { location.reload(); });
+      }
       throw new Error('Session expired');
     }
     // Parse via text so an empty / non-JSON body (server mid-restart during a

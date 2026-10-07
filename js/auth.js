@@ -235,6 +235,10 @@
       currentUser = res.data.user;
       isOffline = false;
       localStorage.setItem('p86-auth-token', token);
+      // A fresh session re-arms the one-shot reload guard in js/api.js, so a
+      // later expiry still bounces to login once instead of being treated as
+      // the loop this tab already survived.
+      try { sessionStorage.removeItem('p86-401-reloaded'); } catch (_) {}
       // Sub-portal users (role='sub') don't get the PM app shell —
       // hard-redirect them to the portal page. The token cookie is
       // already set by the server so /portal will load authenticated.
