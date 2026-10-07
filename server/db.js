@@ -6,9 +6,48 @@ const bcrypt = require('bcryptjs');
 const url = process.env.DATABASE_URL || '';
 const useSsl = process.env.NODE_ENV === 'production' && !url.includes('.railway.internal');
 
+// ── Pool limits ────────────────────────────────────────────────────────────
+// Every option here was left at a node-postgres default, and one of those
+// defaults is why a saturated pool was indistinguishable from a dead server:
+// connectionTimeoutMillis is 0, which means a caller waiting for a free
+// connection waits FOREVER. Every query in the app goes through that queue, so
+// once the ten default connections are busy, POST /api/auth/login's SELECT on
+// users — and /healthz's own SELECT 1 — simply never return. No error, no 500,
+// no log line, no rejected promise: the request hangs, the browser sits on
+// "Signing in..." until the person gives up, and the one place that would have
+// reported the problem is stuck in the same queue as the problem.
+//
+// A timeout does not make the pool any less saturated. It makes saturation SAY
+// so, in five seconds, somewhere a human can read it.
+//
+// max is env-tunable because the real ceiling is the DATABASE's
+// max_connections, which this process cannot see. 15 leaves headroom under a
+// small hosted Postgres while giving the crons and the agent worker room
+// alongside request traffic. Check `SHOW max_connections` before raising it.
+//
+// NOT SET, deliberately: statement_timeout. It would apply to every query on
+// every connection — including init()'s multi-statement boot migration, the QB
+// cost import, and org-reset, all of which are legitimately slow and all of
+// which would start dying halfway through. A query deadline belongs on the
+// routes that want one, not on the pool every route shares.
 const pool = new Pool({
   connectionString: url,
-  ssl: useSsl ? { rejectUnauthorized: false } : false
+  ssl: useSsl ? { rejectUnauthorized: false } : false,
+  max: Number(process.env.PG_POOL_MAX) || 15,
+  // The fix: a request that cannot get a connection fails, and says why.
+  connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS) || 5000,
+  // Pinned at the library's current default rather than left implicit, so a pg
+  // upgrade cannot change reconnect churn underneath us without showing in a diff.
+  idleTimeoutMillis: 10000
+});
+
+// An idle client's error arrives on the POOL, not on any request — pg's docs
+// are explicit that leaving it unhandled takes the whole process down. That is
+// a restart loop caused by a network blip on a connection nobody was using.
+// Log it and let the pool discard the client; queries already in flight carry
+// their own errors to their own call sites and are unaffected by this.
+pool.on('error', function (err) {
+  console.error('[db] idle client error (connection discarded):', err && err.message);
 });
 
 // ── The guess gate ─────────────────────────────────────────────────────────
