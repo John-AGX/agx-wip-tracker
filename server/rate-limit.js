@@ -37,9 +37,15 @@ const rateLimit = require('express-rate-limit');
 
 // ─── helpers ────────────────────────────────────────────────────────
 
-function jsonHandler(res, retryAfter) {
+function jsonHandler(res, retryAfter, msg) {
   res.status(429).json({
-    error: 'Too many requests — please wait a moment and try again.',
+    // Which limiter fired is the first thing anyone needs to know, and for a
+    // long time no caller could tell: every limiter below passes through here,
+    // and a shared sentence ("Too many requests") made a 10/min login throttle
+    // and a 200/min whole-API guard produce byte-identical screens. Those two
+    // have completely different causes and completely different fixes. Callers
+    // that have something more specific to say now say it.
+    error: msg || 'Too many requests — please wait a moment and try again.',
     retryAfter: retryAfter,
   });
 }
@@ -63,17 +69,36 @@ function bypassForSystemAdmin(req) {
 // ─── limiters ───────────────────────────────────────────────────────
 
 // 1. Login throttle — per-IP because the caller is unauthenticated.
+// 2026-10-07: this limiter locked the owner out of his own app, for the second
+// time (see the trust-proxy note at index.js:87 for the first). Nothing was
+// attacking it. The old ceiling was 10 per minute per IP COUNTING EVERY
+// ATTEMPT, successful ones included, and a blocked attempt increments the
+// counter too — so a person whose first sign-in did not go through, clicking
+// Sign In the way people do when a button appears to do nothing, spent the
+// budget on themselves and then kept it spent. The failure mode of a brute
+// force defence must never be "the legitimate user is the one who gets locked
+// out," and 10/min was tight enough that it was.
+//
+// Two changes, neither of which materially helps an attacker:
+//   • skipSuccessfulRequests — a sign-in that WORKS costs nothing. Only
+//     failures count, which is the only signal a credential-stuffing run
+//     produces anyway, and it means a working account can never throttle out.
+//   • 30/min instead of 10 — nobody types thirty sign-in attempts in a minute.
+//     A script that does is still stopped inside two seconds of trying.
 const ipLoginLimiter = rateLimit({
   windowMs: 60 * 1000,        // 1 minute
-  max: 10,                     // 10 attempts per minute per IP
+  max: 30,                     // 30 FAILED attempts per minute per IP
+  skipSuccessfulRequests: true,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  message: { error: 'Too many login attempts — try again in a minute.' },
   handler: function (req, res /*, next, options*/) {
     const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
     console.warn('[rate-limit] login throttle hit for IP', req.ip,
       '(retry in', retryAfter, 's)');
-    jsonHandler(res, retryAfter);
+    // Says LOGIN, and says the wait is a minute — the generic guard's sentence
+    // sent people hunting a server fault for what clears itself by waiting.
+    jsonHandler(res, retryAfter,
+      'Too many sign-in attempts from this network — wait a minute, then try once more.');
   },
 });
 
